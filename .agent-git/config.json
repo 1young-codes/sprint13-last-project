@@ -1,0 +1,34 @@
+{
+  "remote": "origin",
+  "base": "dev",
+  "release": "main",
+  "protected": ["main", "dev"],
+  "types": {
+    "feature":  {"label": "기능",      "color": "1f883d"},
+    "fix":      {"label": "수정",      "color": "d73a4a"},
+    "refactor": {"label": "구조 개선", "color": "8250df"},
+    "docs":     {"label": "문서",      "color": "0075ca"},
+    "style":    {"label": "서식",      "color": "bfd4f2"},
+    "test":     {"label": "테스트",    "color": "fbca04"},
+    "chore":    {"label": "환경 설정", "color": "6e7781"}
+  },
+  "priority": ["fix", "feature", "refactor", "test", "docs", "style", "chore"],
+  "areas": {
+    "screen":  {"label": "화면",        "paths": [], "reviewers": []},
+    "server":  {"label": "서버",        "paths": [], "reviewers": []},
+    "serving": {"label": "서빙",        "paths": [], "reviewers": []},
+    "image":   {"label": "이미지 생성", "paths": [], "reviewers": []},
+    "copy":    {"label": "문구 생성",   "paths": [], "reviewers": []},
+    "eval":    {"label": "평가",        "paths": [], "reviewers": []}
+  },
+  "type_paths": {
+    "docs":  ["*.md", "docs/*", "*.rst"],
+    "test":  ["tests/*", "test/*", "test_*.py", "*/test_*.py", "*_test.py", "*.test.ts", "*.test.tsx", "*.spec.ts"],
+    "chore": ["requirements*.txt", "pyproject.toml", "setup.cfg", "poetry.lock", "uv.lock", "package.json", "package-lock.json",
+              "pnpm-lock.yaml", "Dockerfile", "*.Dockerfile", "docker-compose*.yml", ".github/*", ".gitignore", ".env.example",
+              ".agent-git/*", ".claude/*", ".codex/*", "CLAUDE.md", "AGENTS.md"]
+  },
+  "images_dir": "docs/pr-images",
+  "slug_max": 40,
+  "release_label": "통합"
+}
