@@ -1,0 +1,99 @@
+# 카메라 앵글 프리셋입니다. 각도 단위는 도(°)입니다.
+#
+# method = "rotate": 카메라가 제자리에서 방향만 바꿉니다. 360도 배경을 만든 뒤 다시 찍습니다.
+#   yaw_deg     + 이면 오른쪽을 봅니다
+#   pitch_deg   + 이면 위를 봅니다
+#   roll_deg    + 이면 화면 속 장면이 시계 방향으로 기웁니다
+#   fov_scale   원본 화각에 곱하는 배수      ┐ 둘 중 하나만 씁니다.
+#   fov_deg     화각을 직접 지정             ┘ 둘 다 없으면 원본 화각 그대로
+#   lens_curve  1 일반 렌즈, 0.5 입체 투영(작은 행성), 0 어안
+#   aspect      결과 가로/세로 비율. 없으면 원본 비율
+#
+# method = "orbit": 카메라가 피사체 중심을 축으로 돌아가 피사체를 다른 각도에서 봅니다. 깊이 추정이 필요합니다.
+#   orbit_yaw_deg    + 이면 카메라가 왼쪽으로 돌아가 피사체를 비스듬히 봅니다
+#   orbit_pitch_deg  + 이면 카메라가 아래로 내려가 피사체를 올려다봅니다
+
+[original]
+label = "원본 그대로 (검증용)"
+method = "rotate"
+
+[wide_angle]
+label = "광각"
+method = "rotate"
+fov_scale = 1.6
+
+[ultra_wide]
+label = "초광각"
+method = "rotate"
+fov_deg = 130
+
+[telephoto]
+label = "망원"
+method = "rotate"
+fov_scale = 0.5
+
+[dutch_angle]
+label = "더치 앵글"
+method = "rotate"
+roll_deg = 20
+
+[tilt_up]
+label = "위로 기울이기"
+method = "rotate"
+pitch_deg = 25
+fov_scale = 1.2
+
+[tilt_down]
+label = "아래로 기울이기"
+method = "rotate"
+pitch_deg = -25
+fov_scale = 1.2
+
+[pan_left]
+label = "왼쪽으로 돌리기"
+method = "rotate"
+yaw_deg = -40
+
+[pan_right]
+label = "오른쪽으로 돌리기"
+method = "rotate"
+yaw_deg = 40
+
+[reverse]
+label = "반대 방향"
+method = "rotate"
+yaw_deg = 180
+
+[fisheye]
+label = "어안 렌즈"
+method = "rotate"
+fov_deg = 180
+lens_curve = 0.0
+
+[little_planet]
+label = "작은 행성"
+method = "rotate"
+pitch_deg = -90
+fov_deg = 240
+lens_curve = 0.5
+aspect = 1.0
+
+[low_angle]
+label = "로우 앵글 (올려다보기)"
+method = "orbit"
+orbit_pitch_deg = 25
+
+[high_angle]
+label = "하이 앵글 (내려다보기)"
+method = "orbit"
+orbit_pitch_deg = -30
+
+[three_quarter_left]
+label = "왼쪽 비스듬히"
+method = "orbit"
+orbit_yaw_deg = 30
+
+[three_quarter_right]
+label = "오른쪽 비스듬히"
+method = "orbit"
+orbit_yaw_deg = -30
