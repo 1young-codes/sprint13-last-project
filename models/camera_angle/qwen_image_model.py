@@ -20,7 +20,7 @@ from PIL import Image
 from torch import nn
 
 from .int8_linear_layers import (attach_lora, check_int8, check_names, convrot_group, layer_scale,
-                                 load_weights_into_empty_model, read_safetensors_header, rotate)
+                                 load_weights_into_empty_model, read_safetensors_header, remove_loras, rotate)
 from .settings import model_file, model_folder
 
 DEVICE = "cuda"
@@ -138,7 +138,7 @@ def load_vae(folder: Path):
             tensor = source.get_tensor(key)
             state[name] = (tensor.squeeze(2) if tensor.ndim == 5 else tensor).to(torch.bfloat16)
     vae.load_state_dict(state, strict=True, assign=True)
-    vae.enable_tiling()
+    # 조각(타일) 복원은 끕니다. 켜면 약 190px 간격으로 세로 줄무늬가 남습니다. L4(24GB)는 한 장 전체를 복원할 수 있습니다.
     return vae.eval().requires_grad_(False).to(DEVICE)
 
 
@@ -223,9 +223,13 @@ class QwenImageModel:
 
         self.pipe.encode_prompt = encode_on_gpu
 
-    def use_lora(self, model_key: str, strength: float) -> None:
+    def use_lora(self, model_key: str | None, strength: float) -> None:
+        """model_key의 LoRA를 붙입니다. None이면 LoRA 없이 기본 편집 모델로 씁니다."""
         if self.current_lora != (model_key, strength):
-            attach_lora(self.pipe.transformer, model_file(model_key), strength)
+            if model_key is None:
+                remove_loras(self.pipe.transformer)
+            else:
+                attach_lora(self.pipe.transformer, model_file(model_key), strength)
             self.current_lora = (model_key, strength)
 
     @torch.inference_mode()

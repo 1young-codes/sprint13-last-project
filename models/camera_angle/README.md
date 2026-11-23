@@ -59,6 +59,7 @@ python -m models.camera_angle --input 사진.jpg --preset all --scene "a fishing
 | `camera_math.py` | 카메라 방향과 픽셀 좌표 계산 |
 | `place_photo_in_360_view.py` | 사진을 360도 배경에 붙이고 빈 곳 마스크 만들기 |
 | `fill_empty_area.py` | 360도 배경의 빈 곳 채우기 |
+| `repair_360_seam.py` | 360도 배경의 왼쪽·오른쪽 끝 이음매 고치기 |
 | `rotate_camera.py` | 360도 배경에서 다시 찍기 |
 | `keep_original_detail.py` | 원본이 보이는 곳을 원본 픽셀로 덮기 |
 | `estimate_depth.py` | 깊이와 원본 화각 추정 |

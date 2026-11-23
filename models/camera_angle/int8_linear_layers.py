@@ -180,13 +180,17 @@ def check_names(model: nn.Module, header: dict, names: dict[str, str], squeeze_t
     return names
 
 
+def remove_loras(model: nn.Module) -> None:
+    for module in model.modules():
+        if isinstance(module, Int8Linear):
+            module.loras.clear()
+
+
 def attach_lora(model: nn.Module, path: Path, strength: float) -> None:
     """기존 LoRA를 모두 떼고 path의 LoRA를 strength 세기로 붙입니다."""
     from safetensors.torch import load_file
 
-    for module in model.modules():
-        if isinstance(module, Int8Linear):
-            module.loras.clear()
+    remove_loras(model)
     weights = load_file(str(path))
     used, terms = set(), []
     for key in weights:
