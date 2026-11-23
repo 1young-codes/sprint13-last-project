@@ -63,8 +63,25 @@ python -m models.camera_angle --input 사진.jpg --preset all --scene "a fishing
 | `move_camera_in_3d.py` | 카메라를 피사체 중심으로 돌려 새 시점 그리기 |
 | `complete_new_viewpoint.py` | 새 시점의 빈 곳을 원본을 참고해 채우기 |
 | `qwen_image_model.py` | 이미지 생성 모델 불러오기와 실행 |
+| `speed_up_generation.py` | MagCache로 변화가 작은 생성 단계 건너뛰기 |
+| `calibrate_mag_cache.py` | MagCache가 쓰는 단계별 크기 비율 재기 |
 | `int8_linear_layers.py` | 정수 8비트 가중치 층 |
 | `download_models.py` | 모델 내려받기 |
+
+## 생성 속도
+
+`settings.toml`의 `[speed]`에서 두 가지 최적화를 켜고 끕니다.
+
+| 설정 | 하는 일 | 결과 |
+| --- | --- | --- |
+| `reuse_condition_cache` | 글자와 참고 이미지 부분을 첫 단계에서 계산해 두고 재사용 | 같음 |
+| `mag_cache` | 변화가 작은 단계는 계산을 건너뛰고 앞 단계의 변화량을 재사용 | 아주 조금 달라짐 |
+
+MagCache는 모델과 LoRA마다 잰 단계별 크기 비율(`mag_cache_ratios.json`)을 씁니다. 모델, LoRA, 단계 수를 바꾸면 성격이 다른 사진 여러 장으로 다시 잽니다.
+
+```bash
+python -m models.camera_angle.calibrate_mag_cache --input 사진1.jpg --input 사진2.jpg --preset all
+```
 
 ## 검증
 

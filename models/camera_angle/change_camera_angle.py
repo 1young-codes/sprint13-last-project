@@ -4,6 +4,7 @@
 3D 이동(orbit) 프리셋: 깊이 추정 → 피사체 중심으로 카메라 돌려 그리기 → 원본을 참고해 구멍 채우기
 """
 
+import time
 from dataclasses import dataclass, field
 
 from PIL import Image
@@ -43,8 +44,9 @@ def select_presets(names: list[str]) -> list[AnglePreset]:
 
 def change_camera_angle(photo: Image.Image, preset_names: list[str], scene_description: str = "",
                         seed: int | None = None, steps: int | None = None, photo_fov_deg: float | None = None,
-                        skip_generation: bool = False) -> tuple[list[AngleResult], dict]:
-    """(결과 목록, 실행 정보). skip_generation이면 생성 모델 없이 빈 곳을 표시색으로 남겨 계산만 확인합니다."""
+                        skip_generation: bool = False, model=None) -> tuple[list[AngleResult], dict]:
+    """(결과 목록, 실행 정보). skip_generation이면 생성 모델 없이 빈 곳을 표시색으로 남겨 계산만 확인합니다.
+    model을 주면 그 생성 모델을 씁니다 (여러 사진을 이어서 처리할 때 한 번만 불러오도록)."""
     settings = load_settings()
     presets = select_presets(preset_names)
     photo = photo.convert("RGB")
@@ -58,8 +60,6 @@ def change_camera_angle(photo: Image.Image, preset_names: list[str], scene_descr
         depth = estimate_depth_and_fov(photo)
         photo_fov_deg = photo_fov_deg or depth.fov_deg
 
-    model = None
-
     def get_model():
         nonlocal model
         if model is None:
@@ -68,8 +68,9 @@ def change_camera_angle(photo: Image.Image, preset_names: list[str], scene_descr
         return model
 
     model_getter = None if skip_generation else get_model
-    results = []
+    results, seconds = [], {}
     for preset in (p for p in presets if p.method == "rotate"):
+        started = time.perf_counter()
         rendered, empty_mask = render_rotated_view(photo, photo_fov_deg, output_camera(preset, photo, photo_fov_deg),
                                                    settings["rotate"]["empty_color"])
         image = rendered
@@ -77,11 +78,13 @@ def change_camera_angle(photo: Image.Image, preset_names: list[str], scene_descr
             from .fill_empty_area import fill_empty_area
             image = fill_empty_area(model_getter(), rendered, empty_mask, scene_description, seed, steps)
         results.append(AngleResult(preset, image, {"before_fill": rendered, "empty_mask": empty_mask}))
+        seconds[preset.name] = round(time.perf_counter() - started, 1)
     orbit = settings["orbit"]
     orbit_presets = [p for p in presets if p.method == "orbit"]
     if orbit_presets:
         solid_points = remove_depth_edge_points(depth.points, depth.valid, orbit["depth_edge_tolerance"])
     for preset in orbit_presets:
+        started = time.perf_counter()
         moved, hole_mask = render_from_moved_camera(photo, depth.points, solid_points, depth.fov_deg,
                                                     preset.orbit_yaw_deg, preset.orbit_pitch_deg,
                                                     orbit["subject_crop"], orbit["hole_color"], orbit["point_size_px"],
@@ -93,8 +96,10 @@ def change_camera_angle(photo: Image.Image, preset_names: list[str], scene_descr
             from .complete_new_viewpoint import complete_view_with_reference
             image = complete_view_with_reference(model_getter(), photo, moved, seed, steps)
         results.append(AngleResult(preset, image, {"moved_view": moved, "hole_mask": hole_mask}))
+        seconds[preset.name] = round(time.perf_counter() - started, 1)
 
     info = {"presets": preset_names, "photo_fov_deg": photo_fov_deg, "seed": seed, "steps": steps,
             "scene_description": scene_description, "skip_generation": skip_generation,
-            "depth_fov_deg": depth.fov_deg if depth else None}
+            "depth_fov_deg": depth.fov_deg if depth else None,
+            "seconds_per_preset": seconds}  # 생성 모델을 처음 불러오는 시간은 첫 프리셋에 들어갑니다
     return results, info

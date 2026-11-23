@@ -21,7 +21,8 @@ from torch import nn
 
 from .int8_linear_layers import (attach_lora, check_int8, check_names, convrot_group, layer_scale,
                                  load_weights_into_empty_model, read_safetensors_header, remove_loras, rotate)
-from .settings import model_file, model_folder
+from .settings import load_settings, model_file, model_folder
+from .speed_up_generation import StepChangeRecorder, mag_cache_config, register_qwen21_blocks
 
 DEVICE = "cuda"
 
@@ -210,6 +211,9 @@ class QwenImageModel:
                                                                                    local_files_only=True),
                                         transformer=load_transformer(folder))
         self.current_lora = None
+        register_qwen21_blocks()
+        # None이 아니면 MagCache 없이 모든 단계를 계산하며 크기 비율을 잽니다 (calibrate_mag_cache.py가 씀)
+        self.calibration: dict[str, list[list[float]]] | None = None
         encode_prompt = self.pipe.encode_prompt
 
         def encode_on_gpu(*args, **kwargs):
@@ -233,19 +237,45 @@ class QwenImageModel:
                 attach_lora(self.pipe.transformer, model_file(model_key), strength)
             self.current_lora = (model_key, strength)
 
+    def run_steps(self, generate, steps: int):
+        """generate()를 MagCache를 켠 채로 실행합니다. 크기 비율은 붙어 있는 LoRA마다 따로 씁니다."""
+        name = (self.current_lora or (None,))[0] or "base"
+        transformer = self.pipe.transformer
+        if transformer.is_cache_enabled:
+            transformer.disable_cache()
+        if self.calibration is not None:
+            recorder = StepChangeRecorder(transformer)
+            try:
+                return generate()
+            finally:
+                self.calibration.setdefault(name, []).append(recorder.remove())
+        config = mag_cache_config(name, steps)
+        if config is not None:
+            transformer.enable_cache(config)
+        return generate()
+
+    @property
+    def reuse_condition_cache(self) -> bool:
+        """글자와 참고 이미지 부분은 단계마다 같으므로 첫 단계에서 계산해 두고 재사용합니다 (결과는 같음).
+        크기 비율을 잴 때는 늘 켭니다: 둘째 단계부터 결과 토큰만 비교해야 비율이 맞습니다."""
+        return self.calibration is not None or load_settings()["speed"]["reuse_condition_cache"]
+
     @torch.inference_mode()
     def edit(self, image: Image.Image, prompt: str, seed: int, steps: int) -> Image.Image:
         """이미지 한 장을 프롬프트대로 편집합니다. 결과 크기는 aligned_size(입력 크기)입니다."""
         image = image.convert("RGB").resize(aligned_size(*image.size), Image.Resampling.LANCZOS)
-        return self.pipe(prompt=prompt, image=image, width=image.width, height=image.height,
-                         output_resolution=math.sqrt(image.width * image.height), true_cfg_scale=1,
-                         num_inference_steps=steps, sigmas=simple_sigmas(steps), use_kv_cache=False,
-                         generator=torch.Generator(device="cpu").manual_seed(seed)).images[0]
+        return self.run_steps(lambda: self.pipe(
+            prompt=prompt, image=image, width=image.width, height=image.height,
+            output_resolution=math.sqrt(image.width * image.height), true_cfg_scale=1, num_inference_steps=steps,
+            sigmas=simple_sigmas(steps), use_kv_cache=self.reuse_condition_cache,
+            generator=torch.Generator(device="cpu").manual_seed(seed)).images[0], steps)
 
     @torch.inference_mode()
     def edit_with_reference(self, reference: Image.Image, image: Image.Image, prompt: str, seed: int,
                             steps: int) -> Image.Image:
         """reference(1번 이미지)를 참고해 image(2번 이미지)를 다시 그립니다. 결과 크기는 aligned_size(image 크기)입니다."""
+        from diffusers.models.transformers.transformer_qwenimage21 import QwenImage21KVCache
+
         pipe = self.pipe
         # 이 VAE는 RGBA 4채널을 받습니다 (pipe()는 내부에서 바꿔 주지만, 여기서는 직접 전처리하므로 맞춰 줍니다)
         images = [im.convert("RGBA").resize(aligned_size(*im.size), Image.Resampling.LANCZOS) for im in (reference, image)]
@@ -261,12 +291,21 @@ class QwenImageModel:
         image_mask = torch.cat([image_mask, image_mask.new_ones((1, latents.shape[1] // 4))], dim=1)
         pipe.scheduler.set_timesteps(sigmas=simple_sigmas(steps), device=DEVICE)
         pipe.scheduler.set_begin_index(0)
-        for t in pipe.progress_bar(pipe.scheduler.timesteps):
-            prediction = pipe.transformer(hidden_states=torch.cat([references, latents], 1),
-                                          timestep=t.expand(1).to(latents) / 1000, encoder_hidden_states=text,
-                                          encoder_hidden_states_mask=text_mask, img_shapes=shapes, img_mask=image_mask,
-                                          attention_kwargs={}, kv_cache=None, kv_cache_mode=None, return_dict=False)[0]
-            latents = pipe.scheduler.step(prediction[:, -latents.size(1):], t, latents, return_dict=False)[0].to(latents.dtype)
+        cache = QwenImage21KVCache(len(pipe.transformer.transformer_blocks)) if self.reuse_condition_cache else None
+
+        def denoise(latents):
+            for index, t in enumerate(pipe.progress_bar(pipe.scheduler.timesteps)):
+                mode = ("extract" if index == 0 else "cached") if cache else None
+                prediction = pipe.transformer(hidden_states=torch.cat([references, latents], 1),
+                                              timestep=t.expand(1).to(latents) / 1000, encoder_hidden_states=text,
+                                              encoder_hidden_states_mask=text_mask, img_shapes=shapes,
+                                              img_mask=image_mask, attention_kwargs={}, kv_cache=cache,
+                                              kv_cache_mode=mode, return_dict=False)[0]
+                latents = pipe.scheduler.step(prediction[:, -latents.size(1):], t, latents,
+                                              return_dict=False)[0].to(latents.dtype)
+            return latents
+
+        latents = self.run_steps(lambda: denoise(latents), steps)
         latents = pipe._unpack_latents(latents, height, width, stride).to(pipe.vae.dtype)
         mean = latents.new_tensor(pipe.vae.config.latents_mean).view(1, -1, 1, 1, 1)
         std = latents.new_tensor(pipe.vae.config.latents_std).view(1, -1, 1, 1, 1)
