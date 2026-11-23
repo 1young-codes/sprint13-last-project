@@ -41,7 +41,7 @@ def fill_empty_area(model, image: Image.Image, empty_mask: Image.Image, scene_de
     filled = model.edit(image, prompt, seed, steps).resize(image.size, Image.Resampling.LANCZOS)
     empty = np.asarray(empty_mask.convert("L"), dtype=np.float32) / 255
     original = np.asarray(image.convert("RGB"), dtype=np.float32) / 255
-    generated = np.asarray(filled, dtype=np.float32) / 255
+    generated = np.asarray(filled.convert("RGB"), dtype=np.float32) / 255
     radius = max(1, round(settings["color_match_ratio"] * image.width / 3))  # 상자 세 번 ≈ 이 폭의 흐림
     filled = to_uint8_image(match_colors_to_original(generated, original, (empty < .5).astype(np.float32), radius))
     # 빈 곳을 조금 넓힌 뒤 흐리게 해서, 원본과 생성 영역의 경계선이 보이지 않게 섞습니다
