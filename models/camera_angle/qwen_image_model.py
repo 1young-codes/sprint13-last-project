@@ -262,13 +262,15 @@ class QwenImageModel:
 
     @torch.inference_mode()
     def edit(self, image: Image.Image, prompt: str, seed: int, steps: int) -> Image.Image:
-        """이미지 한 장을 프롬프트대로 편집합니다. 결과 크기는 aligned_size(입력 크기)입니다."""
+        """이미지 한 장을 프롬프트대로 편집합니다. 결과 크기는 aligned_size(입력 크기)입니다.
+        이 모델의 VAE는 투명도까지 4채널로 그리지만, 사진에는 투명도가 없으므로 RGB만 돌려줍니다
+        (투명한 채로 크기를 바꾸면 색이 깨집니다)."""
         image = image.convert("RGB").resize(aligned_size(*image.size), Image.Resampling.LANCZOS)
         return self.run_steps(lambda: self.pipe(
             prompt=prompt, image=image, width=image.width, height=image.height,
             output_resolution=math.sqrt(image.width * image.height), true_cfg_scale=1, num_inference_steps=steps,
             sigmas=simple_sigmas(steps), use_kv_cache=self.reuse_condition_cache,
-            generator=torch.Generator(device="cpu").manual_seed(seed)).images[0], steps)
+            generator=torch.Generator(device="cpu").manual_seed(seed)).images[0], steps).convert("RGB")
 
     @torch.inference_mode()
     def edit_with_reference(self, reference: Image.Image, image: Image.Image, prompt: str, seed: int,
@@ -310,4 +312,4 @@ class QwenImageModel:
         mean = latents.new_tensor(pipe.vae.config.latents_mean).view(1, -1, 1, 1, 1)
         std = latents.new_tensor(pipe.vae.config.latents_std).view(1, -1, 1, 1, 1)
         decoded = pipe.vae.decode(latents * std + mean, return_dict=False)[0][:, :, 0]
-        return pipe.image_processor.postprocess(decoded, output_type="pil")[0]
+        return pipe.image_processor.postprocess(decoded, output_type="pil")[0].convert("RGB")

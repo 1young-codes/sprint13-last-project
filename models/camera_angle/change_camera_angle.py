@@ -8,6 +8,7 @@ import math
 import time
 from dataclasses import dataclass, field, replace
 
+import numpy as np
 from PIL import Image, ImageFilter
 
 from .camera_math import CameraView
@@ -39,32 +40,63 @@ def output_camera(preset: AnglePreset, photo: Image.Image, photo_fov_deg: float)
                       roll_deg=preset.roll_deg, lens_curve=preset.lens_curve)
 
 
+def seen_share(empty_mask: Image.Image) -> float:
+    """결과 화면에서 원본이 보이는 비율."""
+    return 1 - float(np.asarray(empty_mask, dtype=np.float32).mean()) / 255
+
+
+def widen_photo(photo: Image.Image, photo_fov_deg: float, target: CameraView, scene_description: str, seed: int,
+                steps: int, model) -> tuple[Image.Image, float, list[Image.Image]]:
+    """(넓힌 사진, 넓힌 화각, 단계별 그림). 원본이 target 화면의 일부만 차지하면 생성 모델이 한 번에 채우지 못하므로
+    (빈 곳이 너무 크면 투명 배경으로 그려 버림), 정면 화각을 몇 배씩 넓혀 가며 여러 번 나눠 채웁니다."""
+    from .fill_empty_area import fill_empty_area
+
+    settings = load_settings()
+    rotate, long_side = settings["rotate"], settings["photo"]["output_long_side"]
+    stages = []
+    while True:
+        _, empty = render_rotated_view(photo, photo_fov_deg, target, rotate["empty_color"])
+        wider = min(photo_fov_deg * rotate["widen_step_scale"], settings["photo"]["max_fov_deg"])
+        if seen_share(empty) >= rotate["min_original_share"] or wider <= photo_fov_deg + 1e-3:
+            return photo, photo_fov_deg, stages
+        width, height = output_size(photo, None, long_side)
+        rendered, empty = render_rotated_view(photo, photo_fov_deg, CameraView(width, height, wider), rotate["empty_color"])
+        photo = fill_empty_area(model, rendered, empty, scene_description, seed, steps)
+        photo_fov_deg = wider
+        stages.append(photo)
+
+
 def render_and_fill(photo: Image.Image, photo_fov_deg: float, camera: CameraView, scene_description: str, seed: int,
                     steps: int, model_getter) -> tuple[Image.Image, dict[str, Image.Image]]:
     """(결과, 중간 단계). 원본을 camera로 다시 찍고 빈 곳을 채웁니다.
 
-    어안처럼 휘는 렌즈는 생성 모델이 휜 그림을 이어 그리지 못하므로(빈 곳만 평평하게 채움),
-    같은 방향의 일반 렌즈로 먼저 찍어 채운 뒤 휘게 만들고, 원본이 보이는 곳은 원본에서 직접 다시 찍어 덮습니다.
+    1. 원본이 화면의 작은 일부뿐이면 정면 화각을 나눠서 넓혀 둡니다 (widen_photo).
+    2. 어안처럼 휘는 렌즈는 생성 모델이 휜 그림을 이어 그리지 못하므로, 같은 방향의 일반 렌즈로 찍어 채운 뒤 휘게 만듭니다.
+    3. 마지막에 원본이 보이는 곳은 원본에서 직접 다시 찍어 덮어, 넓히는 동안 줄어든 해상도를 되살립니다.
     """
     settings = load_settings()
+    color = settings["rotate"]["empty_color"]
     flat = camera if camera.lens_curve == 1 else replace(
         camera, fov_deg=min(camera.fov_deg, settings["photo"]["max_fov_deg"]), lens_curve=1.0)
-    rendered, empty_mask = render_rotated_view(photo, photo_fov_deg, flat, settings["rotate"]["empty_color"])
-    steps_shown = {"before_fill": rendered, "empty_mask": empty_mask}
+    source, source_fov, stages = photo, photo_fov_deg, []
+    if model_getter is not None:
+        source, source_fov, stages = widen_photo(photo, photo_fov_deg, flat, scene_description, seed, steps,
+                                                 model_getter())
+    rendered, empty_mask = render_rotated_view(source, source_fov, flat, color)
+    steps_shown = {f"widened_{i + 1}": stage for i, stage in enumerate(stages)}
+    steps_shown.update(before_fill=rendered, empty_mask=empty_mask)
     if model_getter is None:
-        image = rendered
-    else:
-        from .fill_empty_area import fill_empty_area
-        image = fill_empty_area(model_getter(), rendered, empty_mask, scene_description, seed, steps)
-    if flat is camera:
-        return image, steps_shown
-    steps_shown["before_lens_curve"] = image
-    curved, _ = render_rotated_view(image, flat.fov_deg, replace(camera, yaw_deg=0, pitch_deg=0, roll_deg=0), "#000000")
+        return rendered, steps_shown
+    from .fill_empty_area import fill_empty_area
+    image = fill_empty_area(model_getter(), rendered, empty_mask, scene_description, seed, steps)
+    if flat is not camera:
+        steps_shown["before_lens_curve"] = image
+        image, _ = render_rotated_view(image, flat.fov_deg, replace(camera, yaw_deg=0, pitch_deg=0, roll_deg=0), "#000000")
     direct, unseen = render_rotated_view(photo, photo_fov_deg, camera, "#000000")
     feather = settings["rotate"]["feather_px"]
     if feather > 0:
         unseen = unseen.filter(ImageFilter.MaxFilter(2 * feather + 1)).filter(ImageFilter.GaussianBlur(feather / 2))
-    return Image.composite(curved, direct, unseen), steps_shown
+    return Image.composite(image, direct, unseen), steps_shown
 
 
 def select_presets(names: list[str]) -> list[AnglePreset]:

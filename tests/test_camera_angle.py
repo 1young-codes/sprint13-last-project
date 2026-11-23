@@ -174,3 +174,25 @@ def test_pan_and_tilt_follow_the_photo_field_of_view():
         assert abs(camera.yaw_deg - presets["pan_right"].yaw_ratio * fov) < 1e-6 and camera.yaw_deg < fov / 2
         x, _ = red_dot_center(render_rotated_view(photo, fov, replace(camera, width=240, height=160), "#00ff00")[0])
         assert 0 < x < 120  # 피사체가 왼쪽으로 갔지만 화면 안에 있음
+
+
+class EchoModel:
+    """생성 대신 받은 그림을 그대로 돌려주는 가짜 모델 (그래픽 카드 없이 흐름만 확인)."""
+
+    def use_lora(self, model_key, strength):
+        pass
+
+    def edit(self, image, prompt, seed, steps):
+        return image.convert("RGB")
+
+
+def test_far_wider_views_are_filled_in_stages():
+    from models.camera_angle.change_camera_angle import widen_photo
+    from models.camera_angle.settings import load_settings
+    settings = load_settings()["rotate"]
+    photo = make_test_photo()
+    target = CameraView(240, 160, 150)  # 원본 60°의 2.5배: 원본이 화면의 아주 작은 일부
+    widened, fov, stages = widen_photo(photo, FOV, target, "", 0, 1, EchoModel())
+    assert len(stages) >= 1 and FOV < fov <= 150
+    assert abs(fov - min(FOV * settings["widen_step_scale"] ** len(stages), 150)) < 1e-6
+    assert widen_photo(photo, FOV, CameraView(240, 160, 66), "", 0, 1, EchoModel())[2] == []  # 조금 넓히면 한 번에
