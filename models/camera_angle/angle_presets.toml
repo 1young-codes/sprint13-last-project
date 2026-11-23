@@ -5,6 +5,8 @@
 #   yaw_deg     + 이면 오른쪽을 봅니다
 #   pitch_deg   + 이면 위를 봅니다
 #   roll_deg    + 이면 화면 속 장면이 시계 방향으로 기웁니다
+#   yaw_ratio   원본 가로 화각의 몇 배만큼 돌릴지 (+ 오른쪽). 사진마다 화각이 달라도 피사체가 화면에 남습니다
+#   pitch_ratio 원본 세로 화각의 몇 배만큼 기울일지 (+ 위)
 #   fov_scale   원본 화각에 곱하는 배수      ┐ 둘 중 하나만 씁니다.
 #   fov_deg     화각을 직접 지정             ┘ 둘 다 없으면 원본 화각 그대로
 #   lens_curve  1 일반 렌즈, 0 어안 (그 사이 값은 렌즈 휨 정도)
@@ -26,7 +28,7 @@ fov_scale = 1.6
 [ultra_wide]
 label = "초광각"
 method = "rotate"
-fov_deg = 130
+fov_scale = 2.0
 
 [telephoto]
 label = "망원"
@@ -41,29 +43,29 @@ roll_deg = 20
 [tilt_up]
 label = "위로 기울이기"
 method = "rotate"
-pitch_deg = 25
+pitch_ratio = 0.3
 fov_scale = 1.2
 
 [tilt_down]
 label = "아래로 기울이기"
 method = "rotate"
-pitch_deg = -25
+pitch_ratio = -0.3
 fov_scale = 1.2
 
 [pan_left]
 label = "왼쪽으로 돌리기"
 method = "rotate"
-yaw_deg = -40
+yaw_ratio = -0.3
 
 [pan_right]
 label = "오른쪽으로 돌리기"
 method = "rotate"
-yaw_deg = 40
+yaw_ratio = 0.3
 
 [fisheye]
 label = "어안 렌즈"
 method = "rotate"
-fov_deg = 180
+fov_scale = 2.2
 lens_curve = 0.0
 
 [low_angle]

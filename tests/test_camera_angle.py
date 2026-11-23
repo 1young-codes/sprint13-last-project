@@ -4,6 +4,7 @@
 """
 
 import math
+from dataclasses import replace
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -162,3 +163,14 @@ def test_generated_colors_are_matched_to_the_original_near_the_border():
     known[:, :30] = 1  # 왼쪽 절반이 원본
     matched = match_colors_to_original(generated, original, known, 4)
     assert abs(matched[20, 32, 0] - .8) < .02  # 경계 바로 바깥은 원본 밝기로 이어짐
+
+
+def test_pan_and_tilt_follow_the_photo_field_of_view():
+    """좌우·위아래 돌리기는 원본 화각에 비례해, 화각이 좁은 사진에서도 피사체가 화면에 남습니다."""
+    presets = load_angle_presets()
+    for fov in (40.0, 80.0):
+        photo = make_test_photo()
+        camera = output_camera(presets["pan_right"], photo, fov)
+        assert abs(camera.yaw_deg - presets["pan_right"].yaw_ratio * fov) < 1e-6 and camera.yaw_deg < fov / 2
+        x, _ = red_dot_center(render_rotated_view(photo, fov, replace(camera, width=240, height=160), "#00ff00")[0])
+        assert 0 < x < 120  # 피사체가 왼쪽으로 갔지만 화면 안에 있음

@@ -4,10 +4,11 @@
 3D 이동(orbit) 프리셋: 깊이 추정 → 피사체 중심으로 카메라 돌려 그리기 → 원본을 참고해 구멍 채우기
 """
 
+import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
 from .camera_math import CameraView
 from .move_camera_in_3d import remove_depth_edge_points, render_from_moved_camera
@@ -30,9 +31,40 @@ def output_size(photo: Image.Image, aspect: float | None, long_side: int) -> tup
 def output_camera(preset: AnglePreset, photo: Image.Image, photo_fov_deg: float) -> CameraView:
     settings = load_settings()["photo"]
     width, height = output_size(photo, preset.aspect, settings["output_long_side"])
-    return CameraView(width=width, height=height, fov_deg=preset.output_fov_deg(photo_fov_deg, settings["max_fov_deg"]),
-                      yaw_deg=preset.yaw_deg, pitch_deg=preset.pitch_deg, roll_deg=preset.roll_deg,
-                      lens_curve=preset.lens_curve)
+    vertical_fov_deg = math.degrees(2 * math.atan(math.tan(math.radians(photo_fov_deg) / 2) * photo.height / photo.width))
+    fov = preset.output_fov_deg(photo_fov_deg, settings["max_fov_deg"], settings["max_curved_fov_deg"])
+    return CameraView(width=width, height=height, fov_deg=fov,
+                      yaw_deg=preset.yaw_deg + preset.yaw_ratio * photo_fov_deg,
+                      pitch_deg=preset.pitch_deg + preset.pitch_ratio * vertical_fov_deg,
+                      roll_deg=preset.roll_deg, lens_curve=preset.lens_curve)
+
+
+def render_and_fill(photo: Image.Image, photo_fov_deg: float, camera: CameraView, scene_description: str, seed: int,
+                    steps: int, model_getter) -> tuple[Image.Image, dict[str, Image.Image]]:
+    """(결과, 중간 단계). 원본을 camera로 다시 찍고 빈 곳을 채웁니다.
+
+    어안처럼 휘는 렌즈는 생성 모델이 휜 그림을 이어 그리지 못하므로(빈 곳만 평평하게 채움),
+    같은 방향의 일반 렌즈로 먼저 찍어 채운 뒤 휘게 만들고, 원본이 보이는 곳은 원본에서 직접 다시 찍어 덮습니다.
+    """
+    settings = load_settings()
+    flat = camera if camera.lens_curve == 1 else replace(
+        camera, fov_deg=min(camera.fov_deg, settings["photo"]["max_fov_deg"]), lens_curve=1.0)
+    rendered, empty_mask = render_rotated_view(photo, photo_fov_deg, flat, settings["rotate"]["empty_color"])
+    steps_shown = {"before_fill": rendered, "empty_mask": empty_mask}
+    if model_getter is None:
+        image = rendered
+    else:
+        from .fill_empty_area import fill_empty_area
+        image = fill_empty_area(model_getter(), rendered, empty_mask, scene_description, seed, steps)
+    if flat is camera:
+        return image, steps_shown
+    steps_shown["before_lens_curve"] = image
+    curved, _ = render_rotated_view(image, flat.fov_deg, replace(camera, yaw_deg=0, pitch_deg=0, roll_deg=0), "#000000")
+    direct, unseen = render_rotated_view(photo, photo_fov_deg, camera, "#000000")
+    feather = settings["rotate"]["feather_px"]
+    if feather > 0:
+        unseen = unseen.filter(ImageFilter.MaxFilter(2 * feather + 1)).filter(ImageFilter.GaussianBlur(feather / 2))
+    return Image.composite(curved, direct, unseen), steps_shown
 
 
 def select_presets(names: list[str]) -> list[AnglePreset]:
@@ -71,13 +103,9 @@ def change_camera_angle(photo: Image.Image, preset_names: list[str], scene_descr
     results, seconds = [], {}
     for preset in (p for p in presets if p.method == "rotate"):
         started = time.perf_counter()
-        rendered, empty_mask = render_rotated_view(photo, photo_fov_deg, output_camera(preset, photo, photo_fov_deg),
-                                                   settings["rotate"]["empty_color"])
-        image = rendered
-        if model_getter is not None:
-            from .fill_empty_area import fill_empty_area
-            image = fill_empty_area(model_getter(), rendered, empty_mask, scene_description, seed, steps)
-        results.append(AngleResult(preset, image, {"before_fill": rendered, "empty_mask": empty_mask}))
+        image, steps_shown = render_and_fill(photo, photo_fov_deg, output_camera(preset, photo, photo_fov_deg),
+                                             scene_description, seed, steps, model_getter)
+        results.append(AngleResult(preset, image, steps_shown))
         seconds[preset.name] = round(time.perf_counter() - started, 1)
     orbit = settings["orbit"]
     orbit_presets = [p for p in presets if p.method == "orbit"]

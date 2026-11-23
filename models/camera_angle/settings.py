@@ -22,6 +22,8 @@ class AnglePreset:
     yaw_deg: float = 0.0
     pitch_deg: float = 0.0
     roll_deg: float = 0.0
+    yaw_ratio: float = 0.0     # 원본 가로 화각에 대한 비율로 돌리는 양 (yaw_deg에 더함)
+    pitch_ratio: float = 0.0   # 원본 세로 화각에 대한 비율로 기울이는 양 (pitch_deg에 더함)
     fov_scale: float | None = None
     fov_deg: float | None = None
     lens_curve: float = 1.0
@@ -37,13 +39,13 @@ class AnglePreset:
         if not 0 <= self.lens_curve <= 1:
             raise ValueError(f"프리셋 {self.name}: lens_curve는 0~1 사이여야 합니다")
 
-    def output_fov_deg(self, photo_fov_deg: float, max_fov_deg: float) -> float:
-        """이 프리셋으로 찍을 가로 화각. 일반 렌즈(lens_curve=1)만 max_fov_deg로 제한합니다."""
+    def output_fov_deg(self, photo_fov_deg: float, max_fov_deg: float, max_curved_fov_deg: float) -> float:
+        """이 프리셋으로 찍을 가로 화각. 일반 렌즈는 max_fov_deg, 휘는 렌즈는 max_curved_fov_deg로 제한합니다."""
         if self.fov_deg is not None:
             fov = self.fov_deg
         else:
             fov = photo_fov_deg * (self.fov_scale or 1.0)
-        return min(fov, max_fov_deg) if self.lens_curve == 1 else fov
+        return min(fov, max_fov_deg if self.lens_curve == 1 else max_curved_fov_deg)
 
 
 def read_toml(name: str) -> dict:
