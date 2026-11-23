@@ -56,7 +56,13 @@ def widen_photo(photo: Image.Image, photo_fov_deg: float, target: CameraView, sc
     stages = []
     while True:
         _, empty = render_rotated_view(photo, photo_fov_deg, target, rotate["empty_color"])
-        wider = min(photo_fov_deg * rotate["widen_step_scale"], settings["photo"]["max_fov_deg"])
+        # 목표 화각까지 같은 비율로 나눠 넓힙니다. 한 단계를 꽉 채워 넓히면 마지막에 얇은 띠만 남는데,
+        # 생성 모델은 얇은 띠를 지저분한 무늬로 채웁니다.
+        ratio = min(target.fov_deg, settings["photo"]["max_fov_deg"]) / photo_fov_deg
+        scale = rotate["widen_step_scale"]
+        if ratio > 1.001:
+            scale = ratio ** (1 / math.ceil(math.log(ratio) / math.log(scale)))
+        wider = min(photo_fov_deg * scale, settings["photo"]["max_fov_deg"])
         if seen_share(empty) >= rotate["min_original_share"] or wider <= photo_fov_deg + 1e-3:
             return photo, photo_fov_deg, stages
         width, height = output_size(photo, None, long_side)

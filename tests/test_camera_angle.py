@@ -194,5 +194,6 @@ def test_far_wider_views_are_filled_in_stages():
     target = CameraView(240, 160, 150)  # 원본 60°의 2.5배: 원본이 화면의 아주 작은 일부
     widened, fov, stages = widen_photo(photo, FOV, target, "", 0, 1, EchoModel())
     assert len(stages) >= 1 and FOV < fov <= 150
-    assert abs(fov - min(FOV * settings["widen_step_scale"] ** len(stages), 150)) < 1e-6
+    assert fov == 150  # 같은 비율로 나눠 목표 화각에 딱 맞춤 (얇은 띠가 남지 않음)
+    assert len(stages) == math.ceil(math.log(150 / FOV) / math.log(settings["widen_step_scale"]))
     assert widen_photo(photo, FOV, CameraView(240, 160, 66), "", 0, 1, EchoModel())[2] == []  # 조금 넓히면 한 번에
