@@ -1,0 +1,30 @@
+# 내려받을 모델 목록입니다. revision은 커밋으로 고정해 파일이 바뀌지 않게 합니다.
+# Qwen-Image 2.1 편집 모델입니다. 모델은 허깅페이스 캐시(HF_HOME)에 저장됩니다. sha256이 있으면 내려받은 뒤 확인합니다.
+# 출처와 해시는 ai-generation 프로젝트에서 검증된 값을 그대로 옮겼습니다.
+
+[models.qwen_transformer]
+repo = "Comfy-Org/Qwen-Image-2.1"
+revision = "aacf31a6d48e707f352ecba714cee0680da3479b"
+files = ["diffusion_models/qwen_image_2.1_int8_convrot.safetensors"]
+sha256 = "cb74113cb03faecd79611b01fd7fd642f0aa60d6f0b95086abee214d75eaa57d"
+
+[models.qwen_text_encoder]
+repo = "Comfy-Org/Qwen-Image-2.1"
+revision = "aacf31a6d48e707f352ecba714cee0680da3479b"
+files = ["text_encoders/qwen3vl_8b_int8_convrot.safetensors"]
+sha256 = "8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f"
+
+[models.qwen_vae]
+repo = "Comfy-Org/Qwen-Image-2.1"
+revision = "aacf31a6d48e707f352ecba714cee0680da3479b"
+files = ["vae/qwen_image_2.1_vae_bf16.safetensors"]
+sha256 = "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9"
+
+[models.qwen_configs]
+repo = "Qwen/Qwen-Image-2.1"
+revision = "d26bb61231c349cf6b7896fa83353113880e1ba3"
+files = ["model_index.json", "LICENSE", "transformer/config.json", "text_encoder/config.json", "vae/config.json",
+         "scheduler/scheduler_config.json", "processor/added_tokens.json", "processor/chat_template.jinja",
+         "processor/merges.txt", "processor/preprocessor_config.json", "processor/special_tokens_map.json",
+         "processor/tokenizer.json", "processor/tokenizer_config.json", "processor/video_preprocessor_config.json",
+         "processor/vocab.json"]
