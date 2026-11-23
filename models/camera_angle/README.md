@@ -7,7 +7,7 @@ ComfyUI 없이 파이썬만으로 돌아가며, ComfyUI-Panorama-Stickers의 방
 
 | 방식 | 하는 일 | 프리셋 |
 | --- | --- | --- |
-| 회전 (`rotate`) | 사진을 360도 배경 정면에 붙이고 빈 곳을 생성한 뒤, 원하는 방향과 렌즈로 다시 찍습니다. 원본이 보이는 곳은 원본 픽셀로 덮습니다. | `wide_angle`, `ultra_wide`, `telephoto`, `dutch_angle`, `tilt_up`, `tilt_down`, `pan_left`, `pan_right`, `reverse`, `fisheye`, `little_planet` |
+| 회전 (`rotate`) | 사진을 360도 배경 정면에 붙이고 빈 곳을 생성한 뒤, 원하는 방향과 렌즈로 다시 찍습니다. 원본이 보이는 곳은 원본 픽셀로 덮습니다. | `wide_angle`, `ultra_wide`, `telephoto`, `dutch_angle`, `tilt_up`, `tilt_down`, `pan_left`, `pan_right`, `reverse`, `fisheye` |
 | 3D 이동 (`orbit`) | 깊이를 추정해 카메라를 피사체 중심으로 돌린 뒤, 드러난 빈 곳을 원본을 참고해 채웁니다. | `low_angle`, `high_angle`, `three_quarter_left`, `three_quarter_right` |
 
 회전 방식은 카메라가 제자리에서 돌기만 하므로 피사체의 옆모습은 나오지 않습니다. 옆모습이나 올려다본 모습이 필요하면 3D 이동 프리셋을 씁니다.

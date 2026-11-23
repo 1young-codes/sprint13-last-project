@@ -6,7 +6,7 @@
 #   roll_deg    + 이면 화면 속 장면이 시계 방향으로 기웁니다
 #   fov_scale   원본 화각에 곱하는 배수      ┐ 둘 중 하나만 씁니다.
 #   fov_deg     화각을 직접 지정             ┘ 둘 다 없으면 원본 화각 그대로
-#   lens_curve  1 일반 렌즈, 0.5 입체 투영(작은 행성), 0 어안
+#   lens_curve  1 일반 렌즈, 0 어안 (그 사이 값은 렌즈 휨 정도)
 #   aspect      결과 가로/세로 비율. 없으면 원본 비율
 #
 # method = "orbit": 카메라가 피사체 중심을 축으로 돌아가 피사체를 다른 각도에서 봅니다. 깊이 추정이 필요합니다.
@@ -69,14 +69,6 @@ label = "어안 렌즈"
 method = "rotate"
 fov_deg = 180
 lens_curve = 0.0
-
-[little_planet]
-label = "작은 행성"
-method = "rotate"
-pitch_deg = -90
-fov_deg = 240
-lens_curve = 0.5
-aspect = 1.0
 
 [low_angle]
 label = "로우 앵글 (올려다보기)"

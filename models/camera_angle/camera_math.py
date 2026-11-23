@@ -21,7 +21,7 @@ class CameraView:
     yaw_deg: float = 0.0
     pitch_deg: float = 0.0
     roll_deg: float = 0.0
-    lens_curve: float = 1.0  # 1 일반 렌즈, 0.5 입체 투영, 0 어안
+    lens_curve: float = 1.0  # 1 일반 렌즈, 0 어안
 
     def __post_init__(self):
         if self.fov_deg * self.lens_curve > 179:
