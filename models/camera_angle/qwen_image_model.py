@@ -200,11 +200,7 @@ class QwenImageModel:
         from diffusers import FlowMatchEulerDiscreteScheduler, QwenImage21Pipeline
         from transformers import Qwen3VLProcessor
 
-        folder = model_folder("qwen_configs")
-        missing = [k for k in ("qwen_transformer", "qwen_text_encoder", "qwen_vae") if not model_file(k).is_file()]
-        if missing or not (folder / "transformer/config.json").is_file():
-            raise FileNotFoundError(f"Qwen 모델 파일이 없습니다 ({missing or 'qwen_configs'}). "
-                                    "먼저 python -m models.camera_angle.download_models 를 실행하세요")
+        folder = model_folder("qwen_configs")  # 파일이 없으면 여기서 받는 방법을 알려 주는 오류가 납니다
         self.text_encoder = load_text_encoder(folder)
         # 원본 예제의 simple 시그마를 그대로 넘기므로 diffusers가 한 번 더 이동시키지 않게 합니다
         scheduler = FlowMatchEulerDiscreteScheduler(shift=1, use_dynamic_shifting=False, shift_terminal=None)

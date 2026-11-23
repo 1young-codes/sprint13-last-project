@@ -1,7 +1,7 @@
 """MoGe로 사진 한 장의 3D 점 구름과 원본 화각을 추정합니다 (그래픽 카드 필요).
 
 불러오는 방식은 ai-generation 프로젝트의 backend/studio/engine/moge3.py와 같습니다.
-가중치는 Comfy-Org/MoGe의 fp16 파일이고, 추론 코드는 microsoft/MoGe 고정 커밋을 download_models.py가 받아 둡니다.
+가중치는 Comfy-Org/MoGe의 fp16 파일(허깅페이스 캐시)이고, 추론 코드는 microsoft/MoGe 고정 커밋을 download_models.py가 받아 둡니다.
 """
 
 import json
@@ -54,8 +54,8 @@ def load_depth_model(model_name: str):
 
     code = code_folder("moge")
     weights = model_file(model_name)
-    if not weights.is_file() or not code.is_dir():
-        raise FileNotFoundError(f"깊이 모델 파일이 없습니다: {weights}, {code}. "
+    if not code.is_dir():
+        raise FileNotFoundError(f"깊이 모델 코드가 없습니다: {code}. "
                                 "먼저 python -m models.camera_angle.download_models 를 실행하세요")
     if str(code) not in sys.path:
         sys.path.insert(0, str(code))

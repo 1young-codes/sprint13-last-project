@@ -14,15 +14,15 @@ ComfyUI 없이 파이썬만으로 돌아가며, ComfyUI-Panorama-Stickers의 방
 
 ## 가상 머신 준비
 
-프로젝트 루트에서 실행합니다.
+팀 가상 머신은 용량을 아끼려고 가상환경과 모델 캐시를 공용으로 씁니다. 공용 가상환경은 `/data/venv`, 허깅페이스 캐시는 `~/.bashrc`의 `HF_HOME`(`/data/models/hf_cache`)입니다. 프로젝트 루트에서 실행합니다.
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
+source /data/venv/bin/activate
 pip install -r models/camera_angle/requirements.txt
 python -m models.camera_angle.download_models
 ```
 
-모델은 약 20GB이며 `data/models` 아래에 저장됩니다. 위치를 바꾸려면 `.env`에 `CAMERA_ANGLE_MODEL_DIR`을 적습니다.
+모델 약 17GB는 `HF_HOME` 캐시에 저장되어 팀원과 같이 씁니다. 이미 받아 둔 모델은 다시 받지 않습니다. 결과와 추론 코드 위치는 `.env`의 `CAMERA_ANGLE_OUTPUT_DIR`, `CAMERA_ANGLE_CACHE_DIR`, `CAMERA_ANGLE_CODE_DIR`로 바꿉니다. 가상 머신에서는 결과를 공용 폴더 `/data/outputs` 아래에 둡니다.
 
 ## 실행
 

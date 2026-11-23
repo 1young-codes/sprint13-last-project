@@ -1,8 +1,9 @@
 # 카메라 앵글 바꾸기 기능의 기본 설정입니다.
 # 경로는 모두 프로젝트 루트 기준 상대 경로입니다. 같은 이름의 환경 변수(.env)가 있으면 그 값이 우선합니다.
+# 모델 가중치는 허깅페이스 캐시(환경 변수 HF_HOME, 기본 ~/.cache/huggingface)에 저장되어 팀원과 같이 씁니다.
 
 [paths]
-model_dir = "data/models"                 # CAMERA_ANGLE_MODEL_DIR
+code_dir = "data/vendor"                  # CAMERA_ANGLE_CODE_DIR: 깊이 모델(MoGe) 추론 코드
 output_dir = "outputs/camera_angle"       # CAMERA_ANGLE_OUTPUT_DIR
 cache_dir = "data/camera_angle_cache"     # CAMERA_ANGLE_CACHE_DIR
 
@@ -32,6 +33,6 @@ seed = 0
 steps = 25
 
 [depth]
-model = "moge3"                           # moge3 | moge2 (moge3 설치가 안 되면 moge2로 바꾸세요)
+model = "moge2"                           # moge2 | moge3 (moge3은 flex-gemm 설치에 CUDA 컴파일러가 필요합니다)
 resolution_level = 9
 refine_steps = 3

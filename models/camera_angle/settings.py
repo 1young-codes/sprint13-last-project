@@ -84,14 +84,24 @@ def load_model_sources() -> dict:
 
 
 def model_file(model_key: str) -> Path:
-    """model_sources.toml에 적힌 모델의 첫 번째 파일 경로."""
+    """model_sources.toml에 적힌 모델의 첫 번째 파일을 허깅페이스 캐시(HF_HOME)에서 찾습니다.
+    팀원이 같은 모델을 이미 받았다면 그 파일을 그대로 씁니다."""
+    from huggingface_hub import hf_hub_download
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
     entry = load_model_sources()["models"][model_key]
-    return project_path("model_dir") / entry["folder"] / entry["files"][0]
+    try:
+        return Path(hf_hub_download(entry["repo"], entry["files"][0], revision=entry["revision"], local_files_only=True))
+    except LocalEntryNotFoundError:
+        raise FileNotFoundError(f"모델 {model_key}({entry['repo']})가 아직 없습니다. "
+                                "먼저 python -m models.camera_angle.download_models 를 실행하세요") from None
 
 
 def model_folder(model_key: str) -> Path:
-    return project_path("model_dir") / load_model_sources()["models"][model_key]["folder"]
+    """모델 저장소를 받아 둔 폴더 (설정 파일들이 저장소 안 경로 그대로 들어 있는 곳)."""
+    first = load_model_sources()["models"][model_key]["files"][0]
+    return model_file(model_key).parents[first.count("/")]
 
 
 def code_folder(code_key: str) -> Path:
-    return project_path("model_dir") / load_model_sources()["code"][code_key]["folder"]
+    return project_path("code_dir") / load_model_sources()["code"][code_key]["folder"]

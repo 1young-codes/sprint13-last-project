@@ -20,8 +20,8 @@ requests
 tqdm
 utils3d_moge @ git+https://github.com/EasternJournalist/utils3d-moge.git@62f09d58509485564e24d5d9f6aac9ee9ebc0c37
 pipeline @ git+https://github.com/EasternJournalist/pipeline.git@1c511390d90226c00c101f34b84df26a0f8789b4
-# MoGe 3에만 필요합니다. 설치에 CUDA 컴파일러가 필요하며, 실패하면 이 줄을 지우고 settings.toml의 depth.model을 moge2로 바꾸세요.
-flex-gemm @ git+https://github.com/JeffreyXiang/FlexGEMM.git@b2fadb29d41846c7981ade6801ffc689fae119cf
+# MoGe 3에만 필요합니다 (settings.toml의 depth.model = "moge3"). 설치에 CUDA 컴파일러(nvcc)가 필요합니다.
+# flex-gemm @ git+https://github.com/JeffreyXiang/FlexGEMM.git@b2fadb29d41846c7981ade6801ffc689fae119cf
 
 # 선택: INT8 곱셈 전용 커널. 있으면 생성이 빨라집니다.
 # comfy-kitchen

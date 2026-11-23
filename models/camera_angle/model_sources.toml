@@ -1,26 +1,23 @@
 # 내려받을 모델 목록입니다. revision은 커밋으로 고정해 파일이 바뀌지 않게 합니다.
-# folder는 settings.toml의 model_dir 아래 경로입니다. sha256이 있으면 내려받은 뒤 확인합니다.
+# 모델은 허깅페이스 캐시(HF_HOME)에 저장됩니다. sha256이 있으면 내려받은 뒤 확인합니다.
 # 출처와 해시는 ai-generation 프로젝트에서 검증된 값을 그대로 옮겼습니다.
 
 [models.qwen_transformer]
 repo = "Comfy-Org/Qwen-Image-2.1"
 revision = "aacf31a6d48e707f352ecba714cee0680da3479b"
 files = ["diffusion_models/qwen_image_2.1_int8_convrot.safetensors"]
-folder = "qwen-image-2.1"
 sha256 = "cb74113cb03faecd79611b01fd7fd642f0aa60d6f0b95086abee214d75eaa57d"
 
 [models.qwen_text_encoder]
 repo = "Comfy-Org/Qwen-Image-2.1"
 revision = "aacf31a6d48e707f352ecba714cee0680da3479b"
 files = ["text_encoders/qwen3vl_8b_int8_convrot.safetensors"]
-folder = "qwen-image-2.1"
 sha256 = "8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f"
 
 [models.qwen_vae]
 repo = "Comfy-Org/Qwen-Image-2.1"
 revision = "aacf31a6d48e707f352ecba714cee0680da3479b"
 files = ["vae/qwen_image_2.1_vae_bf16.safetensors"]
-folder = "qwen-image-2.1"
 sha256 = "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9"
 
 [models.qwen_configs]
@@ -31,14 +28,12 @@ files = ["model_index.json", "LICENSE", "transformer/config.json", "text_encoder
          "processor/merges.txt", "processor/preprocessor_config.json", "processor/special_tokens_map.json",
          "processor/tokenizer.json", "processor/tokenizer_config.json", "processor/video_preprocessor_config.json",
          "processor/vocab.json"]
-folder = "qwen-image-2.1"
 
 # 360도 배경의 빈 곳을 채우는 LoRA
 [models.fill_360_lora]
 repo = "nomadoor/qwen-image-2.1-360-panorama-outpaint-lora"
 revision = "e559d4437d9d4a997f21a98713d501c8743cce1d"
 files = ["qwen_image_2_1_360_panorama_outpaint_lora_v0_1.safetensors"]
-folder = "qwen-image-2.1"
 sha256 = "340453ec90c87d241f73979adc1be149e591867d45d92df250ddeb8446393dd6"
 
 # 카메라를 옮긴 시점을 원본 참고 사진과 함께 완성하는 LoRA
@@ -46,25 +41,22 @@ sha256 = "340453ec90c87d241f73979adc1be149e591867d45d92df250ddeb8446393dd6"
 repo = "lilylilith/QI_2.1_AnyAngle"
 revision = "5c8b4c8e05ba6328d54bf8d34ec724fef5a414ae"
 files = ["QI2.1_AnyAngle.safetensors"]
-folder = "qwen-image-2.1"
 sha256 = "e4d7a0d44a45ed62daabd0f2484a1a59046618a4c47e76b1eab5e386a7a35d8a"
 
 [models.moge3]
 repo = "Comfy-Org/MoGe"
 revision = "1484985258ba7ef45c314144fcf0e90924ffbf44"
 files = ["geometry_estimation/moge_3_vitg_fp16.safetensors"]
-folder = "depth"
 sha256 = "a587e42936ae7080b419df4c047b0f0b075d3492418f76ce81fb0779925a1fe6"
 
 [models.moge2]
 repo = "Comfy-Org/MoGe"
 revision = "1484985258ba7ef45c314144fcf0e90924ffbf44"
 files = ["geometry_estimation/moge_2_vitl_normal_fp16.safetensors"]
-folder = "depth"
 sha256 = "cb1a692d03235671e959e81360d7b4d9f44aefadb1f852d6ca6aa17799d5e31f"
 
 # 깊이 모델 추론 코드 (마이크로소프트 MoGe 저장소의 고정 커밋)
 [code.moge]
 archive_url = "https://codeload.github.com/microsoft/MoGe/tar.gz/{revision}"
 revision = "74fbce054ebed49800de42d0ad0e83495065719a"
-folder = "vendor/moge"
+folder = "moge"                           # settings.toml의 code_dir 아래
