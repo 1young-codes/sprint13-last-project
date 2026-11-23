@@ -15,7 +15,7 @@ max_fov_deg = 150                         # 일반 렌즈 프리셋이 넘지 �
 [rotate]
 # 회전 프리셋: 원본 사진을 새 방향으로 다시 찍은 뒤, 원본이 찍지 않은 빈 곳만 생성합니다
 empty_color = "#00ff00"                   # 빈 곳 표시색 (생성 모델에 채울 곳을 알려 줌)
-fill_prompt = "Extend this photo into the green areas. Continue the existing background exactly as it is, with the same colors, lighting and style, so the result looks like one wider photo. Do not add a new scenery, sky or ground that is not already in the photo. {scene}"
+fill_prompt = "Fill the green areas so the photo continues naturally beyond its original edges. Keep everything else unchanged. {scene}"
 color_match_ratio = 0.08                  # 생성 부분 색을 원본에 맞출 때 쓰는 범위 (결과 가로 대비)
 feather_px = 6                            # 원본과 생성 영역의 경계를 부드럽게 섞는 폭
 
