@@ -242,7 +242,8 @@ class QwenImageModel:
                             steps: int) -> Image.Image:
         """reference(1번 이미지)를 참고해 image(2번 이미지)를 다시 그립니다. 결과 크기는 aligned_size(image 크기)입니다."""
         pipe = self.pipe
-        images = [im.convert("RGB").resize(aligned_size(*im.size), Image.Resampling.LANCZOS) for im in (reference, image)]
+        # 이 VAE는 RGBA 4채널을 받습니다 (pipe()는 내부에서 바꿔 주지만, 여기서는 직접 전처리하므로 맞춰 줍니다)
+        images = [im.convert("RGBA").resize(aligned_size(*im.size), Image.Resampling.LANCZOS) for im in (reference, image)]
         width, height = images[-1].size
         text, text_mask, image_mask = pipe.encode_prompt(image=images, prompt=prompt, device=torch.device(DEVICE),
                                                          num_images_per_prompt=1)
