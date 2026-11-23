@@ -84,7 +84,8 @@ def change_camera_angle(photo: Image.Image, preset_names: list[str], scene_descr
     for preset in orbit_presets:
         moved, hole_mask = render_from_moved_camera(photo, depth.points, solid_points, depth.fov_deg,
                                                     preset.orbit_yaw_deg, preset.orbit_pitch_deg,
-                                                    orbit["subject_crop"], orbit["hole_color"], orbit["point_size_px"])
+                                                    orbit["subject_crop"], orbit["hole_color"], orbit["point_size_px"],
+                                                    orbit["gap_fill_ratio"], orbit["background_depth_share"])
         size = output_size(photo, None, settings["photo"]["output_long_side"])
         moved = moved.resize(size, Image.Resampling.LANCZOS)
         image = moved

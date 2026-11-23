@@ -23,6 +23,7 @@ def find_subject_center(points: np.ndarray, valid: np.ndarray, center_crop: floa
     return np.median(points[top:h - top, left:w - left][crop], axis=0)
 
 
+
 def remove_depth_edge_points(points: np.ndarray, valid: np.ndarray, tolerance: float) -> np.ndarray:
     """물체 경계에서 깊이가 앞뒤로 튀는 점(떠다니는 점)을 뺀 valid.
     주변 3×3 픽셀의 깊이 차이가 깊이 × tolerance를 넘으면 경계로 봅니다 (ai-generation grid_surface와 같은 기준)."""
@@ -45,12 +46,15 @@ def orbit_camera_pose(subject_center: np.ndarray, orbit_yaw_deg: float,
 
 def render_from_moved_camera(photo: Image.Image, points: np.ndarray, valid: np.ndarray, fov_deg: float,
                              orbit_yaw_deg: float, orbit_pitch_deg: float, center_crop: float,
-                             hole_color: str, point_size_px: int = 1) -> tuple[Image.Image, Image.Image]:
+                             hole_color: str, point_size_px: int = 1,
+                             gap_fill_ratio: float = 0.0, background_depth_share: float = 1.0) -> tuple[Image.Image, Image.Image]:
     """(새 시점 RGB, 구멍 마스크 L). 결과 크기는 원본과 같고, 마스크는 흰색(255)이 비어 있는 곳입니다.
 
     points: (H, W, 3) 카메라 기준 좌표, x 오른쪽, y 위, z 앞. valid: (H, W) 믿을 수 있는 점.
     point_size_px: 점 하나가 덮는 정사각형 크기. 카메라가 움직여 표면이 늘어나면 점 사이에 그물 모양 틈이 생기는데,
     생성 모델이 그 무늬를 물체로 착각하므로 점을 키워 틈을 메웁니다.
+    gap_fill_ratio: 앞 물체 뒤에서 드러난 틈을 뒤쪽 배경으로 메울 최대 폭 (화면 가로 대비 비율). 0이면 메우지 않습니다.
+    background_depth_share: 주변에서 가장 먼 깊이의 이 비율보다 먼 점만 뒤쪽 배경으로 봅니다.
     """
     # ponytail: 점을 정사각형으로 찍는 방식. 물체 가장자리가 point_size_px만큼 두꺼워지며, 부족하면 삼각형 메시 렌더링으로 바꾼다.
     h, w = valid.shape
@@ -75,8 +79,62 @@ def render_from_moved_camera(photo: Image.Image, points: np.ndarray, valid: np.n
     order = np.lexsort((depth, pixel))
     first = np.unique(pixel[order], return_index=True)[1]
     nearest = order[first]
-    image = np.broadcast_to(hex_to_rgb(hole_color), (h * w, 3)).copy()
+    image = np.zeros((h * w, 3), dtype=np.float32)
     image[pixel[nearest]] = source[nearest]
-    hole = np.ones(h * w, dtype=np.float32)
-    hole[pixel[nearest]] = 0
-    return to_uint8_image(image.reshape(h, w, 3)), to_uint8_image(hole.reshape(h, w))
+    distance = np.zeros(h * w, dtype=np.float32)  # 0은 빈 곳
+    distance[pixel[nearest]] = depth[nearest]
+    image, distance = image.reshape(h, w, 3), distance.reshape(h, w)
+    image, distance = fill_gaps_behind_objects(image, distance, round(gap_fill_ratio * w),
+                                               background_depth_share)
+    hole = distance == 0
+    image[hole] = hex_to_rgb(hole_color)
+    return to_uint8_image(image), to_uint8_image(hole.astype(np.float32))
+
+
+
+def local_max(values: np.ndarray, radius: int) -> np.ndarray:
+    """각 픽셀 주변 (2 × radius + 1) 정사각형 안의 최댓값."""
+    window = 2 * radius + 1
+    rows = np.lib.stride_tricks.sliding_window_view(np.pad(values, ((radius, radius), (0, 0))), window, axis=0).max(-1)
+    return np.lib.stride_tricks.sliding_window_view(np.pad(rows, ((0, 0), (radius, radius))), window, axis=1).max(-1)
+
+
+def fill_gaps_behind_objects(image: np.ndarray, distance: np.ndarray, max_px: int,
+                             background_share: float) -> tuple[np.ndarray, np.ndarray]:
+    """카메라가 움직여 앞 물체 뒤에서 드러난 틈을, 그 주변의 뒤쪽 배경 색을 늘려 메웁니다.
+
+    틈은 앞 물체 모양을 그대로 닮아서, 비워 두면 생성 모델이 그 자리에 앞 물체를 한 번 더 그립니다.
+    빈 픽셀마다 주변 max_px 안에서 가장 먼 깊이 × background_share보다 먼 이웃의 색만 한 픽셀씩 번지게 합니다.
+    폭이 2 × max_px보다 넓은 빈 곳(원본 화면 밖)은 그대로 두고 생성 모델이 채웁니다.
+    distance: (H, W) 깊이, 0은 빈 곳.
+    """
+    # ponytail: 배경 색을 늘리는 단순한 방식이라 메운 곳이 줄무늬로 보이지만, 생성 모델이 화면 전체를 다시 그리므로 그대로 둔다.
+    if max_px <= 0:
+        return image, distance
+    far = local_max(distance, max_px)
+    background = far * background_share
+    # 양쪽이 막힌 좁은 틈만 메웁니다: 채워진 곳을 max_px만큼 넓혔다가 다시 줄였을 때 메워지는 곳 (닫힘 연산)
+    filled = (distance > 0).astype(np.float32)
+    narrow_gap = (1 - local_max(1 - local_max(filled, max_px), max_px)) > 0
+    image, distance = image.copy(), distance.copy()
+    for _ in range(max_px):
+        empty = distance == 0
+        if not empty.any():
+            break
+        best_depth = np.zeros_like(distance)
+        best_color = np.zeros_like(image)
+        padded_d = np.pad(distance, 1)
+        padded_c = np.pad(image, ((1, 1), (1, 1), (0, 0)))
+        h, w = distance.shape
+        for dy in (0, 1, 2):
+            for dx in (0, 1, 2):
+                d = padded_d[dy:dy + h, dx:dx + w]
+                better = d > best_depth
+                best_depth = np.where(better, d, best_depth)
+                best_color = np.where(better[..., None], padded_c[dy:dy + h, dx:dx + w], best_color)
+        grow = empty & narrow_gap & (best_depth > 0) & (best_depth >= background)
+        if not grow.any():
+            break
+        distance[grow] = best_depth[grow]
+        image[grow] = best_color[grow]
+    return image, distance

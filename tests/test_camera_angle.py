@@ -140,3 +140,16 @@ def test_depth_edge_points_are_removed_but_flat_surfaces_stay():
     points[:, photo.width // 2:] *= 2  # 오른쪽 절반을 두 배 멀리: 가운데에 깊이 경계
     kept = remove_depth_edge_points(points, valid, 0.04)
     assert not kept[:, photo.width // 2 - 1:photo.width // 2 + 1].any() and kept[:, :photo.width // 2 - 2].all()
+
+
+def test_gap_behind_an_object_is_filled_with_the_background_not_the_object():
+    from models.camera_angle.move_camera_in_3d import fill_gaps_behind_objects
+    image = np.zeros((20, 30, 3), dtype=np.float32)
+    distance = np.zeros((20, 30), dtype=np.float32)
+    image[:, :12], distance[:, :12] = (1, 0, 0), 1.0   # 왼쪽: 가까운 빨간 물체
+    image[:, 15:], distance[:, 15:] = (0, 0, 1), 3.0   # 오른쪽: 먼 파란 배경, 그 사이 3픽셀이 드러난 틈
+    filled, depth = fill_gaps_behind_objects(image, distance, 4, 0.9)
+    assert (depth[:, 12:15] == 3.0).all() and np.allclose(filled[:, 12:15], (0, 0, 1))
+    wide = distance.copy()
+    wide[:, 12:] = 0  # 오른쪽 전체가 빈 넓은 곳은 메우지 않습니다
+    assert (fill_gaps_behind_objects(image, wide, 4, 0.9)[1][:, 12:] == 0).all()
