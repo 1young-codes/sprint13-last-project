@@ -14,11 +14,11 @@ Qwen-Image 2.1 편집 모델을 불러와 빠르게 돌리는 공용 코드입�
 ## 쓰는 법
 
 ```bash
-python -m backend.generative_ai.fast_image_generation.model_files   # 모델 약 16GB, 팀 공용 캐시(HF_HOME)에 한 번만 받음
+python -m models.generative_ai.fast_image_generation.model_files   # 모델 약 16GB, 팀 공용 캐시(HF_HOME)에 한 번만 받음
 ```
 
 ```python
-from backend.generative_ai.fast_image_generation.qwen_image_model import QwenImageModel
+from models.generative_ai.fast_image_generation.qwen_image_model import QwenImageModel
 
 model = QwenImageModel(ratios_file=내_기능_폴더 / "mag_cache_ratios.json")
 model.use_lora(None, 0)                      # LoRA를 쓰면 파일 경로와 세기를 넘김
@@ -39,7 +39,7 @@ result = model.edit(image, "프롬프트", seed=0, steps=25)
 MagCache는 단계별 크기 비율이 있어야 켜집니다. 비율은 모델, LoRA, 단계 수에 따라 달라서 기능마다 자기 사진 여러 장으로 한 번 잽니다. 비율 파일이 없으면 모든 단계를 계산합니다.
 
 ```python
-from backend.generative_ai.fast_image_generation.qwen_image_caching.mag_cache import save_ratios
+from models.generative_ai.fast_image_generation.qwen_image_caching.mag_cache import save_ratios
 
 model.calibration = {}                       # 이 동안은 MagCache 없이 모든 단계를 계산하며 비율을 모음
 for image in 성격이_다른_사진들:
@@ -50,5 +50,5 @@ save_ratios(내_기능_폴더 / "mag_cache_ratios.json", model.calibration, step
 ## 검증
 
 ```bash
-python -m pytest backend/generative_ai/fast_image_generation
+python -m pytest models/generative_ai/fast_image_generation
 ```

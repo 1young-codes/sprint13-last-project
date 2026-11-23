@@ -1,6 +1,6 @@
 """model_sources.toml에 적힌 모델 파일을 허깅페이스 캐시(HF_HOME)에서 찾거나 내려받습니다.
 
-    python -m backend.generative_ai.fast_image_generation.model_files    # 이 폴더의 Qwen-Image 모델 내려받기
+    python -m models.generative_ai.fast_image_generation.model_files    # 이 폴더의 Qwen-Image 모델 내려받기
 
 기능마다 자기 폴더에 model_sources.toml을 두고, 이 모듈의 함수에 그 파일 경로를 넘겨 씁니다.
 이미 캐시에 있는 파일(팀원이 받아 둔 것 포함)은 다시 받지 않습니다.

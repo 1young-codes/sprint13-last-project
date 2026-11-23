@@ -1,7 +1,7 @@
 """공용 Qwen-Image 모델과 이 폴더 model_sources.toml에 적힌 모델을 허깅페이스 캐시(HF_HOME)로, 깊이 추정 코드를 settings.toml의 code_dir로 내려받습니다.
 
-    python -m backend.generative_ai.camera_angle_presets.download_models            # 필요한 것 전부 (깊이 모델은 settings.toml에서 고른 것만)
-    python -m backend.generative_ai.camera_angle_presets.download_models moge3      # 일부만
+    python -m models.generative_ai.camera_angle_presets.download_models            # 필요한 것 전부 (깊이 모델은 settings.toml에서 고른 것만)
+    python -m models.generative_ai.camera_angle_presets.download_models moge3      # 일부만
 
 이미 캐시에 있는 파일(팀원이 받아 둔 것 포함)은 다시 받지 않습니다.
 """

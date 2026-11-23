@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch import nn
 
-from backend.generative_ai.fast_image_generation.qwen_image_caching.mag_cache import (
+from models.generative_ai.fast_image_generation.qwen_image_caching.mag_cache import (
     StepChangeRecorder, load_ratios, mag_cache_config, run_steps, save_ratios)
 
 
