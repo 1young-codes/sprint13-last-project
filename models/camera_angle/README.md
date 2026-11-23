@@ -36,7 +36,7 @@ python -m models.camera_angle --input 사진.jpg --preset all --scene "a fishing
 
 | 옵션 | 뜻 |
 | --- | --- |
-| `--scene` | 빈 곳을 채울 때 쓸 장면 설명 (영어 권장) |
+| `--scene` | 빈 곳을 채울 때 쓸 장면 설명 (영어 권장). 흰 배경처럼 단색 배경 사진은 `"plain white studio background"`처럼 배경을 적어야 생성 모델이 새 풍경을 지어내지 않습니다 |
 | `--photo-fov` | 원본 사진의 가로 화각. 주면 깊이 추정을 건너뜁니다 |
 | `--skip-generation` | 생성 모델 없이 계산만 확인합니다. 그래픽 카드 없이 회전 프리셋을 볼 때 씁니다 |
 | `--save-steps` | 채우기 전 이미지, 빈 곳 마스크 같은 중간 이미지도 저장합니다 |
