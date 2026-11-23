@@ -10,7 +10,7 @@ from functools import cache
 from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = PACKAGE_DIR.parents[1]
+PROJECT_ROOT = PACKAGE_DIR.parents[2]
 METHODS = ("rotate", "orbit")
 
 
@@ -86,23 +86,10 @@ def load_model_sources() -> dict:
 
 
 def model_file(model_key: str) -> Path:
-    """model_sources.toml에 적힌 모델의 첫 번째 파일을 허깅페이스 캐시(HF_HOME)에서 찾습니다.
-    팀원이 같은 모델을 이미 받았다면 그 파일을 그대로 씁니다."""
-    from huggingface_hub import hf_hub_download
-    from huggingface_hub.errors import LocalEntryNotFoundError
+    """이 기능의 model_sources.toml에 적힌 모델 파일 (허깅페이스 캐시에서 찾음)."""
+    from ..fast_image_generation.model_files import model_file as find_model_file
 
-    entry = load_model_sources()["models"][model_key]
-    try:
-        return Path(hf_hub_download(entry["repo"], entry["files"][0], revision=entry["revision"], local_files_only=True))
-    except LocalEntryNotFoundError:
-        raise FileNotFoundError(f"모델 {model_key}({entry['repo']})가 아직 없습니다. "
-                                "먼저 python -m models.camera_angle.download_models 를 실행하세요") from None
-
-
-def model_folder(model_key: str) -> Path:
-    """모델 저장소를 받아 둔 폴더 (설정 파일들이 저장소 안 경로 그대로 들어 있는 곳)."""
-    first = load_model_sources()["models"][model_key]["files"][0]
-    return model_file(model_key).parents[first.count("/")]
+    return find_model_file(model_key, PACKAGE_DIR / "model_sources.toml")
 
 
 def code_folder(code_key: str) -> Path:

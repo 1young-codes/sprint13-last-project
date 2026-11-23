@@ -14,7 +14,9 @@ from PIL import Image, ImageFilter
 from .camera_math import CameraView
 from .move_camera_in_3d import remove_depth_edge_points, render_from_moved_camera
 from .rotate_camera import render_rotated_view
-from .settings import AnglePreset, load_angle_presets, load_settings
+from .settings import PACKAGE_DIR, AnglePreset, load_angle_presets, load_settings
+
+RATIOS_FILE = PACKAGE_DIR / "mag_cache_ratios.json"  # 이 기능의 사진으로 잰 MagCache 비율 (calibrate_mag_cache.py)
 
 
 @dataclass
@@ -135,8 +137,8 @@ def change_camera_angle(photo: Image.Image, preset_names: list[str], scene_descr
     def get_model():
         nonlocal model
         if model is None:
-            from .qwen_image_model import QwenImageModel
-            model = QwenImageModel()
+            from ..fast_image_generation.qwen_image_model import QwenImageModel
+            model = QwenImageModel(ratios_file=RATIOS_FILE)
         return model
 
     model_getter = None if skip_generation else get_model

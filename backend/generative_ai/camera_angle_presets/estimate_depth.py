@@ -56,7 +56,7 @@ def load_depth_model(model_name: str):
     weights = model_file(model_name)
     if not code.is_dir():
         raise FileNotFoundError(f"깊이 모델 코드가 없습니다: {code}. "
-                                "먼저 python -m models.camera_angle.download_models 를 실행하세요")
+                                "먼저 python -m backend.generative_ai.camera_angle_presets.download_models 를 실행하세요")
     if str(code) not in sys.path:
         sys.path.insert(0, str(code))
     if model_name == "moge2":

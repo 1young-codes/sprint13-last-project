@@ -3,7 +3,7 @@
   "photos": 1,
   "runs": {
     "base": 5,
-    "new_viewpoint_lora": 4
+    "QI2.1_AnyAngle": 4
   },
   "ratios": {
     "base": [
@@ -33,7 +33,7 @@
       1.00635,
       1.02207
     ],
-    "new_viewpoint_lora": [
+    "QI2.1_AnyAngle": [
       1.0,
       1.04339,
       0.989,

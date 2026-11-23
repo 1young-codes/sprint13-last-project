@@ -9,11 +9,11 @@ from dataclasses import replace
 import numpy as np
 from PIL import Image, ImageDraw
 
-from models.camera_angle.camera_math import CameraView, rotation_matrix_from_angles
-from models.camera_angle.change_camera_angle import change_camera_angle, output_camera
-from models.camera_angle.move_camera_in_3d import orbit_camera_pose, render_from_moved_camera
-from models.camera_angle.rotate_camera import render_rotated_view
-from models.camera_angle.settings import load_angle_presets
+from backend.generative_ai.camera_angle_presets.camera_math import CameraView, rotation_matrix_from_angles
+from backend.generative_ai.camera_angle_presets.change_camera_angle import change_camera_angle, output_camera
+from backend.generative_ai.camera_angle_presets.move_camera_in_3d import orbit_camera_pose, render_from_moved_camera
+from backend.generative_ai.camera_angle_presets.rotate_camera import render_rotated_view
+from backend.generative_ai.camera_angle_presets.settings import load_angle_presets
 
 FOV = 60.0
 
@@ -134,7 +134,7 @@ def test_rotate_presets_run_end_to_end_without_models():
 
 
 def test_depth_edge_points_are_removed_but_flat_surfaces_stay():
-    from models.camera_angle.move_camera_in_3d import remove_depth_edge_points
+    from backend.generative_ai.camera_angle_presets.move_camera_in_3d import remove_depth_edge_points
     photo = make_test_photo()
     points, valid = flat_wall(photo)
     assert remove_depth_edge_points(points, valid, 0.04).all()
@@ -144,7 +144,7 @@ def test_depth_edge_points_are_removed_but_flat_surfaces_stay():
 
 
 def test_gap_behind_an_object_is_filled_with_the_background_not_the_object():
-    from models.camera_angle.move_camera_in_3d import fill_gaps_behind_objects
+    from backend.generative_ai.camera_angle_presets.move_camera_in_3d import fill_gaps_behind_objects
     image = np.zeros((20, 30, 3), dtype=np.float32)
     distance = np.zeros((20, 30), dtype=np.float32)
     image[:, :12], distance[:, :12] = (1, 0, 0), 1.0   # 왼쪽: 가까운 빨간 물체
@@ -157,7 +157,7 @@ def test_gap_behind_an_object_is_filled_with_the_background_not_the_object():
 
 
 def test_generated_colors_are_matched_to_the_original_near_the_border():
-    from models.camera_angle.fill_empty_area import match_colors_to_original
+    from backend.generative_ai.camera_angle_presets.fill_empty_area import match_colors_to_original
     original, generated = np.full((40, 60, 3), .8), np.full((40, 60, 3), .6)  # 생성 모델이 조금 어둡게 그림
     known = np.zeros((40, 60))
     known[:, :30] = 1  # 왼쪽 절반이 원본
@@ -188,8 +188,8 @@ class EchoModel:
 
 def test_far_wider_views_are_filled_in_stages():
     """원본이 아주 작게 남는 화각은 여러 번 나눠 채우고, 매 단계 원본이 정해진 비율 이상 남습니다."""
-    from models.camera_angle.change_camera_angle import widen_photo
-    from models.camera_angle.settings import load_settings
+    from backend.generative_ai.camera_angle_presets.change_camera_angle import widen_photo
+    from backend.generative_ai.camera_angle_presets.settings import load_settings
     min_share = load_settings()["rotate"]["min_original_share"]
     seen_shares = []
 

@@ -1,8 +1,8 @@
 """명령줄 실행.
 
-    python -m models.camera_angle --list-presets
-    python -m models.camera_angle --input 사진.jpg --preset dutch_angle --preset low_angle
-    python -m models.camera_angle --input 사진.jpg --preset all --scene "a fishing boat on a calm sea"
+    python -m backend.generative_ai.camera_angle_presets --list-presets
+    python -m backend.generative_ai.camera_angle_presets --input 사진.jpg --preset dutch_angle --preset low_angle
+    python -m backend.generative_ai.camera_angle_presets --input 사진.jpg --preset all --scene "a fishing boat on a calm sea"
 """
 
 import argparse
@@ -16,7 +16,7 @@ from .settings import PROJECT_ROOT, load_angle_presets, project_path
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="python -m models.camera_angle", description="사진의 카메라 앵글을 프리셋대로 바꿉니다")
+    parser = argparse.ArgumentParser(prog="python -m backend.generative_ai.camera_angle_presets", description="사진의 카메라 앵글을 프리셋대로 바꿉니다")
     parser.add_argument("--input", type=Path, help="입력 사진 경로")
     parser.add_argument("--preset", action="append", default=[], help="프리셋 이름 (여러 번 지정 가능, all이면 전부)")
     parser.add_argument("--list-presets", action="store_true", help="사용할 수 있는 프리셋을 보여 줍니다")

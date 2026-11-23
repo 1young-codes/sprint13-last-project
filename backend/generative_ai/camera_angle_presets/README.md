@@ -20,8 +20,8 @@ ComfyUI 없이 파이썬만으로 돌아가며, ComfyUI-Panorama-Stickers의 방
 
 ```bash
 source /data/venv/bin/activate
-pip install -r models/camera_angle/requirements.txt
-python -m models.camera_angle.download_models
+pip install -r backend/generative_ai/camera_angle_presets/requirements.txt
+python -m backend.generative_ai.camera_angle_presets.download_models
 ```
 
 모델 약 16GB는 `HF_HOME` 캐시에 저장되어 팀원과 같이 씁니다. 이미 받아 둔 모델은 다시 받지 않습니다. 결과와 추론 코드 위치는 `.env`의 `CAMERA_ANGLE_OUTPUT_DIR`, `CAMERA_ANGLE_CODE_DIR`로 바꿉니다. 가상 머신에서는 결과를 공용 폴더 `/data/outputs` 아래에 둡니다.
@@ -29,9 +29,9 @@ python -m models.camera_angle.download_models
 ## 실행
 
 ```bash
-python -m models.camera_angle --list-presets
-python -m models.camera_angle --input 사진.jpg --preset dutch_angle --preset low_angle
-python -m models.camera_angle --input 사진.jpg --preset all --scene "a fishing boat on a calm sea"
+python -m backend.generative_ai.camera_angle_presets --list-presets
+python -m backend.generative_ai.camera_angle_presets --input 사진.jpg --preset dutch_angle --preset low_angle
+python -m backend.generative_ai.camera_angle_presets --input 사진.jpg --preset all --scene "a fishing boat on a calm sea"
 ```
 
 결과는 `outputs/camera_angle/<사진 이름>/`에 저장됩니다.
@@ -64,25 +64,18 @@ python -m models.camera_angle --input 사진.jpg --preset all --scene "a fishing
 | `estimate_depth.py` | 깊이와 원본 화각 추정 |
 | `move_camera_in_3d.py` | 카메라를 피사체 중심으로 돌려 새 시점 그리기 |
 | `complete_new_viewpoint.py` | 새 시점의 빈 곳을 원본을 참고해 채우기 |
-| `qwen_image_model.py` | 이미지 생성 모델 불러오기와 실행 |
-| `speed_up_generation.py` | MagCache로 변화가 작은 생성 단계 건너뛰기 |
-| `calibrate_mag_cache.py` | MagCache가 쓰는 단계별 크기 비율 재기 |
-| `int8_linear_layers.py` | 정수 8비트 가중치 층 |
-| `download_models.py` | 모델 내려받기 |
+| `calibrate_mag_cache.py` | 이 기능의 사진으로 MagCache 단계별 크기 비율 재기 |
+| `download_models.py` | 모델 내려받기 (공용 Qwen-Image 모델 포함) |
+| `tests/` | 그래픽 카드 없이 돌리는 계산 검증 |
+
+이미지 생성 모델 불러오기와 캐싱은 공용 폴더 `../fast_image_generation/`에 있습니다.
 
 ## 생성 속도
 
-`settings.toml`의 `[speed]`에서 두 가지 최적화를 켜고 끕니다.
-
-| 설정 | 하는 일 | 결과 |
-| --- | --- | --- |
-| `reuse_condition_cache` | 글자와 참고 이미지 부분을 첫 단계에서 계산해 두고 재사용 | 같음 |
-| `mag_cache` | 변화가 작은 단계는 계산을 건너뛰고 앞 단계의 변화량을 재사용 | 아주 조금 달라짐 |
-
-MagCache는 모델과 LoRA마다 잰 단계별 크기 비율(`mag_cache_ratios.json`)을 씁니다. 모델, LoRA, 단계 수를 바꾸면 성격이 다른 사진 여러 장으로 다시 잽니다.
+공용 폴더 `../fast_image_generation/`의 캐싱(조건 캐시, MagCache)을 씁니다. 켜고 끄는 설정과 원리는 그 폴더 설명서에 있습니다. 이 기능의 MagCache 비율은 `mag_cache_ratios.json`에 있고, 모델이나 LoRA, 단계 수를 바꾸면 성격이 다른 사진 여러 장으로 다시 잽니다.
 
 ```bash
-python -m models.camera_angle.calibrate_mag_cache --input 사진1.jpg --input 사진2.jpg --preset all
+python -m backend.generative_ai.camera_angle_presets.calibrate_mag_cache --input 사진1.jpg --input 사진2.jpg --preset all
 ```
 
 ## 검증
@@ -90,7 +83,7 @@ python -m models.camera_angle.calibrate_mag_cache --input 사진1.jpg --input �
 그래픽 카드 없이 계산만 확인합니다.
 
 ```bash
-python -m pytest tests/test_camera_angle.py
+python -m pytest backend/generative_ai/camera_angle_presets
 ```
 
 ## 출처
