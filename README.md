@@ -38,9 +38,9 @@
 sprint13-last-project/
 ├── frontend/            # 화면
 ├── backend/             # API 서버
-├── models/              # 프롬프트, 생성 파이프라인, 학습 코드
+│   └── generative_ai/   # 생성형 AI 기능. 기능마다 폴더 하나, 그 안 tests/에 검증 코드
 ├── experiments/         # 노트북과 실험 기록
-├── tests/               # 동작 확인 코드
+├── tests/               # 여러 기능에 걸친 동작 확인 코드
 ├── docs/                # 보고서, 다이어그램, PR 전후 이미지
 ├── docker-compose.yml
 ├── requirements.txt
