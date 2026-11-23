@@ -42,16 +42,11 @@ def main():
                                             args.skip_generation)
     folder = project_path("output_dir") / args.input.stem
     folder.mkdir(parents=True, exist_ok=True)
-    saved_steps = set()
     for result in results:
         result.image.save(folder / f"{result.preset.name}.png")
         if args.save_steps:
             for step, image in result.steps.items():
-                # 360도 배경처럼 여러 프리셋이 같이 쓰는 이미지는 한 번만 저장합니다
-                name = step if step.startswith("view_360") else f"{result.preset.name}_{step}"
-                if name not in saved_steps:
-                    image.save(folder / f"{name}.png")
-                    saved_steps.add(name)
+                image.save(folder / f"{result.preset.name}_{step}.png")
     (folder / "run_info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
     shown = folder.relative_to(PROJECT_ROOT) if folder.is_relative_to(PROJECT_ROOT) else folder
     print(f"{len(results)}장을 저장했습니다: {shown}")

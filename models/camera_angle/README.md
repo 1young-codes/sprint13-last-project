@@ -7,10 +7,10 @@ ComfyUI 없이 파이썬만으로 돌아가며, ComfyUI-Panorama-Stickers의 방
 
 | 방식 | 하는 일 | 프리셋 |
 | --- | --- | --- |
-| 회전 (`rotate`) | 사진을 360도 배경 정면에 붙이고 빈 곳을 생성한 뒤, 원하는 방향과 렌즈로 다시 찍습니다. 원본이 보이는 곳은 원본 픽셀로 덮습니다. | `wide_angle`, `ultra_wide`, `telephoto`, `dutch_angle`, `tilt_up`, `tilt_down`, `pan_left`, `pan_right`, `reverse`, `fisheye` |
+| 회전 (`rotate`) | 원본 사진을 원하는 방향과 렌즈로 다시 찍고, 원본 밖으로 드러난 빈 곳만 생성합니다. 원본이 보이는 곳은 원본 픽셀 그대로입니다. | `wide_angle`, `ultra_wide`, `telephoto`, `dutch_angle`, `tilt_up`, `tilt_down`, `pan_left`, `pan_right`, `fisheye` |
 | 3D 이동 (`orbit`) | 깊이를 추정해 카메라를 피사체 중심으로 돌린 뒤, 드러난 빈 곳을 원본을 참고해 채웁니다. | `low_angle`, `high_angle`, `three_quarter_left`, `three_quarter_right` |
 
-회전 방식은 카메라가 제자리에서 돌기만 하므로 피사체의 옆모습은 나오지 않습니다. 옆모습이나 올려다본 모습이 필요하면 3D 이동 프리셋을 씁니다.
+회전 방식은 카메라가 제자리에서 돌기만 하므로 피사체의 옆모습은 나오지 않고, 원본과 겹치지 않는 방향(뒤돌아보기)도 만들지 않습니다. 옆모습이나 올려다본 모습이 필요하면 3D 이동 프리셋을 씁니다.
 
 ## 가상 머신 준비
 
@@ -22,7 +22,7 @@ pip install -r models/camera_angle/requirements.txt
 python -m models.camera_angle.download_models
 ```
 
-모델 약 17GB는 `HF_HOME` 캐시에 저장되어 팀원과 같이 씁니다. 이미 받아 둔 모델은 다시 받지 않습니다. 결과와 추론 코드 위치는 `.env`의 `CAMERA_ANGLE_OUTPUT_DIR`, `CAMERA_ANGLE_CACHE_DIR`, `CAMERA_ANGLE_CODE_DIR`로 바꿉니다. 가상 머신에서는 결과를 공용 폴더 `/data/outputs` 아래에 둡니다.
+모델 약 16GB는 `HF_HOME` 캐시에 저장되어 팀원과 같이 씁니다. 이미 받아 둔 모델은 다시 받지 않습니다. 결과와 추론 코드 위치는 `.env`의 `CAMERA_ANGLE_OUTPUT_DIR`, `CAMERA_ANGLE_CODE_DIR`로 바꿉니다. 가상 머신에서는 결과를 공용 폴더 `/data/outputs` 아래에 둡니다.
 
 ## 실행
 
@@ -39,7 +39,7 @@ python -m models.camera_angle --input 사진.jpg --preset all --scene "a fishing
 | `--scene` | 빈 곳을 채울 때 쓸 장면 설명 (영어 권장) |
 | `--photo-fov` | 원본 사진의 가로 화각. 주면 깊이 추정을 건너뜁니다 |
 | `--skip-generation` | 생성 모델 없이 계산만 확인합니다. 그래픽 카드 없이 회전 프리셋을 볼 때 씁니다 |
-| `--save-steps` | 360도 배경, 구멍 마스크 같은 중간 이미지도 저장합니다 |
+| `--save-steps` | 채우기 전 이미지, 빈 곳 마스크 같은 중간 이미지도 저장합니다 |
 
 ## 설정 파일
 
@@ -57,11 +57,8 @@ python -m models.camera_angle --input 사진.jpg --preset all --scene "a fishing
 | --- | --- |
 | `change_camera_angle.py` | 전체 순서 지휘 |
 | `camera_math.py` | 카메라 방향과 픽셀 좌표 계산 |
-| `place_photo_in_360_view.py` | 사진을 360도 배경에 붙이고 빈 곳 마스크 만들기 |
-| `fill_empty_area.py` | 360도 배경의 빈 곳 채우기 |
-| `repair_360_seam.py` | 360도 배경의 왼쪽·오른쪽 끝 이음매 고치기 |
-| `rotate_camera.py` | 360도 배경에서 다시 찍기 |
-| `keep_original_detail.py` | 원본이 보이는 곳을 원본 픽셀로 덮기 |
+| `rotate_camera.py` | 원본을 새 방향과 렌즈로 다시 찍고 빈 곳 마스크 만들기 |
+| `fill_empty_area.py` | 다시 찍은 사진의 빈 곳 채우기 |
 | `estimate_depth.py` | 깊이와 원본 화각 추정 |
 | `move_camera_in_3d.py` | 카메라를 피사체 중심으로 돌려 새 시점 그리기 |
 | `complete_new_viewpoint.py` | 새 시점의 빈 곳을 원본을 참고해 채우기 |

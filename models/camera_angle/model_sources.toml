@@ -29,13 +29,6 @@ files = ["model_index.json", "LICENSE", "transformer/config.json", "text_encoder
          "processor/tokenizer.json", "processor/tokenizer_config.json", "processor/video_preprocessor_config.json",
          "processor/vocab.json"]
 
-# 360도 배경의 빈 곳을 채우는 LoRA
-[models.fill_360_lora]
-repo = "nomadoor/qwen-image-2.1-360-panorama-outpaint-lora"
-revision = "e559d4437d9d4a997f21a98713d501c8743cce1d"
-files = ["qwen_image_2_1_360_panorama_outpaint_lora_v0_1.safetensors"]
-sha256 = "340453ec90c87d241f73979adc1be149e591867d45d92df250ddeb8446393dd6"
-
 # 카메라를 옮긴 시점을 원본 참고 사진과 함께 완성하는 LoRA
 [models.new_viewpoint_lora]
 repo = "lilylilith/QI_2.1_AnyAngle"

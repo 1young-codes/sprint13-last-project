@@ -5,7 +5,6 @@
 [paths]
 code_dir = "data/vendor"                  # CAMERA_ANGLE_CODE_DIR: 깊이 모델(MoGe) 추론 코드
 output_dir = "outputs/camera_angle"       # CAMERA_ANGLE_OUTPUT_DIR
-cache_dir = "data/camera_angle_cache"     # CAMERA_ANGLE_CACHE_DIR
 
 [photo]
 # 원본 사진의 가로 화각(도). 0이면 깊이 모델로 추정합니다.
@@ -13,17 +12,11 @@ fov_deg = 0
 output_long_side = 1024                   # 결과 이미지의 긴 변 픽셀
 max_fov_deg = 150                         # 일반 렌즈 프리셋이 넘지 않을 화각
 
-[view_360]
-# 회전 프리셋용 360도 배경
-width = 2048                              # 높이는 width / 2
-empty_color = "#00ff00"                   # 빈 곳 표시색 (360도 확장 LoRA가 이 색을 채울 곳으로 학습함)
-fill_prompt = "Fill the green areas to complete a seamless 360° equirectangular panorama. {scene} Match both edges."
-fill_lora_strength = 0.8
-keep_original_feather_px = 6              # 원본 픽셀을 덮을 때 경계를 부드럽게 섞는 폭
-# 360도 배경의 왼쪽 끝과 오른쪽 끝이 만나는 이음매 보정 (반 바퀴 돌려 가운데 띠만 다시 그림)
-seam_band_px = 512                        # 다시 그릴 띠의 폭 (좁으면 좌우 밝기 차이가 이어지지 않음)
-seam_blur_px = 192                        # 띠 경계를 부드럽게 섞는 폭
-seam_prompt = "Repair the vertical seam in the center of this 360° equirectangular panorama so the left and right sides continue seamlessly. Keep everything else unchanged."
+[rotate]
+# 회전 프리셋: 원본 사진을 새 방향으로 다시 찍은 뒤, 원본이 찍지 않은 빈 곳만 생성합니다
+empty_color = "#00ff00"                   # 빈 곳 표시색 (생성 모델에 채울 곳을 알려 줌)
+fill_prompt = "Fill the green areas so the photo continues naturally beyond its original edges. Keep everything else unchanged. {scene}"
+feather_px = 6                            # 원본과 생성 영역의 경계를 부드럽게 섞는 폭
 
 [orbit]
 # 3D 이동 프리셋용 설정

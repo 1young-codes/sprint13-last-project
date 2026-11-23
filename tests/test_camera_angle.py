@@ -10,9 +10,7 @@ from PIL import Image, ImageDraw
 
 from models.camera_angle.camera_math import CameraView, rotation_matrix_from_angles
 from models.camera_angle.change_camera_angle import change_camera_angle, output_camera
-from models.camera_angle.keep_original_detail import paste_original_where_visible
 from models.camera_angle.move_camera_in_3d import orbit_camera_pose, render_from_moved_camera
-from models.camera_angle.place_photo_in_360_view import place_photo_in_360_view
 from models.camera_angle.rotate_camera import render_rotated_view
 from models.camera_angle.settings import load_angle_presets
 
@@ -36,8 +34,7 @@ def red_dot_center(image: Image.Image) -> tuple[float, float]:
 
 
 def view_of(photo, **angles) -> Image.Image:
-    view, _ = place_photo_in_360_view(photo, FOV, 2048, "#00ff00")
-    return render_rotated_view(view, CameraView(photo.width, photo.height, FOV, **angles))
+    return render_rotated_view(photo, FOV, CameraView(photo.width, photo.height, FOV, **angles), "#00ff00")[0]
 
 
 def test_all_presets_load_and_make_valid_cameras():
@@ -60,12 +57,19 @@ def test_same_camera_returns_the_original():
     assert difference < 4, difference
 
 
-def test_original_paste_restores_full_detail():
+def test_empty_mask_marks_only_what_the_original_did_not_see():
     photo = make_test_photo()
-    camera = CameraView(photo.width, photo.height, FOV)
-    blurred = Image.new("RGB", photo.size, (0, 0, 0))
-    pasted = paste_original_where_visible(blurred, photo, FOV, camera, feather_px=0)
-    assert np.abs(np.asarray(pasted, dtype=float) - np.asarray(photo, dtype=float)).max() <= 2
+    _, same = render_rotated_view(photo, FOV, CameraView(photo.width, photo.height, FOV), "#00ff00")
+    _, wider = render_rotated_view(photo, FOV, CameraView(photo.width, photo.height, 90), "#00ff00")
+    wider = np.asarray(wider)
+    assert np.asarray(same)[2:-2, 2:-2].max() == 0
+    assert wider[:, :10].min() == 255 and wider[60:100, 100:140].max() == 0  # 가장자리만 비고 가운데는 원본
+
+
+def test_fisheye_outside_the_lens_circle_is_black_not_empty():
+    photo = make_test_photo()
+    image, empty = render_rotated_view(photo, FOV, CameraView(200, 200, 300, lens_curve=0), "#00ff00")  # 모서리는 렌즈 원 밖
+    assert np.asarray(empty)[0, 0] == 0 and np.asarray(image)[0, 0].max() == 0
 
 
 def test_yaw_right_moves_subject_left_and_pitch_up_moves_it_down():
@@ -136,9 +140,3 @@ def test_depth_edge_points_are_removed_but_flat_surfaces_stay():
     points[:, photo.width // 2:] *= 2  # 오른쪽 절반을 두 배 멀리: 가운데에 깊이 경계
     kept = remove_depth_edge_points(points, valid, 0.04)
     assert not kept[:, photo.width // 2 - 1:photo.width // 2 + 1].any() and kept[:, :photo.width // 2 - 2].all()
-
-
-def test_seam_band_mask_covers_only_the_center():
-    from models.camera_angle.repair_360_seam import center_band_mask
-    mask = np.asarray(center_band_mask(2048, 1024, 96, 0))
-    assert mask[:, 1024 - 48:1024 + 48].min() == 255 and mask[:, :1024 - 48].max() == 0 and mask[:, 1024 + 48:].max() == 0
