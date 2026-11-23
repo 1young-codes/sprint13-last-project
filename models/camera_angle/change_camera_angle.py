@@ -56,13 +56,15 @@ def widen_photo(photo: Image.Image, photo_fov_deg: float, target: CameraView, sc
     stages = []
     while True:
         _, empty = render_rotated_view(photo, photo_fov_deg, target, rotate["empty_color"])
-        # 목표 화각까지 같은 비율로 나눠 넓힙니다. 한 단계를 꽉 채워 넓히면 마지막에 얇은 띠만 남는데,
-        # 생성 모델은 얇은 띠를 지저분한 무늬로 채웁니다.
-        ratio = min(target.fov_deg, settings["photo"]["max_fov_deg"]) / photo_fov_deg
-        scale = rotate["widen_step_scale"]
+        # 목표까지 같은 면적 비율로 나눠 넓힙니다. 화면 폭은 tan(화각/2)에 비례하므로, 한 단계에 폭을
+        # 1/sqrt(min_original_share)배까지만 넓히면 매 단계 원본이 그만큼 남습니다. 한 단계를 꽉 채우면
+        # 마지막에 얇은 띠만 남아 지저분한 무늬로 채워지므로, 단계 수를 정한 뒤 고르게 나눕니다.
+        half = math.radians(photo_fov_deg) / 2
+        ratio = math.tan(math.radians(min(target.fov_deg, settings["photo"]["max_fov_deg"])) / 2) / math.tan(half)
+        step = 1 / math.sqrt(rotate["min_original_share"])
         if ratio > 1.001:
-            scale = ratio ** (1 / math.ceil(math.log(ratio) / math.log(scale)))
-        wider = min(photo_fov_deg * scale, settings["photo"]["max_fov_deg"])
+            step = ratio ** (1 / math.ceil(math.log(ratio) / math.log(step)))
+        wider = min(math.degrees(2 * math.atan(math.tan(half) * step)), settings["photo"]["max_fov_deg"])
         if seen_share(empty) >= rotate["min_original_share"] or wider <= photo_fov_deg + 1e-3:
             return photo, photo_fov_deg, stages
         width, height = output_size(photo, None, long_side)

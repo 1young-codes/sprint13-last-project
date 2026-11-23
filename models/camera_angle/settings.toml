@@ -19,10 +19,9 @@ empty_color = "#00ff00"                   # 빈 곳 표시색 (생성 모델에 
 fill_prompt = "Fill the green areas so the photo continues naturally beyond its original edges. Keep everything else unchanged. {scene}"
 color_match_ratio = 0.08                  # 생성 부분 색을 원본에 맞출 때 쓰는 범위 (결과 가로 대비)
 feather_px = 6                            # 원본과 생성 영역의 경계를 부드럽게 섞는 폭
-# 원본이 결과 화면의 이 비율보다 작으면 한 번에 채우지 않고, 정면 화각을 widen_step_scale배씩 넓혀 가며 나눠 채웁니다.
-# (빈 곳이 너무 크면 생성 모델이 초록을 크로마키로 보고 투명 배경으로 그려 버립니다)
+# 원본이 결과 화면의 이 비율보다 작으면 한 번에 채우지 않고, 정면 화각을 넓혀 가며 나눠 채웁니다.
+# 나눈 단계마다 원본이 이 비율 이상 남습니다. (빈 곳이 너무 크면 생성 모델이 투명 배경으로 그려 버립니다)
 min_original_share = 0.25
-widen_step_scale = 1.5
 
 [orbit]
 # 3D 이동 프리셋용 설정

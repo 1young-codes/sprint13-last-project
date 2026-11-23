@@ -187,13 +187,22 @@ class EchoModel:
 
 
 def test_far_wider_views_are_filled_in_stages():
+    """원본이 아주 작게 남는 화각은 여러 번 나눠 채우고, 매 단계 원본이 정해진 비율 이상 남습니다."""
     from models.camera_angle.change_camera_angle import widen_photo
     from models.camera_angle.settings import load_settings
-    settings = load_settings()["rotate"]
+    min_share = load_settings()["rotate"]["min_original_share"]
+    seen_shares = []
+
+    class RecordingModel(EchoModel):
+        def edit(self, image, prompt, seed, steps):
+            a = np.asarray(image.convert("RGB")).copy()
+            green = (a[..., 1] > 200) & (a[..., 0] < 60) & (a[..., 2] < 60)
+            seen_shares.append(1 - green.mean())
+            a[green] = 128  # 빈 곳을 회색으로 채운 척
+            return Image.fromarray(a)
+
     photo = make_test_photo()
-    target = CameraView(240, 160, 150)  # 원본 60°의 2.5배: 원본이 화면의 아주 작은 일부
-    widened, fov, stages = widen_photo(photo, FOV, target, "", 0, 1, EchoModel())
-    assert len(stages) >= 1 and FOV < fov <= 150
-    assert fov == 150  # 같은 비율로 나눠 목표 화각에 딱 맞춤 (얇은 띠가 남지 않음)
-    assert len(stages) == math.ceil(math.log(150 / FOV) / math.log(settings["widen_step_scale"]))
+    _, fov, stages = widen_photo(photo, FOV, CameraView(240, 160, 150), "", 0, 1, RecordingModel())
+    assert len(stages) >= 2 and FOV < fov <= 150
+    assert min(seen_shares) >= min_share - 0.03, seen_shares
     assert widen_photo(photo, FOV, CameraView(240, 160, 66), "", 0, 1, EchoModel())[2] == []  # 조금 넓히면 한 번에
