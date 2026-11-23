@@ -14,7 +14,7 @@ from PIL import Image
 
 from .camera_math import CameraView
 from .keep_original_detail import paste_original_where_visible
-from .move_camera_in_3d import render_from_moved_camera
+from .move_camera_in_3d import remove_depth_edge_points, render_from_moved_camera
 from .place_photo_in_360_view import place_photo_in_360_view
 from .rotate_camera import render_rotated_view
 from .settings import AnglePreset, load_angle_presets, load_settings, project_path
@@ -60,7 +60,9 @@ def build_360_view(photo: Image.Image, photo_fov_deg: float, scene_description: 
     if cached.is_file():
         return Image.open(cached).convert("RGB"), empty_mask
     from .fill_empty_area import fill_empty_area_of_360_view
+    from .repair_360_seam import repair_left_right_seam
     filled = fill_empty_area_of_360_view(get_model(), placed, empty_mask, scene_description, seed, steps)
+    filled = repair_left_right_seam(get_model(), filled, seed, steps)
     cached.parent.mkdir(parents=True, exist_ok=True)
     filled.save(cached)
     return filled, empty_mask
@@ -104,11 +106,14 @@ def change_camera_angle(photo: Image.Image, preset_names: list[str], scene_descr
                                                  settings["view_360"]["keep_original_feather_px"])
             results.append(AngleResult(preset, image, {"view_360": view_360, "view_360_empty_mask": empty_mask,
                                                        "before_original_paste": rendered}))
-    for preset in (p for p in presets if p.method == "orbit"):
-        orbit = settings["orbit"]
-        moved, hole_mask = render_from_moved_camera(photo, depth.points, depth.valid, depth.fov_deg,
+    orbit = settings["orbit"]
+    orbit_presets = [p for p in presets if p.method == "orbit"]
+    if orbit_presets:
+        solid_points = remove_depth_edge_points(depth.points, depth.valid, orbit["depth_edge_tolerance"])
+    for preset in orbit_presets:
+        moved, hole_mask = render_from_moved_camera(photo, depth.points, solid_points, depth.fov_deg,
                                                     preset.orbit_yaw_deg, preset.orbit_pitch_deg,
-                                                    orbit["subject_crop"], orbit["hole_color"])
+                                                    orbit["subject_crop"], orbit["hole_color"], orbit["point_size_px"])
         size = output_size(photo, None, settings["photo"]["output_long_side"])
         moved = moved.resize(size, Image.Resampling.LANCZOS)
         image = moved

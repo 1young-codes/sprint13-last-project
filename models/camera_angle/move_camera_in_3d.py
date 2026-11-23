@@ -5,6 +5,7 @@
 """
 
 import math
+import warnings
 
 import numpy as np
 from PIL import Image
@@ -22,6 +23,17 @@ def find_subject_center(points: np.ndarray, valid: np.ndarray, center_crop: floa
     return np.median(points[top:h - top, left:w - left][crop], axis=0)
 
 
+def remove_depth_edge_points(points: np.ndarray, valid: np.ndarray, tolerance: float) -> np.ndarray:
+    """물체 경계에서 깊이가 앞뒤로 튀는 점(떠다니는 점)을 뺀 valid.
+    주변 3×3 픽셀의 깊이 차이가 깊이 × tolerance를 넘으면 경계로 봅니다 (ai-generation grid_surface와 같은 기준)."""
+    depth = np.where(valid, points[..., 2], np.nan)
+    windows = np.lib.stride_tricks.sliding_window_view(np.pad(depth, 1, mode="edge"), (3, 3))
+    with np.errstate(invalid="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # 전부 비어 있는 창
+        spread = np.nanmax(windows, axis=(-1, -2)) - np.nanmin(windows, axis=(-1, -2))
+    return valid & (spread <= tolerance * np.maximum(depth, 1e-6))
+
+
 def orbit_camera_pose(subject_center: np.ndarray, orbit_yaw_deg: float,
                       orbit_pitch_deg: float) -> tuple[np.ndarray, np.ndarray]:
     """(회전 행렬, 카메라 위치). 원래 카메라는 원점에서 +z를 봅니다.
@@ -33,12 +45,14 @@ def orbit_camera_pose(subject_center: np.ndarray, orbit_yaw_deg: float,
 
 def render_from_moved_camera(photo: Image.Image, points: np.ndarray, valid: np.ndarray, fov_deg: float,
                              orbit_yaw_deg: float, orbit_pitch_deg: float, center_crop: float,
-                             hole_color: str) -> tuple[Image.Image, Image.Image]:
+                             hole_color: str, point_size_px: int = 1) -> tuple[Image.Image, Image.Image]:
     """(새 시점 RGB, 구멍 마스크 L). 결과 크기는 원본과 같고, 마스크는 흰색(255)이 비어 있는 곳입니다.
 
     points: (H, W, 3) 카메라 기준 좌표, x 오른쪽, y 위, z 앞. valid: (H, W) 믿을 수 있는 점.
+    point_size_px: 점 하나가 덮는 정사각형 크기. 카메라가 움직여 표면이 늘어나면 점 사이에 그물 모양 틈이 생기는데,
+    생성 모델이 그 무늬를 물체로 착각하므로 점을 키워 틈을 메웁니다.
     """
-    # ponytail: 점 하나를 픽셀 하나에 찍는 방식. 카메라가 피사체에 다가가면 작은 틈이 생기며, 품질이 부족하면 삼각형 메시 렌더링으로 바꾼다.
+    # ponytail: 점을 정사각형으로 찍는 방식. 물체 가장자리가 point_size_px만큼 두꺼워지며, 부족하면 삼각형 메시 렌더링으로 바꾼다.
     h, w = valid.shape
     colors = np.asarray(photo.convert("RGB").resize((w, h), Image.Resampling.LANCZOS), dtype=np.float32) / 255
     rotation, position = orbit_camera_pose(find_subject_center(points, valid, center_crop),
@@ -49,11 +63,14 @@ def render_from_moved_camera(photo: Image.Image, points: np.ndarray, valid: np.n
     front = z > 1e-6
     x = (local[front, 0] / z[front] / tangent + 1) / 2 * w
     y = (-local[front, 1] / z[front] / (tangent * h / w) + 1) / 2 * h
-    column, row = np.floor(x).astype(int), np.floor(y).astype(int)
+    offsets = range(-((point_size_px - 1) // 2), point_size_px // 2 + 1)
+    column = np.concatenate([np.floor(x).astype(int) + dx for dy in offsets for dx in offsets])
+    row = np.concatenate([np.floor(y).astype(int) + dy for dy in offsets for dx in offsets])
+    copies = len(offsets) ** 2
     inside = (column >= 0) & (column < w) & (row >= 0) & (row < h)
     pixel = row[inside] * w + column[inside]
-    depth = z[front][inside]
-    source = colors[valid][front][inside]
+    depth = np.tile(z[front], copies)[inside]
+    source = np.tile(colors[valid][front], (copies, 1))[inside]
     # 한 픽셀에 여러 점이 떨어지면 가장 가까운 점을 씁니다
     order = np.lexsort((depth, pixel))
     first = np.unique(pixel[order], return_index=True)[1]

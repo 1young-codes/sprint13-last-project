@@ -126,3 +126,19 @@ def test_rotate_presets_run_end_to_end_without_models():
     assert [r.preset.name for r in results] == names and info["photo_fov_deg"] == FOV
     original = next(r.image for r in results if r.preset.name == "original")
     assert original.size[0] == 1024 and abs(original.size[0] / original.size[1] - 1.5) < .01
+
+
+def test_depth_edge_points_are_removed_but_flat_surfaces_stay():
+    from models.camera_angle.move_camera_in_3d import remove_depth_edge_points
+    photo = make_test_photo()
+    points, valid = flat_wall(photo)
+    assert remove_depth_edge_points(points, valid, 0.04).all()
+    points[:, photo.width // 2:] *= 2  # 오른쪽 절반을 두 배 멀리: 가운데에 깊이 경계
+    kept = remove_depth_edge_points(points, valid, 0.04)
+    assert not kept[:, photo.width // 2 - 1:photo.width // 2 + 1].any() and kept[:, :photo.width // 2 - 2].all()
+
+
+def test_seam_band_mask_covers_only_the_center():
+    from models.camera_angle.repair_360_seam import center_band_mask
+    mask = np.asarray(center_band_mask(2048, 1024, 96, 0))
+    assert mask[:, 1024 - 48:1024 + 48].min() == 255 and mask[:, :1024 - 48].max() == 0 and mask[:, 1024 + 48:].max() == 0
