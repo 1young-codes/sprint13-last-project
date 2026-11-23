@@ -1,0 +1,11 @@
+services:
+  gpu:
+    build: .
+    image: sprint13-gpu:latest
+    # VM의 기본 런타임이 runc라서 GPU를 명시해야 컨테이너 안에서 보인다
+    gpus: all
+    volumes:
+      - /data/models:/data/models
+      - /data/outputs:/data/outputs
+      - /data/datasets:/data/datasets:ro
+    command: python serving/vm_smoke.py
