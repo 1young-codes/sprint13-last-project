@@ -21,8 +21,8 @@ fill_prompt = "Fill the green areas to complete a seamless 360° equirectangular
 fill_lora_strength = 0.8
 keep_original_feather_px = 6              # 원본 픽셀을 덮을 때 경계를 부드럽게 섞는 폭
 # 360도 배경의 왼쪽 끝과 오른쪽 끝이 만나는 이음매 보정 (반 바퀴 돌려 가운데 띠만 다시 그림)
-seam_band_px = 96                         # 다시 그릴 띠의 폭
-seam_blur_px = 16                         # 띠 경계를 부드럽게 섞는 폭
+seam_band_px = 512                        # 다시 그릴 띠의 폭 (좁으면 좌우 밝기 차이가 이어지지 않음)
+seam_blur_px = 192                        # 띠 경계를 부드럽게 섞는 폭
 seam_prompt = "Repair the vertical seam in the center of this 360° equirectangular panorama so the left and right sides continue seamlessly. Keep everything else unchanged."
 
 [orbit]
