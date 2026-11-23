@@ -153,3 +153,12 @@ def test_gap_behind_an_object_is_filled_with_the_background_not_the_object():
     wide = distance.copy()
     wide[:, 12:] = 0  # 오른쪽 전체가 빈 넓은 곳은 메우지 않습니다
     assert (fill_gaps_behind_objects(image, wide, 4, 0.9)[1][:, 12:] == 0).all()
+
+
+def test_generated_colors_are_matched_to_the_original_near_the_border():
+    from models.camera_angle.fill_empty_area import match_colors_to_original
+    original, generated = np.full((40, 60, 3), .8), np.full((40, 60, 3), .6)  # 생성 모델이 조금 어둡게 그림
+    known = np.zeros((40, 60))
+    known[:, :30] = 1  # 왼쪽 절반이 원본
+    matched = match_colors_to_original(generated, original, known, 4)
+    assert abs(matched[20, 32, 0] - .8) < .02  # 경계 바로 바깥은 원본 밝기로 이어짐
