@@ -86,7 +86,8 @@ def whole_frame_vae_class():
         조각으로 나누면 초록색만 있는 조각은 장면 맥락을 잃습니다."""
 
         def limit_normalization_memory(self):
-            for layer in self.encoder.modules():
+            # 인코더와 디코더 모두: 2메가픽셀 한 장을 조각 없이 복원할 때 정규화 임시값이 그래픽 메모리를 넘지 않게 합니다
+            for layer in self.modules():
                 if isinstance(layer, QwenImage21RMS_norm) and layer.channel_first:
                     layer.forward = partial(normalize_in_row_bands, layer.forward)
 
