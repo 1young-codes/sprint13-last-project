@@ -13,7 +13,7 @@ Category: {label}. {hint}
 Main subject: {subject}.
 Measurements found these possible problems, each with the correction that would be applied:
 {findings}
-For each one decide: is it a real flaw a professional would correct, or part of the intended look or scene that should be kept (for example warm restaurant light is not a color cast, a dark moody background is not underexposure)? When unsure, keep.
+For each one decide: is it a real flaw a professional would correct, or part of the intended look or scene that should be kept (for example warm restaurant light is not a color cast, a blue sky or sea is not a blue cast, a dark-colored subject is not underexposure, a dark moody background is not underexposure)? When unsure, keep.
 Also decide whether the background clearly steals attention from the subject (busy or loud colors). Only then give a reason in "calm_background" and its colors will be calmed slightly; otherwise leave it an empty string.
 List small distracting objects in the background a retoucher would remove (litter, stray cables, stains). Never list the subject, people, text, logos or watermarks. Boxes are [x0, y0, x1, y1] normalized to 0-1000. Leave the list empty when unsure.
 Write every reason in Korean as one short plain sentence a shop owner understands, in past tense describing what was seen and done (for example "사진이 푸르게 치우쳐 색을 바로잡았습니다").

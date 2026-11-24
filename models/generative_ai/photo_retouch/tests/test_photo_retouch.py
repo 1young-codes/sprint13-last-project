@@ -123,3 +123,16 @@ def test_only_lost_detail_counts_as_clipping():
     gray = np.full((10, 10, 3), 0.5, np.float32)
     assert check(gray, np.ones_like(gray), None, rule)["new_clipping"] == 1
     assert check(gray, np.zeros_like(gray), None, rule)["new_clipping"] == 1
+
+
+def test_bright_background_limits_brightening_and_counts_as_clipping():
+    image = np.full((40, 40, 3), 0.97, np.float32)  # 거의 하얀 하늘
+    image[10:30, 10:30] = 0.15                       # 진한 색 상품
+    mask = np.zeros((40, 40), np.float32)
+    mask[10:30, 10:30] = 1
+    found = measure(image, SETTINGS["auto"], OPS, category_rules("product")["bounds"], mask)
+    assert found.get("exposure", {}).get("params", {}).get("exposure_ev", 0) < SETTINGS["auto"]["min_ev"] + 0.05
+    sky = np.full((40, 40, 3), 0.8, np.float32)
+    blown = sky.copy()
+    blown[:20] = 1.0
+    assert not check(sky, blown, mask, SETTINGS["fidelity"])["ok"]  # 상품 밖 하늘이 날아가도 탈락

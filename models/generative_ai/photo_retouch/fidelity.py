@@ -1,4 +1,4 @@
-"""보정 전후의 상품 영역을 비교해, 실물과 달라지지 않았는지 검사합니다.
+"""보정 전후를 비교해, 실물과 달라지지 않았는지 검사합니다. 색과 구조는 상품 영역, 날아감은 사진 전체에서 봅니다.
 
 - 색 차이: CIELAB 평균 ΔE76 (ponytail: ΔE2000이 사람 눈에 더 가깝지만 통과선 용도로는 ΔE76으로 충분)
 - 구조: 밝기의 SSIM 구조 항. 밝기와 대비가 바뀌어도 모양이 같으면 1에 가깝고, 무언가 그려지거나 지워지면 떨어집니다
@@ -41,7 +41,9 @@ def check(before: np.ndarray, after: np.ndarray, mask: np.ndarray | None, rule: 
     peak_before, peak_after = before.max(axis=-1), after.max(axis=-1)
     blown = (peak_after >= level) & (peak_before < level - margin)
     crushed = (peak_after <= 1 - level) & (peak_before > 1 - level + margin)
-    new_clipping = float((blown | crushed)[region].mean())
+    # 날아감은 기본으로 사진 전체에서 셈. 상품만 보면 하늘이 하얗게 날아가도 통과해 버림
+    clip_area = region if rule.get("clip_region") == "subject" else np.ones_like(region)
+    new_clipping = float((blown | crushed)[clip_area].mean())
 
     problems = []
     if delta_e > rule["max_mean_delta_e"]:
@@ -49,5 +51,5 @@ def check(before: np.ndarray, after: np.ndarray, mask: np.ndarray | None, rule: 
     if structure < rule["min_structure"]:
         problems.append(f"상품 모양이 달라짐 (구조 {structure:.3f} < {rule['min_structure']})")
     if new_clipping > rule["max_new_clipping"]:
-        problems.append(f"밝은 곳이나 어두운 곳이 날아감 ({new_clipping:.1%})")
+        problems.append(f"밝은 곳이나 어두운 곳이 날아감 ({new_clipping:.1%}, {'상품 영역' if clip_area is region else '사진 전체'} 기준)")
     return {"ok": not problems, "delta_e": delta_e, "structure": structure, "new_clipping": new_clipping, "problems": problems}

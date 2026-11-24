@@ -24,6 +24,10 @@ def measure(image: np.ndarray, auto: dict, ops: dict, bounds: dict, mask: np.nda
     target = float(np.clip(median, *auto["mid_gray_band"]))
     ev = float(np.log2(srgb_to_linear(np.float32(target)) / max(srgb_to_linear(np.float32(median)), 1e-4)))
     ev = float(np.clip(ev, -auto["max_auto_ev"], auto["max_auto_ev"]))
+    if ev > 0:
+        # 상품이 원래 진한 색이라 어둡게 재져도, 사진 전체(하늘·흰 벽)가 날아가지 않을 만큼만 밝힘
+        peak = float(np.percentile(srgb_to_linear(image.max(axis=-1)), auto["headroom_percentile"]))
+        ev = min(ev, max(0.0, float(np.log2(1.0 / max(peak, 1e-4)))))
     if abs(ev) >= auto["min_ev"]:
         add("exposure", {"exposure_ev": ev}, f"상품 밝기가 {'어두워' if ev > 0 else '너무 밝아'} {'밝게' if ev > 0 else '어둡게'} 맞췄습니다",
             f"subject median brightness {median:.2f}, would {'brighten' if ev > 0 else 'darken'} by {abs(ev):.2f} stops")
@@ -43,7 +47,9 @@ def measure(image: np.ndarray, auto: dict, ops: dict, bounds: dict, mask: np.nda
         if params:
             cast = ("blue" if temperature > 0 else "yellow") if "temperature" in params else ("green" if tint > 0 else "magenta")
             add("white_balance", params, f"사진 전체가 {'푸르게' if cast == 'blue' else '노랗게' if cast == 'yellow' else '초록빛으로' if cast == 'green' else '자홍빛으로'} 치우쳐 바로잡았습니다",
-                f"overall {cast} color cast, would neutralize it")
+                f"overall {cast} color cast measured on near-white/gray pixels covering {usable.mean():.0%} of the frame, "
+                f"{usable[:usable.shape[0] // 3].sum() / usable.sum():.0%} of them in the top third of the frame "
+                f"(if those are sky, water or shade, the cast is real light, not a flaw); would neutralize it")
 
     low, high = np.percentile(lum, [auto["low_percentile"], auto["high_percentile"]])
     spread = float(high - low)
