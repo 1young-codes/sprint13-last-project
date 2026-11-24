@@ -1,4 +1,4 @@
-# GPU 컨테이너용 패키지. 버전은 공용 가상환경(/data/venv)과 models/camera_angle 기준에 맞춘다.
+# GPU 컨테이너용 패키지. 버전은 공용 가상환경(/data/venv)과 models/generative_ai 기준에 맞춘다.
 # torch는 CUDA 13.0 빌드를 받는다 (VM 드라이버 580이 지원).
 --extra-index-url https://download.pytorch.org/whl/cu130
 torch==2.14.0

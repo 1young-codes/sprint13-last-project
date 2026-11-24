@@ -1,0 +1,29 @@
+# 이 기능만 쓰는 모델 목록입니다. Qwen-Image 편집 모델은 fast_image_generation/model_sources.toml에 있습니다.
+# revision은 커밋으로 고정해 파일이 바뀌지 않게 합니다.
+# 모델은 허깅페이스 캐시(HF_HOME)에 저장됩니다. sha256이 있으면 내려받은 뒤 확인합니다.
+# 출처와 해시는 ai-generation 프로젝트에서 검증된 값을 그대로 옮겼습니다.
+
+# 카메라를 옮긴 시점을 원본 참고 사진과 함께 완성하는 LoRA
+[models.new_viewpoint_lora]
+repo = "lilylilith/QI_2.1_AnyAngle"
+revision = "5c8b4c8e05ba6328d54bf8d34ec724fef5a414ae"
+files = ["QI2.1_AnyAngle.safetensors"]
+sha256 = "e4d7a0d44a45ed62daabd0f2484a1a59046618a4c47e76b1eab5e386a7a35d8a"
+
+[models.moge3]
+repo = "Comfy-Org/MoGe"
+revision = "1484985258ba7ef45c314144fcf0e90924ffbf44"
+files = ["geometry_estimation/moge_3_vitg_fp16.safetensors"]
+sha256 = "a587e42936ae7080b419df4c047b0f0b075d3492418f76ce81fb0779925a1fe6"
+
+[models.moge2]
+repo = "Comfy-Org/MoGe"
+revision = "1484985258ba7ef45c314144fcf0e90924ffbf44"
+files = ["geometry_estimation/moge_2_vitl_normal_fp16.safetensors"]
+sha256 = "cb1a692d03235671e959e81360d7b4d9f44aefadb1f852d6ca6aa17799d5e31f"
+
+# 깊이 모델 추론 코드 (마이크로소프트 MoGe 저장소의 고정 커밋)
+[code.moge]
+archive_url = "https://codeload.github.com/microsoft/MoGe/tar.gz/{revision}"
+revision = "74fbce054ebed49800de42d0ad0e83495065719a"
+folder = "moge"                           # settings.toml의 code_dir 아래
