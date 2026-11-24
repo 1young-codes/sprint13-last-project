@@ -1,5 +1,0 @@
-# run_model.py: 결과 모으기와 조각 잇기(Pillow, numpy), 자식 프로세스 찾기(psutil), 그래픽 메모리 재기(nvidia-ml-py)
-Pillow>=10
-numpy>=1.26
-psutil>=5.9
-nvidia-ml-py>=12

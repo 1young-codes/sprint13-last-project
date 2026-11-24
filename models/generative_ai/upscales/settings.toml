@@ -11,5 +11,5 @@ output_dir = "outputs/upscales"             # UPSCALE_OUTPUT_DIR: 업스케일 �
 uv = "uv"                                   # 가상환경을 만드는 도구 (PATH에서 찾음)
 
 [run]
-vram_poll_seconds = 0.05                    # 그래픽 메모리 사용량을 읽는 간격
+vram_poll_seconds = 0.2                     # 그래픽 메모리 사용량을 읽는 간격 (nvidia-smi 한 번에 0.1초 안팎)
 image_suffixes = [".png", ".jpg", ".jpeg", ".webp", ".bmp"]

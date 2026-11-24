@@ -25,15 +25,18 @@ def test_every_model_has_complete_spec():
         assert set(spec["run"]["scales"]) >= {2, 4}
 
 
-def test_runner_env_is_not_a_model():
-    assert "run" not in load_spec("runner") and load_spec("runner")["environment"]["python"] >= "3.11"
-    assert (PACKAGE_DIR / "runner" / "requirements.txt").is_file()
-
-
 def test_build_command_fills_placeholders(tmp_path):
     spec = {"run": {"command": ["x.py", "-i", "{input_dir}", "-o", "{output_dir}", "--upscale", "{scale}"]}}
     command = build_command("m", spec, tmp_path, tmp_path / "out", 4)
     assert command[1:] == ["x.py", "-i", str(tmp_path.resolve()), "-o", str((tmp_path / "out").resolve()), "--upscale", "4"]
+
+
+def test_gpu_memory_reads_nvidia_smi(monkeypatch):
+    from models.generative_ai.upscales import run_model
+
+    fake = type("R", (), {"stdout": "123, 4096\n456, [N/A]\n"})()
+    monkeypatch.setattr(run_model.subprocess, "run", lambda *a, **k: fake)
+    assert run_model.gpu_memory_by_pid() == {123: 4096.0}
 
 
 def test_collect_outputs_matches_names_and_fixes_size(tmp_path):

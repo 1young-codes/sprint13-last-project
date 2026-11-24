@@ -31,13 +31,18 @@ def build_command(name: str, spec: dict, input_dir: Path, output_dir: Path, scal
     return [str(venv_python(name)), *(part.format(**values) for part in spec["run"]["command"])]
 
 
+def gpu_memory_by_pid() -> dict[int, float]:
+    """nvidia-smi로 읽은 프로세스별 그래픽 메모리(MB). 따로 패키지를 깔지 않으려고 명령으로 읽습니다."""
+    out = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"],
+                         capture_output=True, text=True).stdout
+    rows = (line.split(",") for line in out.splitlines() if line.strip())
+    return {int(pid): float(mb) for pid, mb in rows if mb.strip().isdigit()}
+
+
 def watch(command: list[str], cwd: Path, env: dict, log_path: Path) -> tuple[float, float, int]:
     """명령을 실행하며 그 프로세스와 자식 프로세스의 그래픽 메모리 합의 최대값(MB)을 잽니다."""
-    import psutil
-    import pynvml
+    import psutil  # 프로젝트 GPU 환경에 accelerate와 함께 들어 있음
 
-    pynvml.nvmlInit()
-    handle = pynvml.nvmlDeviceGetHandleByIndex(0)
     interval = load_settings()["run"]["vram_poll_seconds"]
     peak = 0.0
     start = time.perf_counter()
@@ -49,12 +54,9 @@ def watch(command: list[str], cwd: Path, env: dict, log_path: Path) -> tuple[flo
                 pids = {process.pid, *(child.pid for child in parent.children(recursive=True))}
             except psutil.NoSuchProcess:
                 pids = {process.pid}
-            used = sum(p.usedGpuMemory or 0 for p in pynvml.nvmlDeviceGetComputeRunningProcesses(handle) if p.pid in pids)
-            peak = max(peak, used / 2**20)
+            peak = max(peak, sum(mb for pid, mb in gpu_memory_by_pid().items() if pid in pids))
             time.sleep(interval)
-    seconds = time.perf_counter() - start
-    pynvml.nvmlShutdown()
-    return seconds, peak, process.returncode
+    return time.perf_counter() - start, peak, process.returncode
 
 
 def find_output(raw_dir: Path, stem: str) -> Path | None:
