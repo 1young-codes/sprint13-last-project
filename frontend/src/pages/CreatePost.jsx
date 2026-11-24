@@ -9,12 +9,23 @@ import { createPostJob, getPostJob } from '../api/postApi.js'
 const STORE_NAME = '[가게 이름]'
 const POLL_MS = 500
 
+// 문구 생성 함수(유진님, generate_product_captions)가 받는 값과 같은 칸
+const EMPTY_FORM = { productName: '', unit: '', price: '', usageExample: '', notes: '' }
+
+// 가격은 0보다 큰 정수만 받는다. 쉼표나 '원'을 붙여 써도 숫자만 읽는다.
+function parsePrice(text) {
+  const digits = text.replace(/[,\s원]/g, '')
+  if (!/^\d+$/.test(digits)) return null
+  const value = Number(digits)
+  return value > 0 ? value : null
+}
+
 // 게시글 만들기 (매번): ① 입력 → ② 결과 → ③ 게시
 export default function CreatePost() {
   const [step, setStep] = useState(0)
   const [photo, setPhoto] = useState(null)
   const [photoUrl, setPhotoUrl] = useState('')
-  const [description, setDescription] = useState('')
+  const [form, setForm] = useState(EMPTY_FORM) // 품목, 단위, 가격, 활용 예시, 기타
   const [angles, setAngles] = useState([]) // 고른 카메라 각도 id 목록 (비면 원본 그대로)
   const [job, setJob] = useState(null) // { jobId, status, product_photo, usage_example, message }
 
@@ -35,17 +46,38 @@ export default function CreatePost() {
     return () => clearTimeout(timer)
   }, [job])
 
-  const canStart = Boolean(photo) && description.trim().length > 0
+  function setField(name, value) {
+    setForm((prev) => ({ ...prev, [name]: value }))
+  }
+
+  const price = parsePrice(form.price)
+  const priceError = form.price.trim() !== '' && price === null
+  const missing = [
+    !photo && '제품 사진',
+    !form.productName.trim() && '품목',
+    !form.unit.trim() && '단위',
+    price === null && '가격',
+    !form.usageExample.trim() && '활용 예시',
+  ].filter(Boolean)
+  const canStart = missing.length === 0
 
   async function start() {
-    const { jobId } = await createPostJob({ photoUrl, description: description.trim(), angles })
+    const { jobId } = await createPostJob({
+      photoUrl,
+      productName: form.productName.trim(),
+      unit: form.unit.trim(),
+      priceKrw: price,
+      usageExample: form.usageExample.trim(),
+      notes: form.notes.trim(),
+      angles,
+    })
     setJob({ jobId, status: 'queued' })
     setStep(1)
   }
 
   function restart() {
     changePhoto(null)
-    setDescription('')
+    setForm(EMPTY_FORM)
     setAngles([])
     setJob(null)
     setStep(0)
@@ -58,26 +90,72 @@ export default function CreatePost() {
       {step === 0 && (
         <>
           <h1>오늘 올릴 제품을 알려주세요</h1>
-          <p className="lead">사진 한 장과 설명을 넣으면 게시글 2개를 만듭니다. 하나는 제품 소개, 하나는 활용 예시입니다.</p>
+          <p className="lead">사진 한 장과 상품 정보를 넣으면 게시글 2개를 만듭니다. 하나는 제품 소개, 하나는 활용 예시입니다.</p>
           <div className="card form">
             <label className="field-label">제품 사진</label>
             <PhotoDrop previewUrl={photoUrl} onChange={changePhoto} />
 
-            <label className="field-label" htmlFor="description">제품 설명</label>
+            <div className="fields">
+              <div className="field">
+                <label className="field-label" htmlFor="productName">품목</label>
+                <input
+                  id="productName"
+                  type="text"
+                  placeholder="예: 자연산 도미"
+                  value={form.productName}
+                  onChange={(event) => setField('productName', event.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label className="field-label" htmlFor="unit">단위</label>
+                <input
+                  id="unit"
+                  type="text"
+                  placeholder="예: 1마리, kg, 500g"
+                  value={form.unit}
+                  onChange={(event) => setField('unit', event.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label className="field-label" htmlFor="price">가격 (원)</label>
+                <input
+                  id="price"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="예: 25000"
+                  value={form.price}
+                  aria-invalid={priceError}
+                  onChange={(event) => setField('price', event.target.value)}
+                />
+                {priceError && <p className="error">숫자로만 적어주세요. 예: 25000</p>}
+              </div>
+            </div>
+
+            <label className="field-label" htmlFor="usageExample">활용 예시</label>
             <textarea
-              id="description"
-              rows={3}
-              placeholder="예: 오늘 아침 들어온 자연산 도미, 회와 구이용"
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
+              id="usageExample"
+              rows={2}
+              placeholder="예: 회로 먹거나, 소금구이, 맑은 탕으로 끓이기"
+              value={form.usageExample}
+              onChange={(event) => setField('usageExample', event.target.value)}
             />
-            <p className="hint">제품 이름과 알리고 싶은 점을 한두 줄로 적어주세요.</p>
+            <p className="hint">손님이 이 상품을 어떻게 먹거나 쓰면 좋은지 적어주세요. 활용 예시 게시글에 쓰입니다.</p>
+
+            <label className="field-label" htmlFor="notes">기타 <span className="optional">(선택)</span></label>
+            <textarea
+              id="notes"
+              rows={2}
+              placeholder="예: 오늘 아침 직접 받아온 것, '무첨가' 같은 표현은 빼주세요"
+              value={form.notes}
+              onChange={(event) => setField('notes', event.target.value)}
+            />
+            <p className="hint">강조하고 싶은 점이나 넣지 말았으면 하는 표현을 자유롭게 적어주세요.</p>
 
             <AnglePicker selected={angles} onChange={setAngles} />
           </div>
           <div className="footer">
             <span className="hint">
-              {canStart ? '다음을 누르면 게시글을 만들기 시작합니다. 잠시 걸릴 수 있습니다.' : '사진과 설명을 모두 넣으면 다음으로 갈 수 있습니다.'}
+              {canStart ? '다음을 누르면 게시글을 만들기 시작합니다. 잠시 걸릴 수 있습니다.' : `${missing.join(', ')}을(를) 넣으면 다음으로 갈 수 있습니다.`}
             </span>
             <button type="button" className="primary" disabled={!canStart} onClick={start}>
               다음

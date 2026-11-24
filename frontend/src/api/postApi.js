@@ -11,10 +11,12 @@ const SAMPLE_DELAY_MS = 1500
 
 const jobs = new Map()
 
-// angles: 고른 카메라 각도 id 목록. 비어 있으면 원본 각도 그대로 만든다.
-export async function createPostJob({ photoUrl, description, angles = [] }) {
+// 보내는 값 (문구 생성 함수 generate_product_captions의 입력과 같다)
+//   productName: 품목, unit: 단위, priceKrw: 가격(0보다 큰 정수), usageExample: 활용 예시, notes: 기타(선택)
+//   angles: 고른 카메라 각도 id 목록. 비어 있으면 원본 각도 그대로 만든다.
+export async function createPostJob({ photoUrl, productName, unit, priceKrw, usageExample, notes = '', angles = [] }) {
   const jobId = `sample-${Date.now()}`
-  jobs.set(jobId, { startedAt: Date.now(), photoUrl, description, angles })
+  jobs.set(jobId, { startedAt: Date.now(), photoUrl, productName, unit, priceKrw, usageExample, notes, angles })
   return { jobId }
 }
 

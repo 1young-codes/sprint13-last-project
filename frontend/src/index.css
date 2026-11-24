@@ -544,3 +544,33 @@ input[type='text'] {
 .stepper + .done-banner {
   margin-top: 16px;
 }
+
+/* 품목, 단위, 가격을 한 줄에 */
+.fields {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 12px;
+}
+
+.optional {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+input[aria-invalid='true'] {
+  border-color: #c62828;
+}
+
+@media (max-width: 600px) {
+  .fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+.fields {
+  margin-top: 16px;
+}
+
+.link {
+  padding: 0;
+}
