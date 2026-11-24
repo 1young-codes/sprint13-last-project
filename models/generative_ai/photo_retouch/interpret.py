@@ -32,7 +32,8 @@ def clean_plan(raw: dict, bounds: dict) -> dict:
     """모델 답을 쓸 수 있는 보정 계획으로 다듬습니다."""
     plan = {region: clamp_params(raw.get(region) or {}, bounds) for region in REGIONS}
     reasons = raw.get("reasons") if isinstance(raw.get("reasons"), dict) else {}
-    plan["reasons"] = {k: v for k, v in reasons.items() if isinstance(v, str)}
+    plan["reasons"] = {region: {k: v for k, v in reasons[region].items() if isinstance(v, str)}
+                       for region in REGIONS if isinstance(reasons.get(region), dict)}
     plan["problems"] = [str(p) for p in raw.get("problems") or [] if isinstance(p, str)]
     boxes = []
     for item in raw.get("distractions") or []:

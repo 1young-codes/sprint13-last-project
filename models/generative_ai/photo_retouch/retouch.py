@@ -27,7 +27,7 @@ def build_candidates(image, plan, rule, mask, settings) -> list[dict]:
             candidates.append({"name": f"suggest_x{strength:g}", "plan": scale_plan(plan, strength), "reasons": plan["reasons"]})
     if settings["candidates"]["include_auto"]:
         params, reasons = auto_params(image, settings["auto"], settings["ops"], rule["bounds"], mask)
-        candidates.append({"name": "auto", "plan": {"global": params}, "reasons": reasons})
+        candidates.append({"name": "auto", "plan": {"global": params}, "reasons": {"global": reasons}})
     for candidate in candidates:
         candidate["image"] = apply_regions(image, candidate["plan"], mask, settings["ops"])
         candidate["fidelity"] = check(image, candidate["image"], mask, rule["fidelity"])

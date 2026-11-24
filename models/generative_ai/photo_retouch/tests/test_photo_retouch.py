@@ -68,11 +68,11 @@ def test_fidelity_passes_tone_change_but_catches_drawn_content():
 def test_ai_answer_is_cleaned():
     from models.generative_ai.photo_retouch.interpret import clean_plan, parse_json
 
-    answer = 'sure ```json\n{"global": {"exposure_ev": 3, "bogus": 1}, "product": {"clarity": 0.2}, "reasons": {"exposure_ev": "어두움"},' \
+    answer = 'sure ```json\n{"global": {"exposure_ev": 3, "bogus": 1}, "product": {"clarity": 0.2}, "reasons": {"global": {"exposure_ev": "어두움"}, "background": {"saturation": 1}},' \
              ' "distractions": [{"label": "컵", "box": [100, 100, 200, 250]}, {"label": "깨짐", "box": [5, 5]}]}\n```'
     plan = clean_plan(parse_json(answer), category_rules("food")["bounds"])
     assert plan["global"] == {"exposure_ev": 1.0} and plan["product"] == {"clarity": 0.2}
-    assert [d["label"] for d in plan["distractions"]] == ["컵"] and plan["reasons"]["exposure_ev"] == "어두움"
+    assert [d["label"] for d in plan["distractions"]] == ["컵"] and plan["reasons"] == {"global": {"exposure_ev": "어두움"}, "background": {}}
     assert parse_json("no json") == {}
 
 
@@ -92,7 +92,7 @@ def test_explain_mentions_changes():
     from models.generative_ai.photo_retouch.__main__ import explain
 
     report = {"category_label": "음식", "subject": "도미", "problems": ["어두움"], "chosen": "suggest_x1", "chosen_reason": "자연스러움",
-              "params": {"global": {"exposure_ev": 0.3}}, "reasons": {"exposure_ev": "어두워서 밝혔습니다"},
+              "params": {"global": {"exposure_ev": 0.3}}, "reasons": {"global": {"exposure_ev": "어두워서 밝혔습니다"}},
               "candidates": [{"name": "suggest_x1", "fidelity": {"ok": True, "delta_e": 3.0, "structure": 0.99, "problems": []}}]}
     text = explain(report)
     assert "밝기 +0.30: 어두워서 밝혔습니다" in text and "통과" in text

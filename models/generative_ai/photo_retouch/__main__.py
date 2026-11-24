@@ -29,7 +29,7 @@ def explain(report: dict) -> str:
     for region, params in report["params"].items():
         for key, value in params.items():
             if abs(value) >= 0.01:
-                why = report["reasons"].get(key, "")
+                why = report["reasons"].get(region, {}).get(key, "")
                 lines.append(f"- {REGION_NAMES[region]} {NAMES.get(key, key)} {value:+.2f}" + (f": {why}" if why else ""))
     if report.get("chosen_reason") and report["chosen"] != "original":
         lines.append(f"- 이 후보를 고른 이유: {report['chosen_reason']}")
