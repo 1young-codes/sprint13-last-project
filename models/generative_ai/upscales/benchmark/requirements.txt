@@ -10,3 +10,4 @@ nvidia-ml-py
 psutil
 pillow
 numpy
+setuptools<81                # pyiqa가 쓰는 clip 패키지가 pkg_resources를 찾음
