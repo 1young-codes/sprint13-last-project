@@ -136,3 +136,12 @@ def test_bright_background_limits_brightening_and_counts_as_clipping():
     blown = sky.copy()
     blown[:20] = 1.0
     assert not check(sky, blown, mask, SETTINGS["fidelity"])["ok"]  # 상품 밖 하늘이 날아가도 탈락
+
+
+def test_pale_blue_sky_outside_product_is_not_a_color_cast():
+    image = np.zeros((40, 40, 3), np.float32) + np.array([0.85, 0.9, 0.95], np.float32)  # 옅은 하늘
+    image[10:30, 10:30] = [0.3, 0.4, 0.2]                                                 # 초록 생선
+    mask = np.zeros((40, 40), np.float32)
+    mask[10:30, 10:30] = 1
+    assert "white_balance" not in measure(image, SETTINGS["auto"], OPS, category_rules("product")["bounds"], mask)
+    assert "white_balance" in measure(image, SETTINGS["auto"], OPS, category_rules("store")["bounds"])

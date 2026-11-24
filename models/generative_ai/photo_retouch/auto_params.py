@@ -32,13 +32,13 @@ def measure(image: np.ndarray, auto: dict, ops: dict, bounds: dict, mask: np.nda
         add("exposure", {"exposure_ev": ev}, f"상품 밝기가 {'어두워' if ev > 0 else '너무 밝아'} {'밝게' if ev > 0 else '어둡게'} 맞췄습니다",
             f"subject median brightness {median:.2f}, would {'brighten' if ev > 0 else 'darken'} by {abs(ev):.2f} stops")
 
-    # 색 치우침은 원래 무채색이어야 할 화소(흰색·회색에 가까운 곳)로만 잼. 사진 전체 평균으로 재면
-    # 하늘이 많은 사진은 "푸르다", 주황 옷이 많은 사진은 "노랗다"고 잘못 잼. 그런 화소가 적으면 색은 건드리지 않음
+    # 색 치우침은 상품 안에서 원래 무채색이어야 할 화소(흰색·회색에 가까운 곳)로만 잼. 사진 전체로 재면
+    # 옅은 하늘이나 바다를 "푸르다"고 잘못 잼. 그런 화소가 적으면 색은 건드리지 않음(상품 영역이 없으면 사진 전체)
     peak = image.max(axis=-1)
     chroma = (peak - image.min(axis=-1)) / np.maximum(peak, 1e-4)
     low, high = auto["neutral_brightness"]
-    usable = (lum > low) & (lum < high) & (chroma < auto["neutral_max_chroma"])
-    if usable.mean() > auto["min_neutral_share"]:
+    usable = inside & (lum > low) & (lum < high) & (chroma < auto["neutral_max_chroma"])
+    if usable.sum() > auto["min_neutral_share"] * inside.sum():
         r, g, b = srgb_to_linear(image[usable]).mean(axis=0)
         strength = auto["white_balance_strength"]
         temperature = strength * (b - r) / (ops["white_balance_gain"] * (r + b))
@@ -46,10 +46,8 @@ def measure(image: np.ndarray, auto: dict, ops: dict, bounds: dict, mask: np.nda
         params = {k: float(v) for k, v in (("temperature", temperature), ("tint", tint)) if abs(v) >= auto["min_color_shift"]}
         if params:
             cast = ("blue" if temperature > 0 else "yellow") if "temperature" in params else ("green" if tint > 0 else "magenta")
-            add("white_balance", params, f"사진 전체가 {'푸르게' if cast == 'blue' else '노랗게' if cast == 'yellow' else '초록빛으로' if cast == 'green' else '자홍빛으로'} 치우쳐 바로잡았습니다",
-                f"overall {cast} color cast measured on near-white/gray pixels covering {usable.mean():.0%} of the frame, "
-                f"{usable[:usable.shape[0] // 3].sum() / usable.sum():.0%} of them in the top third of the frame "
-                f"(if those are sky, water or shade, the cast is real light, not a flaw); would neutralize it")
+            add("white_balance", params, f"상품의 흰색·회색 부분이 {'푸르게' if cast == 'blue' else '노랗게' if cast == 'yellow' else '초록빛으로' if cast == 'green' else '자홍빛으로'} 보여 색을 바로잡았습니다",
+                f"{cast} color cast measured on near-white/gray parts of the subject, would neutralize it")
 
     low, high = np.percentile(lum, [auto["low_percentile"], auto["high_percentile"]])
     spread = float(high - low)
