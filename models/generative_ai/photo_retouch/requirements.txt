@@ -1,0 +1,6 @@
+# 공용 GPU 패키지(requirements-gpu.txt) 위에 더하는 것: BiRefNet 원격 코드가 쓰는 패키지와 계산용
+-r ../../../requirements-gpu.txt
+timm
+kornia
+einops
+scipy

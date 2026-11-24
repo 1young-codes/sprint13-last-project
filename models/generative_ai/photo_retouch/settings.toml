@@ -40,6 +40,15 @@ high_percentile = 99.5
 target_spread = 0.85          # 두 백분위 밝기 차이가 이보다 작으면 대비를 올림
 contrast_per_spread = 2.0     # 모자란 차이 1당 올릴 대비
 
+# ── 모델 ────────────────────────────────────────────
+[vlm]
+image_long_side = 1024        # VLM에 보여 줄 사진 긴 변 (토큰 수와 그래픽 메모리 제한)
+max_new_tokens = 768
+fallback_category = "product" # 업종 판단 답이 깨졌을 때
+
+[product_mask]
+input_size = 1024             # BiRefNet 학습 해상도
+
 # ── 후보 ────────────────────────────────────────────
 # VLM이 제안한 값에 곱하는 세기. 1.0이 제안 그대로.
 [candidates]
@@ -55,3 +64,30 @@ max_new_clipping = 0.005      # 새로 하얗게/까맣게 날아간 화소 비�
 clip_level = 0.995
 structure_sigma_px = 1.5
 min_region_share = 0.01       # 상품 영역이 사진의 이 비율보다 작으면 사진 전체로 검사
+
+# ── 배경 잡동사니 지우기 (LaMa) ─────────────────────────────
+[cleanup]
+max_box_share = 0.05          # VLM이 낸 상자가 사진의 이 비율보다 크면 지우지 않음 (큰 영역은 지우면 티가 남)
+box_padding = 0.15            # 상자 크기 대비 여유
+context_scale = 1.5           # 지울 곳 둘레로 이만큼 더 잘라 LaMa에게 보여 줌
+crop_long_side = 768          # LaMa 입력 긴 변 상한
+subject_threshold = 0.3       # 이 값 넘는 상품 마스크 영역은 절대 지우지 않음
+subject_margin_px = 8
+
+# ── 스튜디오 조명 (IC-Light, 선택 기능) ─────────────────────────
+# 공식 데모(gradio_demo.py) 기본값을 따릅니다
+[studio_light]
+long_side = 768               # 첫 생성 긴 변 (64의 배수로 맞춤)
+highres_scale = 1.5
+steps = 25
+cfg = 2.0
+lowres_denoise = 0.9
+highres_denoise = 0.5
+seed = 12345
+light_direction = "none"      # none, left, right, top, bottom
+added_prompt = "best quality"
+negative_prompt = "lowres, bad anatomy, bad hands, cropped, worst quality"
+detail_sigma_px = 3.0         # 이보다 작은 세부(질감, 글자)는 원본에서 가져옴
+[studio_light.fidelity]       # 조명은 색을 일부러 바꾸므로 색 기준만 넓히고 구조 기준은 그대로
+max_mean_delta_e = 25.0
+max_new_clipping = 0.02

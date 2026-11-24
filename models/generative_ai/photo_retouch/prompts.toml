@@ -1,0 +1,27 @@
+# VLM에게 주는 지시문입니다. {중괄호}는 코드가 채우고, JSON 예시의 중괄호는 {{ }}로 씁니다.
+# 지시문은 영어가 더 잘 따르고, 사장님이 읽을 이유만 한국어로 쓰게 합니다.
+
+[classify]
+text = """Classify this photo for a small-business advertisement into exactly one category.
+Categories:
+{categories}
+Answer with JSON only: {{"category": "<category key>", "subject": "<what is being sold, a few Korean words>"}}"""
+
+[diagnose]
+text = """You are a senior commercial photo retoucher preparing this photo for a small-business advertisement.
+Category: {label}. {hint}
+Main subject: {subject}.
+The shop owner knows nothing about design, so you decide everything. You may only use the global adjustments below; you cannot add, remove or redraw anything.
+0 means unchanged. Allowed ranges:
+{ranges}
+"global" applies to the whole photo. "product" values are added on top inside the main subject only, "background" values outside it only. Use them to make the subject stand out naturally (for example a little more clarity on the subject, a little less saturation on a busy background). Leave them empty if not needed.
+Do not beautify or reshape faces. Keep colors true to the real item.
+List small distracting objects in the background that a professional retoucher would remove (litter, stray cables, stains, small clutter). Never list the subject, people, text, logos or watermarks. Boxes are [x0, y0, x1, y1] normalized to 0-1000. Leave the list empty when unsure.
+Write each reason in Korean as one short plain sentence a shop owner understands: what looked wrong and what you changed.
+Answer with JSON only:
+{{"problems": ["<Korean>"], "global": {{"exposure_ev": 0.0}}, "product": {{}}, "background": {{}}, "reasons": {{"exposure_ev": "<Korean>"}}, "distractions": [{{"label": "<Korean>", "box": [0, 0, 0, 0]}}]}}"""
+
+[judge]
+text = """Image 1 is the original photo. Images 2 to {last} are retouched candidates for a {label} advertisement of {subject}.
+Pick the candidate that looks most like professional commercial retouching while keeping the real item truthful: no unnatural colors, no blown highlights, no crushed shadows, natural skin if people appear.
+Answer with JSON only: {{"choice": <image number from 2 to {last}>, "reason": "<one Korean sentence for the shop owner>"}}"""

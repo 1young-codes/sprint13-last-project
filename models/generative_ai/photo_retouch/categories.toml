@@ -3,11 +3,13 @@
 # bounds: settings.toml [params] 범위를 이 업종에서 더 좁힘
 # fidelity: settings.toml [fidelity] 값을 이 업종에서 덮어씀
 # use_product_mask: 상품과 배경을 나눠 보정할지 (매장 전경은 나누지 않음)
+# studio_prompt: 스튜디오 조명에서 새로 그릴 배경과 빛 (없으면 그 업종은 스튜디오 조명을 쓰지 않음)
 
 [food]
 label = "음식"
 hint = "Food photo for a delivery app or menu. Make it look appetizing but true: slightly warm, rich reds and greens, keep glossy highlights, calm background. Never change the food itself."
 use_product_mask = true
+studio_prompt = "delicious food on a wooden table, warm soft window light, restaurant atmosphere"
 [food.bounds]
 temperature = [-0.2, 0.4]
 saturation = [-0.2, 0.3]
@@ -19,6 +21,7 @@ max_mean_delta_e = 10.0
 label = "상품"
 hint = "Product photo for an online store. Accurate, neutral true-to-life color, crisp edges, clean bright background. The product color must stay faithful to the real item."
 use_product_mask = true
+studio_prompt = "product on a clean white surface, soft diffused studio lighting, commercial photography"
 [product.bounds]
 temperature = [-0.3, 0.3]
 tint = [-0.2, 0.2]

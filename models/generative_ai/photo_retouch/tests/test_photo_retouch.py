@@ -63,3 +63,36 @@ def test_fidelity_passes_tone_change_but_catches_drawn_content():
     drawn[10:40, 20:60] = [0.9, 0.1, 0.1]
     result = check(image, drawn, None, rule)
     assert not result["ok"] and result["problems"]
+
+
+def test_vlm_answer_is_cleaned():
+    from models.generative_ai.photo_retouch.vlm import clean_plan, parse_json
+
+    answer = 'sure ```json\n{"global": {"exposure_ev": 3, "bogus": 1}, "product": {"clarity": 0.2}, "reasons": {"exposure_ev": "어두움"},' \
+             ' "distractions": [{"label": "컵", "box": [100, 100, 200, 250]}, {"label": "깨짐", "box": [5, 5]}]}\n```'
+    plan = clean_plan(parse_json(answer), category_rules("food")["bounds"])
+    assert plan["global"] == {"exposure_ev": 1.0} and plan["product"] == {"clarity": 0.2}
+    assert [d["label"] for d in plan["distractions"]] == ["컵"] and plan["reasons"]["exposure_ev"] == "어두움"
+    assert parse_json("no json") == {}
+
+
+def test_cleanup_box_and_light_gradient():
+    from models.generative_ai.photo_retouch.cleanup import box_pixels
+    from models.generative_ai.photo_retouch.studio_light import light_gradient, size_for
+
+    assert box_pixels([0, 0, 500, 500], 200, 100, 0) == (0, 0, 100, 50)
+    assert box_pixels([900, 900, 1000, 1000], 200, 100, 1.0) == (160, 70, 200, 100)
+    left = light_gradient("left", 8, 4)
+    assert left[0, 0, 0] == 1 and left[0, -1, 0] == 0 and light_gradient("none", 8, 4) is None
+    assert light_gradient("bottom", 8, 4)[-1, 0, 0] == 1
+    assert size_for(2000, 1344, 768) == (768, 512)
+
+
+def test_explain_mentions_changes():
+    from models.generative_ai.photo_retouch.__main__ import explain
+
+    report = {"category_label": "음식", "subject": "도미", "problems": ["어두움"], "chosen": "vlm_x1", "chosen_reason": "자연스러움",
+              "params": {"global": {"exposure_ev": 0.3}}, "reasons": {"exposure_ev": "어두워서 밝혔습니다"},
+              "candidates": [{"name": "vlm_x1", "fidelity": {"ok": True, "delta_e": 3.0, "structure": 0.99, "problems": []}}]}
+    text = explain(report)
+    assert "밝기 +0.30: 어두워서 밝혔습니다" in text and "통과" in text
