@@ -1,0 +1,36 @@
+# 업종별 보정 규칙입니다. 새 업종은 표 하나를 더하면 됩니다.
+# hint: VLM에게 주는 업종 설명 (영어가 지시를 더 잘 따름)
+# bounds: settings.toml [params] 범위를 이 업종에서 더 좁힘
+# fidelity: settings.toml [fidelity] 값을 이 업종에서 덮어씀
+# use_product_mask: 상품과 배경을 나눠 보정할지 (매장 전경은 나누지 않음)
+
+[food]
+label = "음식"
+hint = "Food photo for a delivery app or menu. Make it look appetizing but true: slightly warm, rich reds and greens, keep glossy highlights, calm background. Never change the food itself."
+use_product_mask = true
+[food.bounds]
+temperature = [-0.2, 0.4]
+saturation = [-0.2, 0.3]
+vibrance = [-0.2, 0.5]
+[food.fidelity]
+max_mean_delta_e = 10.0
+
+[product]
+label = "상품"
+hint = "Product photo for an online store. Accurate, neutral true-to-life color, crisp edges, clean bright background. The product color must stay faithful to the real item."
+use_product_mask = true
+[product.bounds]
+temperature = [-0.3, 0.3]
+tint = [-0.2, 0.2]
+saturation = [-0.2, 0.15]
+[product.fidelity]
+max_mean_delta_e = 6.0
+
+[store]
+label = "매장"
+hint = "Store, interior or exterior photo. Bright, welcoming, balanced exposure, open up dark corners, keep colors natural."
+use_product_mask = false
+[store.bounds]
+saturation = [-0.2, 0.2]
+[store.fidelity]
+max_mean_delta_e = 12.0

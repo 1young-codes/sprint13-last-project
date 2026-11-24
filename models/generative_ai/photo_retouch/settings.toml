@@ -1,0 +1,57 @@
+# 자동 보정 기본 설정입니다. 경로는 프로젝트 루트 기준 상대 경로이고, .env의 RETOUCH_<이름>이 있으면 그 값이 우선합니다.
+# 업종별 규칙은 categories.toml, 모델 출처는 model_sources.toml, VLM에게 주는 말은 prompts.toml에 있습니다.
+
+[paths]
+output_dir = "outputs/photo_retouch"      # RETOUCH_OUTPUT_DIR
+
+# ── 보정 값 ─────────────────────────────────────────────
+# 모든 값은 0이 "그대로"입니다. 여기 범위는 어떤 업종에서도 넘지 않는 바깥 한계이고, 업종별로 더 좁힙니다.
+[params]
+exposure_ev = [-1.0, 1.0]     # 노출 (스톱)
+temperature = [-1.0, 1.0]     # +따뜻하게 / -차갑게
+tint = [-1.0, 1.0]            # +자홍 / -초록
+contrast = [-1.0, 1.0]
+highlights = [-1.0, 1.0]      # -밝은 곳 누르기 / +키우기
+shadows = [-1.0, 1.0]         # +어두운 곳 밝히기
+vibrance = [-1.0, 1.0]        # 채도가 낮은 색 위주로 생동감
+saturation = [-1.0, 1.0]
+clarity = [-1.0, 1.0]         # 중간 크기 대비 (윤곽, 질감)
+sharpen = [0.0, 1.0]          # 작은 크기 선명도
+
+# 값 1이 실제로 얼마나 바꾸는지
+[ops]
+white_balance_gain = 0.25     # temperature 1이면 빨강 +25%, 파랑 -25% (선형 빛 기준)
+tint_gain = 0.15
+contrast_gain = 0.35
+tone_gain = 0.45              # highlights, shadows
+saturation_gain = 0.5
+clarity_sigma = 0.02          # 긴 변 대비 블러 크기
+clarity_gain = 0.6
+sharpen_sigma_px = 1.0
+sharpen_gain = 1.0
+
+# ── 사진 진단 없이 쓰는 자동 보정 (VLM 후보와 함께 비교하는 기준 후보) ──────────
+[auto]
+mid_gray_band = [0.32, 0.6]   # 밝기 중앙값(sRGB)이 이 범위 밖일 때만 가까운 끝으로 맞춤. 상품 마스크가 있으면 상품 영역 기준
+max_auto_ev = 0.8
+white_balance_strength = 0.6  # 회색 세계 가정으로 잰 색 치우침을 이만큼만 바로잡음
+low_percentile = 0.5          # 대비 늘리기 기준 (어두운 쪽 백분위)
+high_percentile = 99.5
+target_spread = 0.85          # 두 백분위 밝기 차이가 이보다 작으면 대비를 올림
+contrast_per_spread = 2.0     # 모자란 차이 1당 올릴 대비
+
+# ── 후보 ────────────────────────────────────────────
+# VLM이 제안한 값에 곱하는 세기. 1.0이 제안 그대로.
+[candidates]
+strengths = [1.0, 0.6]
+include_auto = true
+
+# ── 충실도 검사 (상품 영역, 보정 전후 비교) ────────────────────
+# 업종별로 categories.toml에서 덮어씁니다.
+[fidelity]
+max_mean_delta_e = 8.0        # 평균 색 차이 (CIELAB ΔE76)
+min_structure = 0.95          # 밝기 구조 유사도 (SSIM의 구조 항)
+max_new_clipping = 0.005      # 새로 하얗게/까맣게 날아간 화소 비율
+clip_level = 0.995
+structure_sigma_px = 1.5
+min_region_share = 0.01       # 상품 영역이 사진의 이 비율보다 작으면 사진 전체로 검사
