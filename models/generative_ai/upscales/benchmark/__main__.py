@@ -95,10 +95,10 @@ def score(scorer_box: list, model: str, item: dict, out: Path, force: bool) -> d
 
 
 def lower_better_table() -> dict:
-    import pyiqa
+    from pyiqa.default_model_configs import DEFAULT_CONFIGS
 
     names = CONFIG["metrics"]["full_reference"] + CONFIG["metrics"]["no_reference"]
-    return {n: bool(pyiqa.DEFAULT_CONFIGS.get(n, {}).get("lower_better", False)) for n in names}
+    return {n: bool(DEFAULT_CONFIGS.get(n, {}).get("lower_better", False)) for n in names}
 
 
 def main():
