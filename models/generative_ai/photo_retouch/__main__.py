@@ -21,8 +21,6 @@ REGION_NAMES = {"global": "사진 전체", "product": "상품", "background": "�
 
 def explain(report: dict) -> str:
     lines = ["# 자동 보정 결과", "", f"- 업종: {report['category_label']}, 주인공: {report['subject']}"]
-    if report.get("problems"):
-        lines += ["", "## 사진에서 본 문제", *[f"- {p}" for p in report["problems"]]]
     lines += ["", "## 바꾼 것"]
     if report["chosen"] == "original":
         lines.append(f"- {report['chosen_reason']}")

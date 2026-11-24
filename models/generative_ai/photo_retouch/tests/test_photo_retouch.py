@@ -103,7 +103,7 @@ def test_cleanup_box_and_light_gradient():
 def test_explain_mentions_changes():
     from models.generative_ai.photo_retouch.__main__ import explain
 
-    report = {"category_label": "음식", "subject": "도미", "problems": ["어두움"], "chosen": "corrected_x1", "chosen_reason": "자연스러움",
+    report = {"category_label": "음식", "subject": "도미", "chosen": "corrected_x1", "chosen_reason": "자연스러움",
               "params": {"global": {"exposure_ev": 0.3}}, "reasons": {"global": {"exposure_ev": "어두워서 밝혔습니다"}},
               "candidates": [{"name": "corrected_x1", "fidelity": {"ok": True, "delta_e": 3.0, "structure": 0.99, "problems": []}}]}
     text = explain(report)

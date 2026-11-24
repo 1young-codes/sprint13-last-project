@@ -79,7 +79,7 @@ def retouch(photo, category: str | None = None, use_ai: bool = True, cleanup: bo
                "measured": {name: {"params": f["params"], "reason": f["reason"]} for name, f in found.items()}}
     if ai:
         review, raw_answer = ai.review(image, rule, subject, found)
-        report |= {"problems": review["problems"], "kept": {name: why for name, why in review["keep"].items()},
+        report |= {"kept": dict(review["keep"]),
                    "ai_answer": raw_answer}
 
     candidates = build_candidates(image, found, review, rule, mask, settings)

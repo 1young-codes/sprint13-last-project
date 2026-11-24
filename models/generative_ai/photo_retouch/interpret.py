@@ -43,7 +43,7 @@ def clean_review(raw: dict, offered) -> dict:
                 boxes.append({"label": str(item.get("label", "")), "box": [x0, y0, x1, y1]})
     return {"fix": fix, "keep": {k: v for k, v in named("keep").items() if k not in fix},
             "calm_background": calm.strip() if isinstance(calm, str) else "",
-            "problems": [p for p in raw.get("problems") or [] if isinstance(p, str)], "distractions": boxes}
+            "distractions": boxes}
 
 
 class Interpreter:
