@@ -96,8 +96,7 @@ def retouch(photo, category: str | None = None, use_vlm: bool = True, cleanup: b
         lit = relight(result, subject_mask, rule["studio_prompt"], light)
         verdict = check(result, lit, subject_mask, rule["fidelity"] | light["fidelity"])
         report["studio_light"] = verdict
-        if verdict["ok"]:
-            output["studio_image"] = to_image(lit)
+        output["studio_image" if verdict["ok"] else "studio_rejected"] = to_image(lit)
     elif studio_light:
         report["studio_light"] = {"ok": False, "problems": [f"{rule['label']} 사진에는 스튜디오 조명을 쓰지 않습니다"]}
     return output

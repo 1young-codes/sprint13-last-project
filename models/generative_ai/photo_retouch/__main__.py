@@ -2,7 +2,7 @@
 
     python -m models.generative_ai.photo_retouch 사진.jpg [사진2.png ...] [--category food] [--studio-light]
 
-결과: <output_dir>/<사진 이름>/ 에 retouched.png, (선택) studio.png, compare.png, report.json, 설명.md
+결과: <output_dir>/<사진 이름>/ 에 retouched.png, (선택) studio.png 또는 studio_rejected.png, compare.png, report.json, 설명.md
 """
 
 import argparse
@@ -75,6 +75,8 @@ def main():
         if "studio_image" in output:
             output["studio_image"].save(folder / "studio.png")
             pictures.append(output["studio_image"])
+        if "studio_rejected" in output:  # 검사에서 떨어진 결과도 확인용으로 남김
+            output["studio_rejected"].save(folder / "studio_rejected.png")
         side_by_side(*pictures).save(folder / "compare.png")
         (folder / "report.json").write_text(json.dumps(output["report"], ensure_ascii=False, indent=2), encoding="utf-8")
         (folder / "설명.md").write_text(explain(output["report"]), encoding="utf-8")
