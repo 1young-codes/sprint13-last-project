@@ -4,7 +4,7 @@
 baseline = "bicubic"
 
 # ── 비교 조건 ──────────────────────────────────────────────
-# source: settings.toml [paths]의 키, pattern: 그 폴더 안에서 고를 사진, exclude: 이름에 이 글자가 있으면 제외
+# source: settings.toml [paths]의 키, pattern: 그 폴더 안에서 고를 사진, names: 있으면 이 이름의 사진만 (중간 단계 이미지 제외)
 # degrade = true면 사진을 1/scale로 줄여 입력으로 쓰고, 원본을 정답으로 삼아 정답 기준 지표(gt_)를 잽니다.
 
 [conditions.x4_real]
@@ -17,17 +17,15 @@ scale = 4
 label = "각도 프리셋 결과 ×2 (실제 흐름)"
 source = "camera_angle_dir"
 pattern = "*/*.png"
-exclude = ["_before_fill", "_empty_mask", "_mask"]
+names = ["wide_angle", "dutch_angle", "low_angle", "three_quarter_left"]   # 사진마다 회전 2종, 3D 이동 2종
 scale = 2
-max_images = 13
 
 [conditions.x2_synthetic]
 label = "각도 프리셋 결과를 절반으로 줄였다 ×2 복원 (정답 비교)"
 source = "camera_angle_dir"
 pattern = "*/*.png"
-exclude = ["_before_fill", "_empty_mask", "_mask"]
+names = ["wide_angle", "dutch_angle", "low_angle", "three_quarter_left"]   # 사진마다 회전 2종, 3D 이동 2종
 scale = 2
-max_images = 13
 degrade = true
 
 # ── 지표 ─────────────────────────────────────────────────

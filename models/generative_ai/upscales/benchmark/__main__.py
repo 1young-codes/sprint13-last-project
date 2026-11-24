@@ -27,10 +27,10 @@ def gather(spec: dict) -> list[tuple[str, Path]]:
     root = project_path(spec["source"])
     suffixes = load_settings()["run"]["image_suffixes"]
     found = [p for p in sorted(root.glob(spec["pattern"]))
-             if p.suffix.lower() in suffixes and not any(word in p.stem for word in spec.get("exclude", []))]
+             if p.suffix.lower() in suffixes and p.stem in spec.get("names", [p.stem])]
     if not found:
         raise FileNotFoundError(f"{root}에 '{spec['pattern']}' 사진이 없습니다 (settings.toml [paths].{spec['source']})")
-    return [("__".join(p.relative_to(root).with_suffix("").parts), p) for p in found][: spec.get("max_images")]
+    return [("__".join(p.relative_to(root).with_suffix("").parts), p) for p in found]
 
 
 def prepare(spec: dict, folder: Path) -> list[dict]:
