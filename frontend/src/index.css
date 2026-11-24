@@ -532,3 +532,15 @@ input[type='text'] {
   border-color: var(--accent);
   color: #fff;
 }
+
+/* 버튼 글자가 두 줄로 꺾이지 않게 */
+.row button,
+.footer button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* 단계 표시와 게시 완료 안내 사이 간격 */
+.stepper + .done-banner {
+  margin-top: 16px;
+}
