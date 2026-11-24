@@ -9,7 +9,7 @@
 label = "음식"
 hint = "Food photo for a delivery app or menu. Make it look appetizing but true: slightly warm, rich reds and greens, keep glossy highlights, calm background. Never change the food itself."
 use_product_mask = true
-studio_prompt = "delicious food on a wooden table, warm soft window light, restaurant atmosphere"
+studio_prompt = "delicious food on a wooden table, bright soft daylight from a large window, clean bright restaurant"
 [food.bounds]
 temperature = [-0.2, 0.4]
 saturation = [-0.2, 0.3]
