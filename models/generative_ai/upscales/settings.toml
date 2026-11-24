@@ -1,0 +1,18 @@
+# 업스케일 모델 공용 설정입니다.
+# 경로는 모두 프로젝트 루트 기준 상대 경로이고, 같은 이름의 환경 변수(.env의 UPSCALE_<이름>)가 있으면 그 값이 우선합니다.
+# 모델 가중치는 허깅페이스 캐시(환경 변수 HF_HOME)에 저장되어 팀원과 같이 씁니다.
+
+[paths]
+code_dir = "data/vendor/upscales"           # UPSCALE_CODE_DIR: 모델별 추론 코드(커밋 고정)
+venv_dir = "data/venvs/upscales"            # UPSCALE_VENV_DIR: 모델별 가상환경 (모델마다 torch 버전이 달라 나눔)
+output_dir = "outputs/upscales"             # UPSCALE_OUTPUT_DIR: 업스케일 결과와 비교 보고서
+bench_photos_dir = "data/upscale_bench"     # UPSCALE_BENCH_PHOTOS_DIR: 비교용 실사 사진
+camera_angle_dir = "outputs/camera_angle"   # UPSCALE_CAMERA_ANGLE_DIR: 각도 프리셋 결과 (실제 흐름의 업스케일 입력)
+metric_models_dir = "data/models/metrics"   # UPSCALE_METRIC_MODELS_DIR: 얼굴 인식·글자 인식 모델
+
+[tools]
+uv = "uv"                                   # 가상환경을 만드는 도구 (PATH에서 찾음)
+
+[run]
+vram_poll_seconds = 0.05                    # 그래픽 메모리 사용량을 읽는 간격
+image_suffixes = [".png", ".jpg", ".jpeg", ".webp", ".bmp"]

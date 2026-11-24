@@ -1,0 +1,32 @@
+# SeedVR2 (ICLR 2026): 바이트댄스의 한 단계 비디오 복원 확산 트랜스포머. 사진은 한 프레임짜리 영상으로 처리합니다.
+# 코드·가중치 Apache-2.0. 3B 모델을 16비트로 씁니다 (7B는 L4에서 8비트여야 들어감).
+# 공식 코드(ByteDance-Seed/SeedVR)는 미리 빌드된 apex가 L4(sm_89) 커널을 갖고 있지 않아 실행되지 않습니다.
+# 그래서 같은 가중치를 safetensors로 옮겨 둔 저전력 실행 구현(numz)의 명령줄 도구를 씁니다.
+# 저자도 약하게 손상된 사진에서는 디테일을 지어낼 수 있다고 경고합니다.
+
+[environment]
+python = "3.12"
+
+[code]
+repo = "numz/ComfyUI-SeedVR2_VideoUpscaler"
+revision = "4490bd1f482e026674543386bb2a4d176da245b9"
+
+[weights.seedvr2]
+repo = "numz/SeedVR2_comfyUI"
+revision = "09ced71023636e9bc8cdf9cdecfb2625d1e691e8"
+files = ["seedvr2_ema_3b_fp16.safetensors", "ema_vae_fp16.safetensors"]
+
+# 기본 모델 폴더(models/SEEDVR2)에 파일 단위로 연결합니다. 이 도구가 폴더에 검증 기록을 쓰므로 공용 캐시 폴더를 통째로 연결하지 않습니다.
+[links]
+"models/SEEDVR2/seedvr2_ema_3b_fp16.safetensors" = "seedvr2:seedvr2_ema_3b_fp16.safetensors"
+"models/SEEDVR2/ema_vae_fp16.safetensors" = "seedvr2:ema_vae_fp16.safetensors"
+
+[run]
+scales = [2, 4]
+# 배율 대신 출력 짧은 변(out_short)을 받습니다.
+command = [
+  "inference_cli.py", "{input_dir}", "--output", "{output_dir}", "--output_format", "png",
+  "--dit_model", "seedvr2_ema_3b_fp16.safetensors", "--resolution", "{out_short}",
+  "--batch_size", "1", "--seed", "42", "--color_correction", "lab",
+  "--vae_encode_tiled", "--vae_decode_tiled",
+]

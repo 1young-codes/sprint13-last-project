@@ -1,0 +1,31 @@
+# VOSR 2.0 (CVPR 2026): 텍스트 없이 이미지만 보는 1.4B 확산 트랜스포머, 한 단계 추론.
+# 코드·가중치 Apache-2.0. 원본 보존(글자·물체를 바꾸지 않기)을 목표로 만든 모델입니다.
+# 512로만 학습되어 큰 사진은 타일로 나눠야 합니다. VAE를 통째로 돌리면 메모리가 넘친다는 보고가 있어 VAE도 타일로 돌립니다.
+
+[environment]
+python = "3.10"
+pip_args = ["--index-strategy", "unsafe-best-match"]   # +cu121 꼬리표가 붙은 torch를 파이토치 저장소에서 찾음
+
+[code]
+repo = "cswry/VOSR"
+revision = "516f292b99cf23c76fdc33351e86dc4f97711fe8"
+
+[weights.vosr]
+repo = "CSWRY/VOSR"
+revision = "f24b3061b7f350b81e1907bdcfc27f71fb4ff3f3"
+files = ["VOSR2/*", "Qwen-Image-vae-2d/*", "torch_cache/*"]
+
+# 추론 코드가 찾는 자리(코드 폴더 기준) = "가중치 키:저장소 안 경로"
+[links]
+"preset/ckpts/VOSR2" = "vosr:VOSR2"
+"preset/ckpts/Qwen-Image-vae-2d" = "vosr:Qwen-Image-vae-2d"
+"preset/ckpts/torch_cache" = "vosr:torch_cache"
+
+[run]
+scales = [2, 4]
+command = [
+  "inference_vosr_onestep.py", "-c", "preset/ckpts/VOSR2",
+  "-i", "{input_dir}", "-o", "{output_dir}", "-u", "{scale}",
+  "--tile_size", "512", "--vae_tile_size", "1024",
+  "--align_method", "wavelet",
+]
