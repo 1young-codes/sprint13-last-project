@@ -6,7 +6,8 @@
 [environment]
 python = "3.11"
 extra_installs = [
-  ["--no-build-isolation", "git+https://github.com/cloneofsimo/lora.git@d84074b3e3496f1cfa8a3f49b8b9972ef463b483"],
+  # 의존성을 따라 깔면 transformers가 torch 2.6 이상을 요구하는 최신판으로 올라가므로 lora 자체만 설치합니다
+  ["--no-build-isolation", "--no-deps", "git+https://github.com/cloneofsimo/lora.git@d84074b3e3496f1cfa8a3f49b8b9972ef463b483"],
   # 소스 빌드에는 CUDA 컴파일러가 필요해서, 이 torch(2.5, cxx11abi 꺼짐)와 파이썬 3.11에 맞게 미리 빌드된 파일을 받습니다
   ["https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"],
 ]

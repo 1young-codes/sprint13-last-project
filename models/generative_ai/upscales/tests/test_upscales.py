@@ -68,3 +68,20 @@ def test_selection_gates_then_ranks():
     choice = select(average(rows), ["good", "pretty", "liar"], selection, {"lpips": True})
     assert "liar" in choice["failed"] and choice["chosen"] == "good"
     assert config["baseline"] and config["selection"]["gates"]
+
+
+def test_tiles_cover_image_and_join_back(tmp_path):
+    from models.generative_ai.upscales.run_model import cut_tiles, join_tiles, tile_starts
+
+    assert tile_starts(512, 512, 64) == [0]
+    assert tile_starts(1000, 512, 64) == [0, 244, 488]
+    assert tile_starts(2000, 512, 64)[-1] == 1488
+    source = tmp_path / "photo.png"
+    Image.effect_noise((150, 100), 60).convert("RGB").save(source)
+    tiles = {"size": 256, "overlap": 32}
+    layouts = cut_tiles([source], 4, tiles, tmp_path / "tiles")
+    (tmp_path / "raw").mkdir()
+    join_tiles(layouts, tiles, tmp_path / "tiles", tmp_path / "raw")  # 모델 대신 조각을 그대로 되돌림
+    joined = Image.open(tmp_path / "raw" / "photo.png")
+    expected = Image.open(source).resize((600, 400), Image.BICUBIC)
+    assert joined.size == (600, 400) and psnr(joined, expected) == float("inf")

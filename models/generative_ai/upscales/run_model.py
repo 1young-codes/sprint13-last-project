@@ -8,6 +8,7 @@
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import time
@@ -93,6 +94,51 @@ def collect_outputs(raw_dir: Path, output_dir: Path, images: list[Path], scale: 
     return results
 
 
+def tile_starts(length: int, size: int, overlap: int) -> list[int]:
+    """size 조각이 적어도 overlap만큼 겹치며 length를 덮는 시작 위치. 조각 사이 간격은 고르게 나눕니다."""
+    if length <= size:
+        return [0]
+    count = math.ceil((length - overlap) / (size - overlap))
+    return [round(i * (length - size) / (count - 1)) for i in range(count)]
+
+
+def cut_tiles(images: list[Path], scale: int, tiles: dict, tile_dir: Path) -> dict:
+    """사진을 바이큐빅으로 scale배 키운 뒤 size×size 조각으로 저장합니다. 사진 이름 -> (크기, 조각 위치들)."""
+    size, overlap = tiles["size"], tiles["overlap"]
+    tile_dir.mkdir(parents=True, exist_ok=True)
+    layouts = {}
+    for path in images:
+        with Image.open(path) as image:
+            big = image.convert("RGB").resize((image.width * scale, image.height * scale), Image.BICUBIC)
+        if min(big.size) < size:
+            raise ValueError(f"{path.name}: 키운 크기 {big.size}가 조각 크기 {size}보다 작습니다")
+        spots = [(x, y) for y in tile_starts(big.height, size, overlap) for x in tile_starts(big.width, size, overlap)]
+        for x, y in spots:
+            big.crop((x, y, x + size, y + size)).save(tile_dir / f"{path.stem}__x{x}_y{y}.png")
+        layouts[path.stem] = (big.size, spots)
+    return layouts
+
+
+def join_tiles(layouts: dict, tiles: dict, tile_out: Path, raw_dir: Path) -> None:
+    """조각 결과를 가장자리로 갈수록 작아지는 가중치로 섞어 이어 붙입니다 (VARestorer 타일 방식과 같은 원리)."""
+    import numpy as np
+
+    size = tiles["size"]
+    ramp = np.minimum(np.arange(size) + 1, np.arange(size)[::-1] + 1).astype(np.float32)
+    weight = np.minimum.outer(ramp, ramp)[..., None]
+    for stem, ((width, height), spots) in layouts.items():
+        total = np.zeros((height, width, 3), np.float32)
+        count = np.zeros((height, width, 1), np.float32)
+        for x, y in spots:
+            found = next(tile_out.rglob(f"{stem}__x{x}_y{y}.png"), None)
+            if found is None:
+                raise FileNotFoundError(f"조각 결과가 없습니다: {stem}__x{x}_y{y}")
+            with Image.open(found) as piece:
+                total[y:y + size, x:x + size] += np.asarray(piece.convert("RGB").resize((size, size)), np.float32) * weight
+            count[y:y + size, x:x + size] += weight
+        Image.fromarray(np.clip(np.rint(total / count), 0, 255).astype(np.uint8)).save(raw_dir / f"{stem}.png")
+
+
 def run(name: str, input_dir: Path, output_dir: Path, scale: int) -> dict:
     spec = load_spec(name)
     if scale not in spec["run"]["scales"]:
@@ -102,9 +148,18 @@ def run(name: str, input_dir: Path, output_dir: Path, scale: int) -> dict:
         raise FileNotFoundError(f"{input_dir}에 사진이 없습니다")
     raw_dir = output_dir / RAW_FOLDER
     raw_dir.mkdir(parents=True, exist_ok=True)
-    command = build_command(name, spec, input_dir, raw_dir, scale, images)
+    tiles = spec["run"].get("tiles")
     env = os.environ | {"HF_HUB_OFFLINE": "1"} | spec["run"].get("env", {})  # 실행 중 몰래 내려받지 않음
-    seconds, peak_mb, code = watch(command, code_folder(name), env, output_dir / "run.log")
+    if tiles:  # 학습 해상도 조각으로만 제대로 도는 1배 복원 모델: 먼저 키우고 조각내서 돌린 뒤 이어 붙임
+        tile_dir, tile_out = output_dir / "tiles", output_dir / "tiles_out"
+        layouts = cut_tiles(images, scale, tiles, tile_dir)
+        command = build_command(name, spec, tile_dir, tile_out, 1, list_images(tile_dir))
+        seconds, peak_mb, code = watch(command, code_folder(name), env, output_dir / "run.log")
+        if code == 0:
+            join_tiles(layouts, tiles, tile_out, raw_dir)
+    else:
+        command = build_command(name, spec, input_dir, raw_dir, scale, images)
+        seconds, peak_mb, code = watch(command, code_folder(name), env, output_dir / "run.log")
     info = {
         "model": name, "scale": scale, "images": len(images), "returncode": code,
         "seconds": round(seconds, 2), "seconds_per_image": round(seconds / len(images), 2),
