@@ -2,11 +2,11 @@ import json
 import unittest
 from unittest.mock import patch
 
-from models.product_captions import generate_product_captions
+from models.generative_ai.llm.product_captions import generate_product_captions
 
 
 class ProductCaptionsTest(unittest.TestCase):
-    @patch("models.product_captions.OpenAI")
+    @patch("models.generative_ai.llm.product_captions.OpenAI")
     def test_returns_both_captions_from_one_request(self, openai):
         inputs = {
             "product_name": "도미",
@@ -45,7 +45,7 @@ class ProductCaptionsTest(unittest.TestCase):
             ["product_caption", "usage_caption"],
         )
 
-    @patch("models.product_captions.OpenAI")
+    @patch("models.generative_ai.llm.product_captions.OpenAI")
     def test_preserves_free_form_unit_and_allows_omitting_notes(self, openai):
         create = openai.return_value.__enter__.return_value.responses.create
         create.return_value.status = "completed"
@@ -58,7 +58,7 @@ class ProductCaptionsTest(unittest.TestCase):
         self.assertEqual(captions["product_caption"], "버터 스콘입니다.\n6개입 한 상자당 18,000원")
         self.assertEqual(json.loads(create.call_args.kwargs["input"])["notes"], "")
 
-    @patch("models.product_captions.OpenAI")
+    @patch("models.generative_ai.llm.product_captions.OpenAI")
     def test_rejects_invalid_input_before_opening_client(self, openai):
         inputs = dict(product_name="도미", unit="kg", price_krw=25000, usage_example="도미 솥밥")
         for field, value in (
@@ -76,7 +76,7 @@ class ProductCaptionsTest(unittest.TestCase):
                     generate_product_captions(**(inputs | {field: value}))
         openai.assert_not_called()
 
-    @patch("models.product_captions.OpenAI")
+    @patch("models.generative_ai.llm.product_captions.OpenAI")
     def test_rejects_empty_missing_or_non_string_caption(self, openai):
         create = openai.return_value.__enter__.return_value.responses.create
         create.return_value.status = "completed"
