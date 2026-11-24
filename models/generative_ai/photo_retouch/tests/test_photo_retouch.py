@@ -3,7 +3,7 @@
 import numpy as np
 
 from models.generative_ai.photo_retouch.adjustments import apply, apply_regions, clamp_params, luminance
-from models.generative_ai.photo_retouch.auto_params import auto_params
+from models.generative_ai.photo_retouch.auto_params import measure
 from models.generative_ai.photo_retouch.fidelity import check
 from models.generative_ai.photo_retouch.settings import category_rules, load_categories, load_settings
 
@@ -49,10 +49,22 @@ def test_clamp_and_category_bounds():
         assert category_rules(name)["hint"]
 
 
-def test_auto_params_fix_blue_cast():
+def test_measure_finds_blue_cast():
     image = np.clip(photo() * np.array([0.8, 0.95, 1.2], np.float32), 0, 1)
-    params, reasons = auto_params(image, SETTINGS["auto"], OPS, category_rules("product")["bounds"])
-    assert params["temperature"] > 0 and "temperature" in reasons
+    found = measure(image, SETTINGS["auto"], OPS, category_rules("product")["bounds"])
+    assert found["white_balance"]["params"]["temperature"] > 0 and "blue" in found["white_balance"]["finding"]
+
+
+def test_candidates_apply_only_approved_fixes_plus_look():
+    from models.generative_ai.photo_retouch.retouch import make_plan
+
+    found = {"exposure": {"params": {"exposure_ev": 0.4}, "reason": "어두움", "finding": ""},
+             "white_balance": {"params": {"temperature": -0.2}, "reason": "노람", "finding": ""}}
+    rule = category_rules("food")
+    plan = make_plan(found, ["exposure"], rule, {"saturation": -0.15}, "배경 산만", look=True)
+    assert plan["plan"]["global"] == {"exposure_ev": 0.4} | rule["look"]
+    assert plan["plan"]["background"] == {"saturation": -0.15} and plan["reasons"]["background"]["saturation"] == "배경 산만"
+    assert make_plan(found, [], category_rules("product"), None, "", look=True)["plan"] == {"global": {}}
 
 
 def test_fidelity_passes_tone_change_but_catches_drawn_content():
@@ -66,14 +78,14 @@ def test_fidelity_passes_tone_change_but_catches_drawn_content():
 
 
 def test_ai_answer_is_cleaned():
-    from models.generative_ai.photo_retouch.interpret import clean_plan, parse_json
+    from models.generative_ai.photo_retouch.interpret import clean_review, parse_json
 
-    answer = 'sure ```json\n{"global": {"exposure_ev": 3, "bogus": 1}, "product": {"clarity": 0.2}, "reasons": {"global": {"exposure_ev": "어두움"}, "background": {"saturation": 1}},' \
-             ' "distractions": [{"label": "컵", "box": [100, 100, 200, 250]}, {"label": "깨짐", "box": [5, 5]}]}\n```'
-    plan = clean_plan(parse_json(answer), category_rules("food")["bounds"])
-    assert plan["global"] == {"exposure_ev": 1.0} and plan["product"] == {"clarity": 0.2}
-    assert [d["label"] for d in plan["distractions"]] == ["컵"] and plan["reasons"] == {"global": {"exposure_ev": "어두움"}, "background": {}}
-    assert parse_json("no json") == {}
+    answer = 'sure ```json\n{"fix": {"exposure": "어두움", "made_up": "x"}, "keep": {"exposure": "중복", "white_balance": "조명"},' \
+             ' "calm_background": " 산만 ", "distractions": [{"label": "컵", "box": [100, 100, 200, 250]}, {"label": "깨짐", "box": [5, 5]}]}\n```'
+    review = clean_review(parse_json(answer), {"exposure": {}, "white_balance": {}})
+    assert review["fix"] == {"exposure": "어두움"} and review["keep"] == {"white_balance": "조명"}
+    assert review["calm_background"] == "산만" and [d["label"] for d in review["distractions"]] == ["컵"]
+    assert parse_json("no json") == {} and clean_review({}, {"exposure": {}})["fix"] == {}
 
 
 def test_cleanup_box_and_light_gradient():
@@ -91,9 +103,9 @@ def test_cleanup_box_and_light_gradient():
 def test_explain_mentions_changes():
     from models.generative_ai.photo_retouch.__main__ import explain
 
-    report = {"category_label": "음식", "subject": "도미", "problems": ["어두움"], "chosen": "suggest_x1", "chosen_reason": "자연스러움",
+    report = {"category_label": "음식", "subject": "도미", "problems": ["어두움"], "chosen": "corrected_x1", "chosen_reason": "자연스러움",
               "params": {"global": {"exposure_ev": 0.3}}, "reasons": {"global": {"exposure_ev": "어두워서 밝혔습니다"}},
-              "candidates": [{"name": "suggest_x1", "fidelity": {"ok": True, "delta_e": 3.0, "structure": 0.99, "problems": []}}]}
+              "candidates": [{"name": "corrected_x1", "fidelity": {"ok": True, "delta_e": 3.0, "structure": 0.99, "problems": []}}]}
     text = explain(report)
     assert "밝기 +0.30: 어두워서 밝혔습니다" in text and "통과" in text
 

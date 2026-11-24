@@ -5,7 +5,6 @@
 """
 
 import numpy as np
-from scipy.ndimage import gaussian_filter
 
 LUMA = np.array([0.2126, 0.7152, 0.0722], np.float32)
 
@@ -74,15 +73,9 @@ def apply(image: np.ndarray, params: dict, ops: dict) -> np.ndarray:
     new = new + p("highlights") * ops["tone_gain"] * smoothstep(0.5, 1.2, new) * (new - 0.5)
     new = new + p("shadows") * ops["tone_gain"] * new * (1 - smoothstep(0.0, 0.6, new))
 
-    # 3) 윤곽과 선명도: 밝기의 큰/작은 블러와의 차이를 더함
-    if p("clarity"):
-        sigma = ops["clarity_sigma"] * max(image.shape[:2])
-        new = new + p("clarity") * ops["clarity_gain"] * (new - gaussian_filter(new, sigma)) * 4 * np.clip(new * (1 - new), 0, None)
-    if p("sharpen"):
-        new = new + p("sharpen") * ops["sharpen_gain"] * (new - gaussian_filter(new, ops["sharpen_sigma_px"]))
     rgb = rgb * (np.maximum(new, 0) / np.maximum(lum, 1e-4))[..., None]
 
-    # 4) 채도와 생동감: 밝기는 두고 색 차이만 키움
+    # 3) 채도와 생동감: 밝기는 두고 색 차이만 키움
     if p("saturation") or p("vibrance"):
         lum = luminance(rgb)[..., None]
         spread = np.clip(rgb.max(axis=-1, keepdims=True) - rgb.min(axis=-1, keepdims=True), 0, 1)

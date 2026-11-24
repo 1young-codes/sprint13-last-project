@@ -4,10 +4,13 @@
 # fidelity: settings.toml [fidelity] 값을 이 업종에서 덮어씀
 # use_product_mask: 상품과 배경을 나눠 보정할지 (매장 전경은 나누지 않음)
 # studio_prompt: 스튜디오 조명에서 새로 그릴 배경과 빛 (없으면 그 업종은 스튜디오 조명을 쓰지 않음)
+# look: 바로잡은 뒤 더하는 약한 업종 색감, look_reason: 사장님께 보일 이유 (look이 비면 색감을 더하지 않음)
 
 [food]
 label = "음식"
-hint = "Food photo for a delivery app or menu. Make it look appetizing but true: slightly warm, rich reds and greens, keep glossy highlights, calm background. Never change the food itself."
+hint = "Food photo for a delivery app or menu. Should look appetizing but true to the real dish. Warm restaurant light and glossy highlights are normal, not problems."
+look = { temperature = 0.06, vibrance = 0.08 }
+look_reason = "음식이 먹음직스럽게 보이도록 아주 살짝 따뜻하고 생기 있게 했습니다"
 use_product_mask = true
 studio_prompt = "delicious food on a wooden table, bright soft daylight from a large window, clean bright restaurant"
 [food.bounds]
@@ -19,7 +22,9 @@ max_mean_delta_e = 10.0
 
 [product]
 label = "상품"
-hint = "Product photo for an online store. Accurate, neutral true-to-life color, crisp edges, clean bright background. The product color must stay faithful to the real item."
+hint = "Product photo for an online store. Color must stay faithful to the real item; a neutral, clean, bright look is expected."
+look = {}
+look_reason = ""
 use_product_mask = true
 studio_prompt = "product on a clean white surface, soft diffused studio lighting, commercial photography"
 [product.bounds]
@@ -31,7 +36,9 @@ max_mean_delta_e = 6.0
 
 [store]
 label = "매장"
-hint = "Store, interior or exterior photo. Bright, welcoming, balanced exposure, open up dark corners, keep colors natural."
+hint = "Store, interior or exterior photo. Should feel bright and welcoming with natural colors. Warm interior lighting is normal, not a problem."
+look = { vibrance = 0.05 }
+look_reason = "매장이 조금 더 생기 있게 보이도록 색을 아주 살짝 살렸습니다"
 use_product_mask = false
 [store.bounds]
 saturation = [-0.2, 0.2]

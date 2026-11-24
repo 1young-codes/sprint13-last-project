@@ -129,8 +129,13 @@ def relight(image: np.ndarray, subject: np.ndarray, prompt: str, rule: dict) -> 
         spread, inside = rule["shade_sigma"] * max(image.shape[:2]), subject
         shade = (gaussian_filter(luminance(after) * inside, spread)
                  / np.maximum(gaussian_filter(luminance(before) * inside, spread), 1e-4))
-        product = linear_to_srgb(before * np.clip(shade, *rule["shade_range"])[..., None])
+        relit = before * np.clip(shade, *rule["shade_range"])[..., None]
+        # 한 채널이 끝을 넘으면 세 채널을 같은 비율로 낮춰 색이 하얗게 바래지 않게 함
+        product = linear_to_srgb(relit / np.maximum(relit.max(axis=-1, keepdims=True), 1.0))
     else:
         detail = image - np.stack([gaussian_filter(image[..., c], sigma) for c in range(3)], axis=-1)
         product = np.stack([gaussian_filter(lit[..., c], sigma) for c in range(3)], axis=-1) + detail
-    return np.clip(lit * (1 - weight) + product * weight, 0, 1).astype(np.float32)
+    # 반투명 테두리에는 원래 배경색이 섞여 있어 띠로 남으므로, 그 띠는 새 조명 쪽 화소를 씀
+    low, high = rule["edge_band"]
+    solid = np.clip((subject - low) / (high - low), 0, 1)[..., None]
+    return np.clip(lit * (1 - solid) + product * solid, 0, 1).astype(np.float32)

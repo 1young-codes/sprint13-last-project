@@ -15,7 +15,7 @@ from .retouch import retouch
 from .settings import load_categories, project_path
 
 NAMES = {"exposure_ev": "밝기", "temperature": "색온도", "tint": "색조", "contrast": "대비", "highlights": "밝은 부분",
-         "shadows": "어두운 부분", "vibrance": "생동감", "saturation": "채도", "clarity": "윤곽", "sharpen": "선명도"}
+         "shadows": "어두운 부분", "vibrance": "생동감", "saturation": "채도"}
 REGION_NAMES = {"global": "사진 전체", "product": "상품", "background": "배경"}
 
 
@@ -35,6 +35,8 @@ def explain(report: dict) -> str:
         lines.append(f"- 이 후보를 고른 이유: {report['chosen_reason']}")
     if report.get("removed"):
         lines.append(f"- 지운 것: {', '.join(report['removed'])}")
+    if report.get("kept"):
+        lines += ["", "## 일부러 그대로 둔 것", *[f"- {why}" for why in report["kept"].values()]]
     lines += ["", "## 실물 검사 (상품 영역)"]
     for candidate in report["candidates"]:
         f = candidate["fidelity"]

@@ -7,19 +7,18 @@ Categories:
 {categories}
 Answer with JSON only: {{"category": "<category key>", "subject": "<what is being sold, a few Korean words>"}}"""
 
-[diagnose]
-text = """You are a senior commercial photo retoucher preparing this photo for a small-business advertisement.
+[review]
+text = """You are a senior commercial photo retoucher checking this photo before it goes into a small-business advertisement.
 Category: {label}. {hint}
 Main subject: {subject}.
-The shop owner knows nothing about design, so you decide everything. You may only use the global adjustments below; you cannot add, remove or redraw anything.
-0 means unchanged. Allowed ranges:
-{ranges}
-"global" applies to the whole photo. "product" values are added on top inside the main subject only, "background" values outside it only. Use them to make the subject stand out naturally (for example a little more clarity on the subject, a little less saturation on a busy background). Leave them empty if not needed.
-Do not beautify or reshape faces. Keep colors true to the real item.
-List small distracting objects in the background that a professional retoucher would remove (litter, stray cables, stains, small clutter). Never list the subject, people, text, logos or watermarks. Boxes are [x0, y0, x1, y1] normalized to 0-1000. Leave the list empty when unsure.
-Give "reasons" one entry per region for every adjustment key you set to a non-zero value in that region, each in Korean as one short plain sentence a shop owner understands: what looked wrong and what you changed.
-Answer with JSON only:
-{{"problems": ["<Korean>"], "global": {{"exposure_ev": 0.0}}, "product": {{}}, "background": {{}}, "reasons": {{"global": {{"exposure_ev": "<Korean>"}}, "product": {{}}, "background": {{}}}}, "distractions": [{{"label": "<Korean>", "box": [0, 0, 0, 0]}}]}}"""
+Measurements found these possible problems, each with the correction that would be applied:
+{findings}
+For each one decide: is it a real flaw a professional would correct, or part of the intended look or scene that should be kept (for example warm restaurant light is not a color cast, a dark moody background is not underexposure)? When unsure, keep.
+Also decide whether the background is busy or colorful enough to steal attention from the subject; if so, its colors will be calmed slightly.
+List small distracting objects in the background a retoucher would remove (litter, stray cables, stains). Never list the subject, people, text, logos or watermarks. Boxes are [x0, y0, x1, y1] normalized to 0-1000. Leave the list empty when unsure.
+Write every reason in Korean as one short plain sentence a shop owner understands.
+Answer with JSON only, using only the problem names listed above:
+{{"problems": ["<Korean>"], "fix": {{"<name>": "<Korean: what looked wrong and what changes>"}}, "keep": {{"<name>": "<Korean: why it is left as is>"}}, "calm_background": "<Korean reason, or empty string>", "distractions": [{{"label": "<Korean>", "box": [0, 0, 0, 0]}}]}}"""
 
 [judge]
 text = """Image 1 is the original photo. Images 2 to {last} are retouched candidates for a {label} advertisement of {subject}.

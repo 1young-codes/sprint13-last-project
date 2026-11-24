@@ -1,7 +1,7 @@
-"""OpenAI 모델로 사진을 해석합니다: 업종 판단, 진단과 보정 값 제안, 후보 고르기, 지울 물건 위치.
+"""OpenAI 모델로 사진을 해석합니다: 업종 판단, 잰 문제를 바로잡을지 판단, 후보 고르기, 지울 물건 위치.
 
-해석만 합니다. 픽셀은 adjustments.py가 바꾸므로, 모델이 무엇을 말해도 사진 내용이 새로 그려지지 않습니다.
-모델이 낸 값은 업종 범위로 잘라 쓰고, 모르는 키나 깨진 답은 버립니다.
+해석만 합니다. 보정 값은 auto_params.py가 사진을 재서 정하고, 픽셀은 adjustments.py가 바꿉니다.
+모르는 이름이나 깨진 답은 버립니다.
 """
 
 import base64
@@ -10,10 +10,8 @@ import json
 
 import numpy as np
 
-from .adjustments import clamp_params, to_image
+from .adjustments import to_image
 from .settings import env_value, load_categories, load_settings, read_toml
-
-REGIONS = ("global", "product", "background")
 
 
 def parse_json(text: str) -> dict:
@@ -28,13 +26,14 @@ def parse_json(text: str) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def clean_plan(raw: dict, bounds: dict) -> dict:
-    """모델 답을 쓸 수 있는 보정 계획으로 다듬습니다."""
-    plan = {region: clamp_params(raw.get(region) or {}, bounds) for region in REGIONS}
-    reasons = raw.get("reasons") if isinstance(raw.get("reasons"), dict) else {}
-    plan["reasons"] = {region: {k: v for k, v in reasons[region].items() if isinstance(v, str)}
-                       for region in REGIONS if isinstance(reasons.get(region), dict)}
-    plan["problems"] = [str(p) for p in raw.get("problems") or [] if isinstance(p, str)]
+def clean_review(raw: dict, offered) -> dict:
+    """모델 답을 다듬습니다. 측정에서 나온 이름만 받고, 바로잡으라는 답이 없으면 둡니다."""
+    def named(key):
+        value = raw.get(key) if isinstance(raw.get(key), dict) else {}
+        return {name: reason for name, reason in value.items() if name in offered and isinstance(reason, str)}
+
+    fix = named("fix")
+    calm = raw.get("calm_background")
     boxes = []
     for item in raw.get("distractions") or []:
         box = item.get("box") if isinstance(item, dict) else None
@@ -42,12 +41,9 @@ def clean_plan(raw: dict, bounds: dict) -> dict:
             x0, y0, x1, y1 = (float(np.clip(v, 0, 1000)) for v in box)
             if x1 > x0 and y1 > y0:
                 boxes.append({"label": str(item.get("label", "")), "box": [x0, y0, x1, y1]})
-    plan["distractions"] = boxes
-    return plan
-
-
-def describe_ranges(bounds: dict) -> str:
-    return "\n".join(f"- {key}: {low:+.2f} to {high:+.2f}" for key, (low, high) in bounds.items())
+    return {"fix": fix, "keep": {k: v for k, v in named("keep").items() if k not in fix},
+            "calm_background": calm.strip() if isinstance(calm, str) else "",
+            "problems": [p for p in raw.get("problems") or [] if isinstance(p, str)], "distractions": boxes}
 
 
 class Interpreter:
@@ -83,11 +79,12 @@ class Interpreter:
         category = answer.get("category") if answer.get("category") in categories else self.settings["fallback_category"]
         return category, str(answer.get("subject") or categories[category]["label"])
 
-    def diagnose(self, image: np.ndarray, rule: dict, subject: str) -> tuple[dict, str]:
-        text = self.prompts["diagnose"]["text"].format(label=rule["label"], hint=rule["hint"], subject=subject,
-                                                       ranges=describe_ranges(rule["bounds"]))
+    def review(self, image: np.ndarray, rule: dict, subject: str, found: dict) -> tuple[dict, str]:
+        """측정된 바로잡을 거리마다 진짜 문제인지, 분위기라 둘지 판단합니다."""
+        findings = "\n".join(f"- {name}: {item['finding']}" for name, item in found.items()) or "- (none)"
+        text = self.prompts["review"]["text"].format(label=rule["label"], hint=rule["hint"], subject=subject, findings=findings)
         answer = self.ask([image], text)
-        return clean_plan(parse_json(answer), rule["bounds"]), answer
+        return clean_review(parse_json(answer), found), answer
 
     def judge(self, original: np.ndarray, candidates: list[np.ndarray], rule: dict, subject: str) -> tuple[int, str]:
         """후보 번호(0부터)와 한국어 이유. 답이 깨지면 첫 후보."""
