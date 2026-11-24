@@ -1,0 +1,10 @@
+# Qwen-Image 2.1 생성 속도를 올리는 캐싱 설정입니다.
+
+# 결과가 같은 최적화: 글자와 참고 이미지 부분을 첫 단계에서 계산해 두고 다음 단계부터 재사용
+reuse_condition_cache = true
+# MagCache: 변화가 작은 단계는 계산을 건너뛰고 앞 단계의 변화량을 재사용 (결과가 아주 조금 달라짐)
+# 크기 비율은 기능마다 자기 사진으로 재서 파일로 둡니다 (mag_cache.py 설명 참고)
+mag_cache = true
+mag_cache_threshold = 0.06                # 누적 오차가 이 값 이하면 건너뜀. 클수록 빠르고 품질은 떨어짐
+mag_cache_max_skip_steps = 3              # 연속으로 건너뛸 수 있는 최대 단계 수
+mag_cache_retention_ratio = 0.2           # 앞쪽 이 비율의 단계는 그림 구도가 잡히는 때라 건너뛰지 않음

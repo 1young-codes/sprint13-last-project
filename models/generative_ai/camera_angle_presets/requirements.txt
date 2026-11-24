@@ -1,0 +1,27 @@
+# 카메라 앵글 바꾸기 기능 (Ubuntu 24.04, 파이썬 3.12, NVIDIA L4 기준)
+# 생성 모델 버전은 ai-generation 프로젝트에서 Qwen-Image 2.1이 돌아간 버전과 같습니다.
+torch==2.14.0
+torchvision==0.29.0
+diffusers==0.43.0
+transformers==5.17.0
+accelerate==1.15.0
+safetensors==0.8.0
+huggingface_hub
+numpy
+pillow
+
+# 깊이 추정(MoGe) 코드가 쓰는 패키지 (microsoft/MoGe pyproject.toml 기준, 화면용 gradio 제외)
+click
+scipy
+matplotlib
+trimesh
+opencv-python-headless
+requests
+tqdm
+utils3d_moge @ git+https://github.com/EasternJournalist/utils3d-moge.git@62f09d58509485564e24d5d9f6aac9ee9ebc0c37
+pipeline @ git+https://github.com/EasternJournalist/pipeline.git@1c511390d90226c00c101f34b84df26a0f8789b4
+# MoGe 3에만 필요합니다 (settings.toml의 depth.model = "moge3"). 설치에 CUDA 컴파일러(nvcc)가 필요합니다.
+# flex-gemm @ git+https://github.com/JeffreyXiang/FlexGEMM.git@b2fadb29d41846c7981ade6801ffc689fae119cf
+
+# 선택: INT8 곱셈 전용 커널. 있으면 생성이 빨라집니다.
+# comfy-kitchen
