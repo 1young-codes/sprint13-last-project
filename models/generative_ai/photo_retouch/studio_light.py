@@ -124,8 +124,11 @@ def relight(image: np.ndarray, subject: np.ndarray, prompt: str, rule: dict) -> 
     sigma = rule["detail_sigma_px"]
     if rule["keep_product_color"]:
         # 상품은 원본 색과 세부를 그대로 두고, 새 조명의 밝기 분포(그림자, 하이라이트)만 곱함
+        # 상품 안쪽만 넣어 흐리게 하므로 테두리에서 배경 밝기가 섞이지 않음 (가중치는 나눗셈에서 지워짐)
         before, after = srgb_to_linear(image), srgb_to_linear(lit)
-        shade = gaussian_filter(luminance(after), sigma) / np.maximum(gaussian_filter(luminance(before), sigma), 1e-3)
+        spread, inside = rule["shade_sigma"] * max(image.shape[:2]), subject
+        shade = (gaussian_filter(luminance(after) * inside, spread)
+                 / np.maximum(gaussian_filter(luminance(before) * inside, spread), 1e-4))
         product = linear_to_srgb(before * np.clip(shade, *rule["shade_range"])[..., None])
     else:
         detail = image - np.stack([gaussian_filter(image[..., c], sigma) for c in range(3)], axis=-1)
