@@ -1,6 +1,7 @@
 # VARestorer 저장소 requirements.txt(커밋 d500fad) 그대로입니다. 추론 코드가 쓰는 torchvision을 더하고, pyiqa는 transformers 4와 맞는 버전으로 고정했습니다.
 # 저장소의 transformers 4.57.6은 torch 2.6 이상을 요구해 고정된 torch 2.5.1과 맞지 않아, torch 2.5를 지원하는 4.52.4로 낮췄습니다 (텍스트 인코더 불러오기에만 쓰임).
 # lora와 flash_attn은 torch가 먼저 깔려야 해서 setup.toml의 extra_installs로 따로 설치합니다.
+# lora가 불러오는 diffusers는 버전이 비어 있으면 torch 2.6 이상을 요구하는 최신판이 깔려서, torch 2.5와 맞는 버전으로 고정합니다.
 easydict==1.13
 typed-argument-parser==1.12.0
 seaborn==0.13.2
@@ -25,3 +26,4 @@ setuptools==80.10.2
 pyiqa==0.1.15
 scipy
 torchvision==0.20.1
+diffusers==0.33.1
