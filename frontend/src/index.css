@@ -1,0 +1,534 @@
+/* 색과 간격은 여기서 한 번에 정한다. 화면 시안(밝은 회색 바탕, 파란 강조색)을 따른다. */
+:root {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --text: #1f2430;
+  --muted: #6b7280;
+  --line: #e3e5ea;
+  --accent: #2547d0;
+  --accent-soft: #e8edfc;
+  --radius: 12px;
+  font-family: 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 12px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  font-weight: 700;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.tab {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.tab.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.content {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 32px 16px;
+}
+
+.page h1 {
+  margin: 16px 0 4px;
+  font-size: 24px;
+}
+
+.lead {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.card {
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.placeholder {
+  color: var(--muted);
+  text-align: center;
+  border-style: dashed;
+}
+
+.stepper {
+  display: flex;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.step + .step::before {
+  content: '';
+  width: 40px;
+  height: 1px;
+  margin-right: 6px;
+  background: var(--line);
+}
+
+.dot {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-size: 12px;
+}
+
+.step.now .dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.step.now .name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.step.done .dot {
+  border-color: var(--text);
+  color: var(--text);
+}
+
+@media (max-width: 600px) {
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 12px 16px;
+  }
+}
+
+/* ---------- 버튼과 입력 ---------- */
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.primary {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.secondary {
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.link {
+  border: none;
+  background: none;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+textarea,
+input[type='text'] {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  resize: vertical;
+}
+
+.field-label {
+  display: block;
+  margin: 16px 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.form .field-label:first-child {
+  margin-top: 0;
+}
+
+.hint {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.error {
+  margin: 6px 0 0;
+  color: #c62828;
+  font-size: 13px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.footer.end {
+  justify-content: flex-end;
+}
+
+/* ---------- 사진 올리기 ---------- */
+.drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 28px 16px;
+  border: 1.5px dashed var(--line);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+.drop.dragging {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.drop p {
+  margin: 0;
+}
+
+.drop-icon {
+  font-size: 24px;
+  color: var(--muted);
+}
+
+.drop-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.drop-preview img {
+  max-width: 240px;
+  max-height: 240px;
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+/* ---------- 상태 표시 ---------- */
+.status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.status.error {
+  color: #c62828;
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- 게시글 카드 (인스타 PC 모양) ---------- */
+.post {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin-bottom: 16px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.post-photo {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1 / 1;
+  background: #dde1e8;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.post-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.post-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.post-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #dde1e8;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.avatar.large {
+  width: 72px;
+  height: 72px;
+  font-size: 13px;
+}
+
+.badge {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.badge.product {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.badge.usage {
+  background: #fdeee2;
+  color: #b4581c;
+}
+
+.post-text {
+  flex: 1;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.post-text p {
+  margin: 0 0 8px;
+}
+
+.tags {
+  color: var(--accent);
+}
+
+.post-icons {
+  display: flex;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.post-icons .right {
+  margin-left: auto;
+}
+
+.post-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---------- 게시 완료 ---------- */
+.done-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+  background: var(--accent-soft);
+  border-color: #c9d4f7;
+  font-size: 14px;
+}
+
+.done-banner strong {
+  color: var(--accent);
+  font-size: 16px;
+}
+
+.profile-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding-bottom: 20px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.profile-head p {
+  margin: 4px 0 0;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.tile {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  background: #dde1e8;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.tile.empty {
+  background: transparent;
+  border: 1.5px dashed var(--line);
+  padding: 8px;
+}
+
+.tile-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+}
+
+@media (max-width: 600px) {
+  .post {
+    grid-template-columns: 1fr;
+  }
+
+  .grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ---------- 각도 고르기 ---------- */
+.angle {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.angle-toggle {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.angle-toggle .hint {
+  margin: 0;
+  font-weight: 400;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.chip {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
