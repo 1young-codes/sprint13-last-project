@@ -1,0 +1,107 @@
+# 업스케일 모델 비교 설정입니다. 코드는 이 파일만 읽고, 숫자와 기준을 코드에 두지 않습니다.
+
+# 비교 기준점: 생성 없이 키우기만 하는 바이큐빅. 원본을 지어내지 않는 쪽의 끝값입니다.
+baseline = "bicubic"
+
+# ── 비교 조건 ──────────────────────────────────────────────
+# source: settings.toml [paths]의 키, pattern: 그 폴더 안에서 고를 사진, exclude: 이름에 이 글자가 있으면 제외
+# degrade = true면 사진을 1/scale로 줄여 입력으로 쓰고, 원본을 정답으로 삼아 정답 기준 지표(gt_)를 잽니다.
+
+[conditions.x4_real]
+label = "실사 원본 ×4"
+source = "bench_photos_dir"
+pattern = "*"
+scale = 4
+
+[conditions.x2_pipeline]
+label = "각도 프리셋 결과 ×2 (실제 흐름)"
+source = "camera_angle_dir"
+pattern = "*/*.png"
+exclude = ["_before_fill", "_empty_mask", "_mask"]
+scale = 2
+max_images = 13
+
+[conditions.x2_synthetic]
+label = "각도 프리셋 결과를 절반으로 줄였다 ×2 복원 (정답 비교)"
+source = "camera_angle_dir"
+pattern = "*/*.png"
+exclude = ["_before_fill", "_empty_mask", "_mask"]
+scale = 2
+max_images = 13
+degrade = true
+
+# ── 지표 ─────────────────────────────────────────────────
+# lr_: 결과를 입력 크기로 되돌려 줄인 뒤 입력과 비교 (없던 것을 지어내 원본과 달라졌는지)
+# gt_: 정답 사진과 비교 (degrade 조건만)
+[metrics]
+full_reference = ["psnr", "ssim", "lpips", "dists"]
+no_reference = ["musiq", "maniqa", "clipiqa"]
+face_model = "buffalo_l"                 # 얼굴 동일인 유사도 (insightface)
+face_detect_size = 640
+ocr_languages = ["en", "ko"]             # 글자 보존 (easyocr 글자 오류율)
+
+# ── 선정 규칙 (실사 원본 보존 최우선) ─────────────────────────
+# 1) 통과선: 하나라도 못 넘으면 탈락. 첫 측정 뒤 바이큐빅 값을 보고 조정합니다.
+[[selection.gates]]
+condition = "x4_real"
+metric = "lr_psnr"
+min = 30.0
+
+[[selection.gates]]
+condition = "x4_real"
+metric = "face_similarity"
+min = 0.7
+
+[[selection.gates]]
+condition = "x4_real"
+metric = "ocr_cer"
+max = 0.2
+
+[[selection.gates]]
+condition = "x2_pipeline"
+metric = "lr_psnr"
+min = 30.0
+
+# 2) 통과한 모델끼리 지표별 순위를 매기고 가중 평균 순위가 가장 낮은 모델을 고릅니다. 보존 지표에 가중치를 더 둡니다.
+[[selection.rank]]
+condition = "x2_synthetic"
+metric = "gt_dists"
+weight = 3
+
+[[selection.rank]]
+condition = "x2_synthetic"
+metric = "gt_lpips"
+weight = 2
+
+[[selection.rank]]
+condition = "x4_real"
+metric = "lr_lpips"
+weight = 2
+
+[[selection.rank]]
+condition = "x4_real"
+metric = "musiq"
+weight = 1
+
+[[selection.rank]]
+condition = "x2_pipeline"
+metric = "seconds_per_image"
+weight = 1
+
+[[selection.rank]]
+condition = "x2_pipeline"
+metric = "peak_vram_mb"
+weight = 0.5
+
+[report]
+crop_height = 256                        # 확대 비교 그림에서 영역 한 칸의 높이 (픽셀)
+
+# ── 영역 ─────────────────────────────────────────────────
+# 사진별로 확대해 볼 영역 [왼쪽, 위, 오른쪽, 아래] (입력 사진 픽셀 기준). 영역마다 되돌려 줄인 PSNR을 따로 잽니다.
+[regions.AKR20190816091000051_01_i_P2]
+face = [200, 50, 290, 135]
+hair_hat_edge = [180, 25, 315, 80]
+fish_scales = [170, 160, 330, 250]
+dorsal_fin = [200, 130, 340, 190]
+fish_eye = [95, 165, 140, 205]
+text = [315, 285, 495, 320]
