@@ -1,7 +1,7 @@
 """모델별 가상환경, 추론 코드, 가중치를 준비합니다.
 
-    python -m models.generative_ai.upscales.setup_model              # 모든 모델과 benchmark
-    python -m models.generative_ai.upscales.setup_model vosr fidesr  # 일부만
+    python -m models.generative_ai.upscales.setup_model              # 모든 모델 (지금은 pixrestore 하나)
+    python -m models.generative_ai.upscales.setup_model pixrestore   # 하나만
 
 각 폴더의 setup.toml을 따릅니다.
 - [environment]: 파이썬 버전과 requirements.txt로 settings.toml의 venv_dir 아래에 가상환경을 만듭니다.
@@ -100,5 +100,5 @@ def setup(name: str) -> None:
 
 
 if __name__ == "__main__":
-    for model in sys.argv[1:] or ["benchmark", *model_names()]:
+    for model in sys.argv[1:] or model_names():
         setup(model)

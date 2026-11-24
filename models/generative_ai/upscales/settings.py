@@ -45,7 +45,7 @@ def project_path(name: str) -> Path:
 
 
 def load_spec(name: str) -> dict:
-    """모델(또는 benchmark) 폴더의 setup.toml."""
+    """모델 폴더의 setup.toml."""
     path = PACKAGE_DIR / name / SPEC_FILE
     if not path.is_file():
         raise FileNotFoundError(f"{name}: {path.relative_to(PROJECT_ROOT)}이 없습니다 (모델 목록: {', '.join(model_names())})")

@@ -5,10 +5,7 @@
 [paths]
 code_dir = "data/vendor/upscales"           # UPSCALE_CODE_DIR: 모델별 추론 코드(커밋 고정)
 venv_dir = "data/venvs/upscales"            # UPSCALE_VENV_DIR: 모델별 가상환경 (모델마다 torch 버전이 달라 나눔)
-output_dir = "outputs/upscales"             # UPSCALE_OUTPUT_DIR: 업스케일 결과와 비교 보고서
-bench_photos_dir = "data/upscale_bench"     # UPSCALE_BENCH_PHOTOS_DIR: 비교용 실사 사진
-camera_angle_dir = "outputs/camera_angle"   # UPSCALE_CAMERA_ANGLE_DIR: 각도 프리셋 결과 (실제 흐름의 업스케일 입력)
-metric_models_dir = "data/models/metrics"   # UPSCALE_METRIC_MODELS_DIR: 얼굴 인식·글자 인식 모델
+output_dir = "outputs/upscales"             # UPSCALE_OUTPUT_DIR: 업스케일 결과
 
 [tools]
 uv = "uv"                                   # 가상환경을 만드는 도구 (PATH에서 찾음)

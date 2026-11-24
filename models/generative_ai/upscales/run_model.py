@@ -1,6 +1,6 @@
 """모델 하나로 폴더 안 사진을 업스케일하고, 걸린 시간과 최대 그래픽 메모리를 잽니다.
 
-    python -m models.generative_ai.upscales.run_model vosr --input 사진폴더 --scale 4
+    python -m models.generative_ai.upscales.run_model pixrestore --input 사진폴더 --scale 2
 
 모델은 자기 가상환경의 파이썬으로 따로 실행되고(setup.toml [run] command), 이 모듈은 바깥에서 지켜봅니다.
 결과는 모델마다 이름 규칙이 달라서, 원본 이름 그대로 <출력 폴더>/<원본 이름>.png로 모아 둡니다.
@@ -26,20 +26,9 @@ def list_images(folder: Path) -> list[Path]:
     return sorted(p for p in folder.iterdir() if p.suffix.lower() in suffixes)
 
 
-def build_command(name: str, spec: dict, input_dir: Path, output_dir: Path, scale: int, images: list[Path]) -> list[str]:
-    command = spec["run"]["command"]
-    text = " ".join(command)
+def build_command(name: str, spec: dict, input_dir: Path, output_dir: Path, scale: int) -> list[str]:
     values = {"input_dir": input_dir.resolve(), "output_dir": output_dir.resolve(), "scale": scale}
-    if "{input_file}" in text or "{input_stem}" in text:  # 한 번에 한 장만 받는 모델 (VARestorer)
-        if len(images) != 1:
-            raise ValueError(f"{name}: 한 번에 사진 한 장만 받는 모델입니다. 폴더에 한 장만 넣으세요")
-        values |= {"input_file": images[0].resolve(), "input_stem": images[0].stem}
-    if "{out_short}" in text:  # 배율 대신 출력 짧은 변을 받는 모델 (SeedVR2)
-        sizes = {Image.open(p).size for p in images}
-        if len(sizes) != 1:
-            raise ValueError(f"{name}: 출력 크기를 하나로 받는 모델이라 크기가 같은 사진만 한 번에 넣을 수 있습니다")
-        values["out_short"] = min(sizes.pop()) * scale
-    return [str(venv_python(name)), *(part.format(**values) for part in command)]
+    return [str(venv_python(name)), *(part.format(**values) for part in spec["run"]["command"])]
 
 
 def watch(command: list[str], cwd: Path, env: dict, log_path: Path) -> tuple[float, float, int]:
@@ -153,12 +142,12 @@ def run(name: str, input_dir: Path, output_dir: Path, scale: int) -> dict:
     if tiles:  # 학습 해상도 조각으로만 제대로 도는 1배 복원 모델: 먼저 키우고 조각내서 돌린 뒤 이어 붙임
         tile_dir, tile_out = output_dir / "tiles", output_dir / "tiles_out"
         layouts = cut_tiles(images, scale, tiles, tile_dir)
-        command = build_command(name, spec, tile_dir, tile_out, 1, list_images(tile_dir))
+        command = build_command(name, spec, tile_dir, tile_out, 1)
         seconds, peak_mb, code = watch(command, code_folder(name), env, output_dir / "run.log")
         if code == 0:
             join_tiles(layouts, tiles, tile_out, raw_dir)
     else:
-        command = build_command(name, spec, input_dir, raw_dir, scale, images)
+        command = build_command(name, spec, input_dir, raw_dir, scale)
         seconds, peak_mb, code = watch(command, code_folder(name), env, output_dir / "run.log")
     info = {
         "model": name, "scale": scale, "images": len(images), "returncode": code,
@@ -171,7 +160,7 @@ def run(name: str, input_dir: Path, output_dir: Path, scale: int) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(prog="python -m models.generative_ai.upscales.run_model", description="모델 하나로 업스케일합니다")
-    parser.add_argument("model", help="모델 폴더 이름 (예: vosr)")
+    parser.add_argument("model", help="모델 폴더 이름 (예: pixrestore)")
     parser.add_argument("--input", type=Path, required=True, help="입력 사진 폴더")
     parser.add_argument("--scale", type=int, default=4, help="배율")
     parser.add_argument("--output", type=Path, help="결과 폴더 (기본: settings.toml output_dir/<모델>)")

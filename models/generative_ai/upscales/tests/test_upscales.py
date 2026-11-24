@@ -1,16 +1,14 @@
-"""그래픽 카드와 모델 없이 도는 확인: 설정 파일, 실행 명령 만들기, 글자 오류율, 선정 규칙."""
+"""그래픽 카드와 모델 없이 도는 확인: 설정 파일, 실행 명령 만들기, 결과 모으기, 조각 나누기."""
 
 from pathlib import Path
 
-import pytest
+import numpy as np
 from PIL import Image
 
-from models.generative_ai.upscales.benchmark.metrics import char_error_rate, psnr
-from models.generative_ai.upscales.benchmark.report import average, select
 from models.generative_ai.upscales.run_model import build_command, collect_outputs
-from models.generative_ai.upscales.settings import load_spec, model_names, read_toml, PACKAGE_DIR
+from models.generative_ai.upscales.settings import load_spec, model_names, PACKAGE_DIR
 
-EXPECTED_MODELS = {"fidesr", "pixrestore", "seedvr2", "varestorer", "vosr"}
+EXPECTED_MODELS = {"pixrestore"}  # 비교 끝에 고른 모델 하나만 남김
 
 
 def test_every_model_has_complete_spec():
@@ -28,13 +26,9 @@ def test_every_model_has_complete_spec():
 
 
 def test_build_command_fills_placeholders(tmp_path):
-    image = tmp_path / "photo.png"
-    Image.new("RGB", (50, 30)).save(image)
-    spec = {"run": {"command": ["x.py", "{input_file}", "{output_dir}/{input_stem}.png", "{out_short}", "{scale}"]}}
-    command = build_command("m", spec, tmp_path, tmp_path / "out", 4, [image])
-    assert command[1:] == ["x.py", str(image.resolve()), f"{(tmp_path / 'out').resolve()}/photo.png", "120", "4"]
-    with pytest.raises(ValueError):
-        build_command("m", spec, tmp_path, tmp_path, 4, [image, image])
+    spec = {"run": {"command": ["x.py", "-i", "{input_dir}", "-o", "{output_dir}", "--upscale", "{scale}"]}}
+    command = build_command("m", spec, tmp_path, tmp_path / "out", 4)
+    assert command[1:] == ["x.py", "-i", str(tmp_path.resolve()), "-o", str((tmp_path / "out").resolve()), "--upscale", "4"]
 
 
 def test_collect_outputs_matches_names_and_fixes_size(tmp_path):
@@ -46,28 +40,6 @@ def test_collect_outputs_matches_names_and_fixes_size(tmp_path):
     result = collect_outputs(tmp_path / "raw", tmp_path, [source], 4)
     assert result["photo"]["resized_to"] == [40, 24]
     assert Image.open(tmp_path / "photo.png").size == (40, 24)
-
-
-def test_char_error_rate_and_psnr():
-    assert char_error_rate("YONHAP NEWS", "yonhapnews") == 0
-    assert char_error_rate("ABCD", "ABXD") == 0.25
-    assert char_error_rate("", "ABC") is None
-    same = Image.new("RGB", (4, 4), (10, 20, 30))
-    assert psnr(same, same) == float("inf")
-
-
-def test_selection_gates_then_ranks():
-    config = read_toml(PACKAGE_DIR / "benchmark" / "benchmark.toml")
-    rows = [
-        {"condition": "c", "model": "good", "status": "ok", "lr_psnr": 40, "gt_lpips": 0.1},
-        {"condition": "c", "model": "pretty", "status": "ok", "lr_psnr": 38, "gt_lpips": 0.2},
-        {"condition": "c", "model": "liar", "status": "ok", "lr_psnr": 20, "gt_lpips": 0.05},
-    ]
-    selection = {"gates": [{"condition": "c", "metric": "lr_psnr", "min": 30}],
-                 "rank": [{"condition": "c", "metric": "gt_lpips", "weight": 1}]}
-    choice = select(average(rows), ["good", "pretty", "liar"], selection, {"lpips": True})
-    assert "liar" in choice["failed"] and choice["chosen"] == "good"
-    assert config["baseline"] and config["selection"]["gates"]
 
 
 def test_tiles_cover_image_and_join_back(tmp_path):
@@ -84,4 +56,4 @@ def test_tiles_cover_image_and_join_back(tmp_path):
     join_tiles(layouts, tiles, tmp_path / "tiles", tmp_path / "raw")  # 모델 대신 조각을 그대로 되돌림
     joined = Image.open(tmp_path / "raw" / "photo.png")
     expected = Image.open(source).resize((600, 400), Image.BICUBIC)
-    assert joined.size == (600, 400) and psnr(joined, expected) == float("inf")
+    assert joined.size == (600, 400) and np.array_equal(np.asarray(joined), np.asarray(expected))
