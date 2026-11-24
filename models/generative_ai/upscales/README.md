@@ -30,7 +30,8 @@ PixRestore는 1배 복원 모델입니다. 그래서 먼저 바이큐빅으로 �
 python -m models.generative_ai.upscales.setup_model
 ```
 
-`pixrestore/setup.toml`을 따라 다음을 준비합니다.
+가상환경은 두 개입니다. `runner`는 실행 스크립트를 돌리며 시간과 그래픽 메모리를 재는 작은 환경이고, `pixrestore`는 모델이 도는 환경입니다.
+모델 환경은 `pixrestore/setup.toml`을 따라 다음을 준비합니다.
 
 | 항목 | 내용 |
 | --- | --- |
@@ -50,6 +51,7 @@ python -m models.generative_ai.upscales.setup_model
 ## 실행
 
 폴더 안 사진을 키웁니다. 걸린 시간과 최대 그래픽 메모리를 `run_info.json`에 남깁니다.
+`runner` 가상환경의 파이썬으로 실행합니다. 가상 머신에서는 `/data/venvs/upscales/runner/bin/python`입니다.
 
 ```bash
 python -m models.generative_ai.upscales.run_model pixrestore --input 사진폴더 --scale 2

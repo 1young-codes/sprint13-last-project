@@ -25,6 +25,11 @@ def test_every_model_has_complete_spec():
         assert set(spec["run"]["scales"]) >= {2, 4}
 
 
+def test_runner_env_is_not_a_model():
+    assert "run" not in load_spec("runner") and load_spec("runner")["environment"]["python"] >= "3.11"
+    assert (PACKAGE_DIR / "runner" / "requirements.txt").is_file()
+
+
 def test_build_command_fills_placeholders(tmp_path):
     spec = {"run": {"command": ["x.py", "-i", "{input_dir}", "-o", "{output_dir}", "--upscale", "{scale}"]}}
     command = build_command("m", spec, tmp_path, tmp_path / "out", 4)
