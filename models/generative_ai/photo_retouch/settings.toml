@@ -88,6 +88,8 @@ light_direction = "none"      # none, left, right, top, bottom
 added_prompt = "best quality"
 negative_prompt = "lowres, bad anatomy, bad hands, cropped, worst quality"
 detail_sigma_px = 3.0         # 이보다 작은 세부(질감, 글자)는 원본에서 가져옴
+keep_product_color = true     # 상품은 원본 색 유지, 새 조명의 밝기 분포만 입힘
+shade_range = [0.25, 4.0]     # 상품 밝기를 바꾸는 배율 한계
 [studio_light.fidelity]       # 조명은 색을 일부러 바꾸므로 색 기준만 넓히고 구조 기준은 그대로
 max_mean_delta_e = 25.0
 max_new_clipping = 0.02

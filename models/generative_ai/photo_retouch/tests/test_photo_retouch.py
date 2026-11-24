@@ -96,3 +96,9 @@ def test_explain_mentions_changes():
               "candidates": [{"name": "vlm_x1", "fidelity": {"ok": True, "delta_e": 3.0, "structure": 0.99, "problems": []}}]}
     text = explain(report)
     assert "밝기 +0.30: 어두워서 밝혔습니다" in text and "통과" in text
+
+
+def test_saturated_color_is_not_clipping():
+    orange = np.zeros((32, 32, 3), np.float32) + np.array([0.9, 0.5, 0.2], np.float32)
+    deeper = np.zeros_like(orange) + np.array([0.9, 0.45, 0.0], np.float32)
+    assert check(orange, deeper, None, SETTINGS["fidelity"])["new_clipping"] == 0

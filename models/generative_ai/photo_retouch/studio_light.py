@@ -4,12 +4,13 @@
 - 기반 SD1.5의 첫 합성곱을 8채널로 늘리고, IC-Light 가중치를 기존 가중치에 더함
 - 상품을 회색 배경에 놓고 잠재 공간으로 바꿔 매 단계 함께 넣음
 - 낮은 해상도에서 만들고, 키운 뒤 한 번 더 다듬음 (highres)
-생성 뒤에는 상품 영역의 작은 세부(질감, 글자)를 원본에서 다시 가져와, 빛과 색만 바뀌고 모양은 그대로 남게 합니다.
+생성 뒤 상품 영역은 원본 색과 세부를 두고 새 조명의 밝기만 입힙니다(keep_product_color). 끄면 생성된 색에 원본 세부만 다시 입힙니다.
 """
 
 import numpy as np
 from scipy.ndimage import gaussian_filter
 
+from .adjustments import linear_to_srgb, luminance, srgb_to_linear
 from .cleanup import resize
 from .download_models import model_folder
 
@@ -121,6 +122,12 @@ def relight(image: np.ndarray, subject: np.ndarray, prompt: str, rule: dict) -> 
     lit = relighter.run(foreground, prompt, rule)
     relighter.close()
     sigma = rule["detail_sigma_px"]
-    detail = image - np.stack([gaussian_filter(image[..., c], sigma) for c in range(3)], axis=-1)
-    lit_base = np.stack([gaussian_filter(lit[..., c], sigma) for c in range(3)], axis=-1)
-    return np.clip(lit * (1 - weight) + (lit_base + detail) * weight, 0, 1).astype(np.float32)
+    if rule["keep_product_color"]:
+        # 상품은 원본 색과 세부를 그대로 두고, 새 조명의 밝기 분포(그림자, 하이라이트)만 곱함
+        before, after = srgb_to_linear(image), srgb_to_linear(lit)
+        shade = gaussian_filter(luminance(after), sigma) / np.maximum(gaussian_filter(luminance(before), sigma), 1e-3)
+        product = linear_to_srgb(before * np.clip(shade, *rule["shade_range"])[..., None])
+    else:
+        detail = image - np.stack([gaussian_filter(image[..., c], sigma) for c in range(3)], axis=-1)
+        product = np.stack([gaussian_filter(lit[..., c], sigma) for c in range(3)], axis=-1) + detail
+    return np.clip(lit * (1 - weight) + product * weight, 0, 1).astype(np.float32)

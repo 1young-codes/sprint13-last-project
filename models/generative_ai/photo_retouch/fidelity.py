@@ -36,7 +36,8 @@ def check(before: np.ndarray, after: np.ndarray, mask: np.ndarray | None, rule: 
     delta_e = float(np.linalg.norm(to_lab(after) - to_lab(before), axis=-1)[region].mean())
     structure = float(structure_map(luminance(before), luminance(after), rule["structure_sigma_px"])[region].mean())
     level = rule["clip_level"]
-    clipped = lambda x: (x.max(axis=-1) >= level) | (x.min(axis=-1) <= 1 - level)  # noqa: E731
+    # 밝은 쪽은 한 채널이라도 끝에 닿으면, 어두운 쪽은 세 채널이 모두 바닥일 때만 (진한 색의 0 채널은 뭉개진 게 아님)
+    clipped = lambda x: (x.max(axis=-1) >= level) | (x.max(axis=-1) <= 1 - level)  # noqa: E731
     new_clipping = float((clipped(after) & ~clipped(before))[region].mean())
 
     problems = []
