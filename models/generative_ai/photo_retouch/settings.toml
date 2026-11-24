@@ -67,6 +67,7 @@ max_mean_delta_e = 8.0        # 평균 색 차이 (CIELAB ΔE76)
 min_structure = 0.95          # 밝기 구조 유사도 (SSIM의 구조 항)
 max_new_clipping = 0.005      # 새로 하얗게/까맣게 날아간 화소 비율
 clip_level = 0.995
+clip_margin = 0.1             # 끝에서 이만큼 떨어져 있던(세부가 있던) 화소가 날아갈 때만 셈
 structure_sigma_px = 1.5
 min_region_share = 0.01       # 상품 영역이 사진의 이 비율보다 작으면 사진 전체로 검사
 

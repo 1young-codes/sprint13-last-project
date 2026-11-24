@@ -2,7 +2,7 @@
 
 - 색 차이: CIELAB 평균 ΔE76 (ponytail: ΔE2000이 사람 눈에 더 가깝지만 통과선 용도로는 ΔE76으로 충분)
 - 구조: 밝기의 SSIM 구조 항. 밝기와 대비가 바뀌어도 모양이 같으면 1에 가깝고, 무언가 그려지거나 지워지면 떨어집니다
-- 날아감: 원래는 아니었는데 새로 하얗게/까맣게 날아간 화소 비율
+- 날아감: 세부가 있던 화소가 새로 하얗게/까맣게 날아간 비율
 """
 
 import numpy as np
@@ -35,10 +35,13 @@ def check(before: np.ndarray, after: np.ndarray, mask: np.ndarray | None, rule: 
         region = np.ones_like(region)
     delta_e = float(np.linalg.norm(to_lab(after) - to_lab(before), axis=-1)[region].mean())
     structure = float(structure_map(luminance(before), luminance(after), rule["structure_sigma_px"])[region].mean())
-    level = rule["clip_level"]
-    # 밝은 쪽은 한 채널이라도 끝에 닿으면, 어두운 쪽은 세 채널이 모두 바닥일 때만 (진한 색의 0 채널은 뭉개진 게 아님)
-    clipped = lambda x: (x.max(axis=-1) >= level) | (x.max(axis=-1) <= 1 - level)  # noqa: E731
-    new_clipping = float((clipped(after) & ~clipped(before))[region].mean())
+    # 세부가 있던 화소가 끝으로 날아간 것만 셈. 원래 거의 하얗던 반짝임이 끝에 닿는 건 잃은 세부가 없음.
+    # 가장 밝은 채널로 재므로 진한 색에서 0인 채널은 뭉개짐으로 치지 않음
+    level, margin = rule["clip_level"], rule["clip_margin"]
+    peak_before, peak_after = before.max(axis=-1), after.max(axis=-1)
+    blown = (peak_after >= level) & (peak_before < level - margin)
+    crushed = (peak_after <= 1 - level) & (peak_before > 1 - level + margin)
+    new_clipping = float((blown | crushed)[region].mean())
 
     problems = []
     if delta_e > rule["max_mean_delta_e"]:

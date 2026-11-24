@@ -102,3 +102,12 @@ def test_saturated_color_is_not_clipping():
     orange = np.zeros((32, 32, 3), np.float32) + np.array([0.9, 0.5, 0.2], np.float32)
     deeper = np.zeros_like(orange) + np.array([0.9, 0.45, 0.0], np.float32)
     assert check(orange, deeper, None, SETTINGS["fidelity"])["new_clipping"] == 0
+
+
+def test_only_lost_detail_counts_as_clipping():
+    rule = SETTINGS["fidelity"]
+    sparkle = np.full((10, 10, 3), 0.97, np.float32)
+    assert check(sparkle, np.ones_like(sparkle), None, rule)["new_clipping"] == 0
+    gray = np.full((10, 10, 3), 0.5, np.float32)
+    assert check(gray, np.ones_like(gray), None, rule)["new_clipping"] == 1
+    assert check(gray, np.zeros_like(gray), None, rule)["new_clipping"] == 1
