@@ -28,8 +28,13 @@ def measure(image: np.ndarray, auto: dict, ops: dict, bounds: dict, mask: np.nda
         add("exposure", {"exposure_ev": ev}, f"상품 밝기가 {'어두워' if ev > 0 else '너무 밝아'} {'밝게' if ev > 0 else '어둡게'} 맞췄습니다",
             f"subject median brightness {median:.2f}, would {'brighten' if ev > 0 else 'darken'} by {abs(ev):.2f} stops")
 
-    usable = (lum > 0.05) & (lum < 0.95)  # 날아간 곳과 너무 어두운 곳은 색 치우침 계산에서 뺌
-    if usable.mean() > 0.05:
+    # 색 치우침은 원래 무채색이어야 할 화소(흰색·회색에 가까운 곳)로만 잼. 사진 전체 평균으로 재면
+    # 하늘이 많은 사진은 "푸르다", 주황 옷이 많은 사진은 "노랗다"고 잘못 잼. 그런 화소가 적으면 색은 건드리지 않음
+    peak = image.max(axis=-1)
+    chroma = (peak - image.min(axis=-1)) / np.maximum(peak, 1e-4)
+    low, high = auto["neutral_brightness"]
+    usable = (lum > low) & (lum < high) & (chroma < auto["neutral_max_chroma"])
+    if usable.mean() > auto["min_neutral_share"]:
         r, g, b = srgb_to_linear(image[usable]).mean(axis=0)
         strength = auto["white_balance_strength"]
         temperature = strength * (b - r) / (ops["white_balance_gain"] * (r + b))
