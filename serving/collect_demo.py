@@ -4,7 +4,7 @@
 
 예:
     python serving/collect_demo.py --photo /data/datasets/demo/domi_original.png \
-        --name 참도미 --description "오늘 아침 들어온 참도미"
+        --name 참도미 --description "[임시 설명] 한 줄 설명"
 """
 
 import argparse
@@ -17,8 +17,8 @@ from PIL import Image, ImageFilter
 
 MIN_SIDE = 512
 # ponytail: 임시 문구. PR #6이 합쳐지면 generate_product_captions 호출로 바꾼다.
-PLACEHOLDER_PRODUCT = "{name}, 오늘 들어온 그대로의 모습입니다."
-PLACEHOLDER_USAGE = "{name}로 차린 한 끼를 소개합니다."
+PLACEHOLDER_PRODUCT = "[임시 문구] {name} 상품 소개 문구가 들어갈 자리입니다."
+PLACEHOLDER_USAGE = "[임시 문구] {name} 활용 예시 문구가 들어갈 자리입니다."
 
 
 def to_square(img: Image.Image) -> Image.Image:
