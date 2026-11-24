@@ -30,8 +30,10 @@ def create_env(name: str, environment: dict) -> None:
     if not python.exists():
         print(f"[가상환경] {name}: 파이썬 {environment['python']}")
         subprocess.run([uv, "venv", "--python", environment["python"], str(python.parents[1])], check=True)
-    installs = [["-r", str(PACKAGE_DIR / name / "requirements.txt"), *environment.get("pip_args", [])]]
-    installs += environment.get("extra_installs", [])  # 앞 설치가 끝나야 되는 패키지 (예: flash_attn 빌드)
+    requirements = str(PACKAGE_DIR / name / "requirements.txt")
+    installs = [["-r", requirements, *environment.get("pip_args", [])]]
+    # 앞 설치가 끝나야 되는 패키지 (예: flash_attn). requirements.txt를 제약으로 걸어 고정 버전을 바꾸지 못하게 합니다
+    installs += [[*args, "-c", requirements] for args in environment.get("extra_installs", [])]
     for args in installs:
         subprocess.run([uv, "pip", "install", "--python", str(python), *args], check=True)
 
