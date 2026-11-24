@@ -1,7 +1,7 @@
 """model_sources.toml의 모델을 허깅페이스 캐시(HF_HOME)에 받습니다. 이미 있으면 다시 받지 않습니다.
 
     python -m models.generative_ai.photo_retouch.download_models            # 전부
-    python -m models.generative_ai.photo_retouch.download_models vlm        # 일부만
+    python -m models.generative_ai.photo_retouch.download_models inpaint    # 일부만
 """
 
 import sys

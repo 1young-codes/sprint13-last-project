@@ -1,15 +1,17 @@
-"""Qwen3-VL로 사진을 진단하고, 보정 값을 제안하고, 후보 중 하나를 고릅니다.
+"""OpenAI 모델로 사진을 해석합니다: 업종 판단, 진단과 보정 값 제안, 후보 고르기, 지울 물건 위치.
 
-VLM은 값과 이유만 냅니다. 픽셀은 adjustments.py가 바꾸므로, VLM이 무엇을 말해도 사진 내용이 새로 그려지지 않습니다.
-VLM이 낸 값은 업종 범위로 잘라 쓰고, 모르는 키나 깨진 답은 버립니다.
+해석만 합니다. 픽셀은 adjustments.py가 바꾸므로, 모델이 무엇을 말해도 사진 내용이 새로 그려지지 않습니다.
+모델이 낸 값은 업종 범위로 잘라 쓰고, 모르는 키나 깨진 답은 버립니다.
 """
 
+import base64
+import io
 import json
 
 import numpy as np
 
 from .adjustments import clamp_params, to_image
-from .settings import load_categories, load_settings, read_toml
+from .settings import env_value, load_categories, load_settings, read_toml
 
 REGIONS = ("global", "product", "background")
 
@@ -27,7 +29,7 @@ def parse_json(text: str) -> dict:
 
 
 def clean_plan(raw: dict, bounds: dict) -> dict:
-    """VLM 답을 쓸 수 있는 보정 계획으로 다듬습니다."""
+    """모델 답을 쓸 수 있는 보정 계획으로 다듬습니다."""
     plan = {region: clamp_params(raw.get(region) or {}, bounds) for region in REGIONS}
     reasons = raw.get("reasons") if isinstance(raw.get("reasons"), dict) else {}
     plan["reasons"] = {k: v for k, v in reasons.items() if isinstance(v, str)}
@@ -47,33 +49,31 @@ def describe_ranges(bounds: dict) -> str:
     return "\n".join(f"- {key}: {low:+.2f} to {high:+.2f}" for key, (low, high) in bounds.items())
 
 
-class Vlm:
+class Interpreter:
     def __init__(self):
-        import torch
-        from transformers import AutoModelForImageTextToText, AutoProcessor
+        from openai import OpenAI
 
-        from .download_models import model_folder
-
-        self.torch = torch
-        self.settings = load_settings()["vlm"]
+        self.settings = load_settings()["interpret"]
         self.prompts = read_toml("prompts.toml")
-        folder = model_folder("vlm")
-        self.processor = AutoProcessor.from_pretrained(folder)
-        self.model = AutoModelForImageTextToText.from_pretrained(folder, dtype=torch.bfloat16, device_map="cuda").eval()
+        key = env_value(self.settings["api_key_env"], prefixed=False)
+        if not key:
+            raise RuntimeError(f"{self.settings['api_key_env']}가 없습니다. 프로젝트 루트 .env에 넣거나 --no-ai로 실행하세요")
+        self.client = OpenAI(api_key=key, timeout=self.settings["timeout_seconds"])
 
     def ask(self, images: list[np.ndarray], text: str) -> str:
         long_side = self.settings["image_long_side"]
-        pictures = []
+        content = []
         for image in images:
             picture = to_image(image)
             picture.thumbnail((long_side, long_side))
-            pictures.append({"type": "image", "image": picture})
-        messages = [{"role": "user", "content": [*pictures, {"type": "text", "text": text}]}]
-        inputs = self.processor.apply_chat_template(messages, tokenize=True, add_generation_prompt=True,
-                                                    return_dict=True, return_tensors="pt").to(self.model.device)
-        with self.torch.no_grad():
-            output = self.model.generate(**inputs, max_new_tokens=self.settings["max_new_tokens"], do_sample=False)
-        return self.processor.batch_decode(output[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)[0]
+            buffer = io.BytesIO()
+            picture.save(buffer, "JPEG", quality=self.settings["jpeg_quality"])
+            url = "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode()
+            content.append({"type": "image_url", "image_url": {"url": url, "detail": self.settings["detail"]}})
+        content.append({"type": "text", "text": text})
+        response = self.client.chat.completions.create(model=self.settings["model"], response_format={"type": "json_object"},
+                                                       messages=[{"role": "user", "content": content}])
+        return response.choices[0].message.content or ""
 
     def classify(self, image: np.ndarray) -> tuple[str, str]:
         categories = load_categories()
@@ -97,7 +97,3 @@ class Vlm:
         if isinstance(choice, int) and 2 <= choice <= last:
             return choice - 2, str(answer.get("reason", ""))
         return 0, ""
-
-    def close(self):
-        del self.model
-        self.torch.cuda.empty_cache()

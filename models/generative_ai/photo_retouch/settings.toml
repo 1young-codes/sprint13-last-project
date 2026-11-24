@@ -1,5 +1,5 @@
 # 자동 보정 기본 설정입니다. 경로는 프로젝트 루트 기준 상대 경로이고, .env의 RETOUCH_<이름>이 있으면 그 값이 우선합니다.
-# 업종별 규칙은 categories.toml, 모델 출처는 model_sources.toml, VLM에게 주는 말은 prompts.toml에 있습니다.
+# 업종별 규칙은 categories.toml, 모델 출처는 model_sources.toml, 사진 해석 지시문은 prompts.toml에 있습니다.
 
 [paths]
 output_dir = "outputs/photo_retouch"      # RETOUCH_OUTPUT_DIR
@@ -30,7 +30,7 @@ clarity_gain = 0.6
 sharpen_sigma_px = 1.0
 sharpen_gain = 1.0
 
-# ── 사진 진단 없이 쓰는 자동 보정 (VLM 후보와 함께 비교하는 기준 후보) ──────────
+# ── 사진 해석 없이 쓰는 자동 보정 (해석 후보와 함께 비교하는 기준 후보) ──────────
 [auto]
 mid_gray_band = [0.32, 0.6]   # 밝기 중앙값(sRGB)이 이 범위 밖일 때만 가까운 끝으로 맞춤. 상품 마스크가 있으면 상품 영역 기준
 max_auto_ev = 0.8
@@ -41,16 +41,21 @@ target_spread = 0.85          # 두 백분위 밝기 차이가 이보다 작으�
 contrast_per_spread = 2.0     # 모자란 차이 1당 올릴 대비
 
 # ── 모델 ────────────────────────────────────────────
-[vlm]
-image_long_side = 1024        # VLM에 보여 줄 사진 긴 변 (토큰 수와 그래픽 메모리 제한)
-max_new_tokens = 768
+# 사진 해석(업종 판단, 진단, 후보 고르기)은 OpenAI 모델이 합니다. 픽셀은 바꾸지 않습니다
+[interpret]
+model = "gpt-5.4-mini"
+api_key_env = "OPENAI_API_KEY"   # 이 이름의 환경 변수, 없으면 프로젝트 루트 .env
+image_long_side = 1024        # 보낼 사진 긴 변
+jpeg_quality = 90
+detail = "high"
+timeout_seconds = 120
 fallback_category = "product" # 업종 판단 답이 깨졌을 때
 
 [product_mask]
 input_size = 1024             # BiRefNet 학습 해상도
 
 # ── 후보 ────────────────────────────────────────────
-# VLM이 제안한 값에 곱하는 세기. 1.0이 제안 그대로.
+# 해석 모델이 제안한 값에 곱하는 세기. 1.0이 제안 그대로.
 [candidates]
 strengths = [1.0, 0.6]
 include_auto = true
@@ -67,7 +72,7 @@ min_region_share = 0.01       # 상품 영역이 사진의 이 비율보다 작�
 
 # ── 배경 잡동사니 지우기 (LaMa) ─────────────────────────────
 [cleanup]
-max_box_share = 0.05          # VLM이 낸 상자가 사진의 이 비율보다 크면 지우지 않음 (큰 영역은 지우면 티가 남)
+max_box_share = 0.05          # 해석 모델이 낸 상자가 사진의 이 비율보다 크면 지우지 않음 (큰 영역은 지우면 티가 남)
 box_padding = 0.15            # 상자 크기 대비 여유
 context_scale = 1.5           # 지울 곳 둘레로 이만큼 더 잘라 LaMa에게 보여 줌
 crop_long_side = 768          # LaMa 입력 긴 변 상한

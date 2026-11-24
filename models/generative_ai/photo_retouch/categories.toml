@@ -1,5 +1,5 @@
 # 업종별 보정 규칙입니다. 새 업종은 표 하나를 더하면 됩니다.
-# hint: VLM에게 주는 업종 설명 (영어가 지시를 더 잘 따름)
+# hint: 해석 모델에게 주는 업종 설명 (영어가 지시를 더 잘 따름)
 # bounds: settings.toml [params] 범위를 이 업종에서 더 좁힘
 # fidelity: settings.toml [fidelity] 값을 이 업종에서 덮어씀
 # use_product_mask: 상품과 배경을 나눠 보정할지 (매장 전경은 나누지 않음)

@@ -24,9 +24,9 @@ def load_categories() -> dict:
     return read_toml("categories.toml")
 
 
-def env_value(name: str) -> str | None:
-    """환경 변수 RETOUCH_<NAME>, 없으면 프로젝트 루트 .env의 같은 키."""
-    key = ENV_PREFIX + name.upper()
+def env_value(name: str, prefixed: bool = True) -> str | None:
+    """환경 변수 RETOUCH_<NAME>(prefixed=False면 NAME 그대로), 없으면 프로젝트 루트 .env의 같은 키."""
+    key = ENV_PREFIX + name.upper() if prefixed else name
     if key in os.environ:
         return os.environ[key]
     path = PROJECT_ROOT / ".env"

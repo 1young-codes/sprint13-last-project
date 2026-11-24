@@ -1,4 +1,4 @@
-"""VLM이 짚은 배경 잡동사니를 LaMa로 지웁니다. 상품 영역(마스크)은 절대 건드리지 않습니다."""
+"""해석 모델이 짚은 배경 잡동사니를 LaMa로 지웁니다. 상품 영역(마스크)은 절대 건드리지 않습니다."""
 
 import numpy as np
 from scipy.ndimage import binary_dilation

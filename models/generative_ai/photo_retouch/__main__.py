@@ -57,16 +57,17 @@ def side_by_side(*pictures: Image.Image) -> Image.Image:
 def main():
     parser = argparse.ArgumentParser(description="사진 자동 보정")
     parser.add_argument("photos", nargs="+", type=Path)
-    parser.add_argument("--category", choices=list(load_categories()), help="없으면 VLM이 판단")
-    parser.add_argument("--no-vlm", action="store_true", help="VLM 없이 기본 자동 보정만")
-    parser.add_argument("--no-cleanup", action="store_true", help="배경 잡동사니를 지우지 않음")
+    parser.add_argument("--category", choices=list(load_categories()), help="없으면 해석 모델이 판단")
+    parser.add_argument("--no-ai", action="store_true", help="사진 해석(OpenAI) 없이 기본 자동 보정만")
+    # ponytail: 해석 모델이 주는 물건 좌표가 부정확해 기본은 끔. 정확한 위치 찾기 모델을 붙이면 기본으로 켤 것
+    parser.add_argument("--cleanup", action="store_true", help="해석 모델이 짚은 배경 잡동사니를 지움 (위치가 틀릴 수 있음)")
     parser.add_argument("--studio-light", action="store_true", help="생성형 스튜디오 조명 결과도 만듦")
     args = parser.parse_args()
 
     for photo_path in args.photos:
         photo = Image.open(photo_path).convert("RGB")
         # ponytail: 사진마다 모델을 다시 불러옴. 여러 장을 자주 돌리면 모델을 한 번만 올리도록 바꿀 것
-        output = retouch(photo, args.category, use_vlm=not args.no_vlm, cleanup=not args.no_cleanup,
+        output = retouch(photo, args.category, use_ai=not args.no_ai, cleanup=args.cleanup,
                          studio_light=args.studio_light)
         folder = project_path("output_dir") / photo_path.stem
         folder.mkdir(parents=True, exist_ok=True)

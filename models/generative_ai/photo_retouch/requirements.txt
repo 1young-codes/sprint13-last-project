@@ -4,3 +4,4 @@ timm
 kornia
 einops
 scipy
+openai
