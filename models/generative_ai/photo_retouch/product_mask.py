@@ -18,7 +18,7 @@ def product_mask(image: np.ndarray) -> np.ndarray:
     model = AutoModelForImageSegmentation.from_pretrained(model_folder("product_mask"), trust_remote_code=True)
     model.to("cuda").eval()
     small = np.asarray(Image.fromarray((image * 255).astype(np.uint8)).resize((size, size), Image.BICUBIC), np.float32) / 255
-    x = torch.from_numpy((small - IMAGENET_MEAN) / IMAGENET_STD).permute(2, 0, 1)[None].to("cuda")
+    x = torch.from_numpy((small - IMAGENET_MEAN) / IMAGENET_STD).permute(2, 0, 1)[None].to("cuda", next(model.parameters()).dtype)
     with torch.no_grad():
         prediction = model(x)[-1].sigmoid()[0, 0].float().cpu().numpy()
     del model
