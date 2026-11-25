@@ -60,9 +60,10 @@ def load_models() -> dict:
                                         repository=config.dinov2_repository, checkpoint=config.dinov2_checkpoint)
     models = {"inference": inference, "args": args, "config": config, "accelerator": accelerator, "model": model,
               "flow": inference.build_flow(config, accelerator), "encoder": encoder, "tiles": spec["run"]["tiles"]}
-    # 첫 추론은 준비에 약 1분이 더 걸려서, 불러올 때 빈 조각 하나로 미리 치러 둠 (첫 요청이 느려지지 않게)
+    # 추론 코드 일부(torch.compile)가 첫 실행 때 약 1분 동안 번역됩니다. 첫 요청이 느려지지 않게 불러올 때 미리 치러 둡니다.
+    # 검은 조각으로는 번역이 일어나지 않아서 무늬 있는 조각을 씁니다.
     size = models["tiles"]["size"]
-    restore_tile(models, Image.new("RGB", (size, size)), args.seed)
+    restore_tile(models, Image.effect_noise((size, size), 64).convert("RGB"), args.seed)
     return models
 
 
