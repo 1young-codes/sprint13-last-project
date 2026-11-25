@@ -184,6 +184,7 @@ class MossImageModel:
                  steps: int, cfg: float) -> Image.Image:
         """embeds, negative: encode_prompts()로 저장한 인코딩 [토큰, 4096]."""
         from diffusers.hooks import HookRegistry
+        from diffusers.hooks.hooks import CacheContext, _set_cache_context  # diffusers 0.43 방식
         from diffusers.hooks.mag_cache import _MAG_CACHE_BLOCK_HOOK, _MAG_CACHE_LEADER_BLOCK_HOOK, apply_mag_cache
 
         transformer = self.pipe.transformer
@@ -197,7 +198,7 @@ class MossImageModel:
 
         def forward(*args, **kwargs):
             name = next(contexts)
-            registry._set_context(name)
+            _set_cache_context(transformer, CacheContext(name))
             if recorder:
                 recorder.context = name
             return type(transformer).forward(transformer, *args, **kwargs)
@@ -209,7 +210,7 @@ class MossImageModel:
                               generator=torch.Generator(device="cpu").manual_seed(seed)).images[0]
         finally:
             del transformer.forward
-            registry._set_context(None)
+            _set_cache_context(transformer, None)
             if config is not None:
                 registry.remove_hook(_MAG_CACHE_LEADER_BLOCK_HOOK, recurse=True)
                 registry.remove_hook(_MAG_CACHE_BLOCK_HOOK, recurse=True)
