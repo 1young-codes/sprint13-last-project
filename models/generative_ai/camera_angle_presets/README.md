@@ -43,6 +43,18 @@ python -m models.generative_ai.camera_angle_presets --input 사진.jpg --preset 
 | `--skip-generation` | 생성 모델 없이 계산만 확인합니다. 그래픽 카드 없이 회전 프리셋을 볼 때 씁니다 |
 | `--save-steps` | 채우기 전 이미지, 빈 곳 마스크 같은 중간 이미지도 저장합니다 |
 
+### 코드에서 부르기
+
+모델은 한 번만 불러 두고 사진마다 처리만 합니다. 상주 서버에서도 이 순서로 씁니다.
+
+```python
+from models.generative_ai.camera_angle_presets.change_camera_angle import change_camera_angle, load_models, unload_models
+
+models = load_models()                                    # 깊이 모델과 생성 모델을 그래픽 카드에 올림
+results, info = change_camera_angle(photo, ["dutch_angle", "low_angle"], models)  # 여러 번 불러도 다시 읽지 않음
+unload_models(models)                                     # 그래픽 메모리 비우기
+```
+
 ## 설정 파일
 
 | 파일 | 내용 |

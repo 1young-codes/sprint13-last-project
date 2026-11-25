@@ -93,17 +93,37 @@ def tile_starts(length: int, size: int, overlap: int) -> list[int]:
     return [round(i * (length - size) / (count - 1)) for i in range(count)]
 
 
+def tile_spots(width: int, height: int, tiles: dict) -> list[tuple[int, int]]:
+    size = tiles["size"]
+    if min(width, height) < size:
+        raise ValueError(f"키운 크기 {(width, height)}가 조각 크기 {size}보다 작습니다")
+    return [(x, y) for y in tile_starts(height, size, tiles["overlap"]) for x in tile_starts(width, size, tiles["overlap"])]
+
+
+def blend_tiles(pieces, spots: list[tuple[int, int]], width: int, height: int, size: int):
+    """조각 결과(size×size uint8 배열)를 가장자리로 갈수록 작아지는 가중치로 섞어 이어 붙입니다
+    (VARestorer 타일 방식과 같은 원리)."""
+    import numpy as np
+
+    ramp = np.minimum(np.arange(size) + 1, np.arange(size)[::-1] + 1).astype(np.float32)
+    weight = np.minimum.outer(ramp, ramp)[..., None]
+    total = np.zeros((height, width, 3), np.float32)
+    count = np.zeros((height, width, 1), np.float32)
+    for piece, (x, y) in zip(pieces, spots):
+        total[y:y + size, x:x + size] += np.asarray(piece, np.float32) * weight
+        count[y:y + size, x:x + size] += weight
+    return np.clip(np.rint(total / count), 0, 255).astype(np.uint8)
+
+
 def cut_tiles(images: list[Path], scale: int, tiles: dict, tile_dir: Path) -> dict:
     """사진을 바이큐빅으로 scale배 키운 뒤 size×size 조각으로 저장합니다. 사진 이름 -> (크기, 조각 위치들)."""
-    size, overlap = tiles["size"], tiles["overlap"]
+    size = tiles["size"]
     tile_dir.mkdir(parents=True, exist_ok=True)
     layouts = {}
     for path in images:
         with Image.open(path) as image:
             big = image.convert("RGB").resize((image.width * scale, image.height * scale), Image.BICUBIC)
-        if min(big.size) < size:
-            raise ValueError(f"{path.name}: 키운 크기 {big.size}가 조각 크기 {size}보다 작습니다")
-        spots = [(x, y) for y in tile_starts(big.height, size, overlap) for x in tile_starts(big.width, size, overlap)]
+        spots = tile_spots(*big.size, tiles)
         for x, y in spots:
             big.crop((x, y, x + size, y + size)).save(tile_dir / f"{path.stem}__x{x}_y{y}.png")
         layouts[path.stem] = (big.size, spots)
@@ -111,23 +131,16 @@ def cut_tiles(images: list[Path], scale: int, tiles: dict, tile_dir: Path) -> di
 
 
 def join_tiles(layouts: dict, tiles: dict, tile_out: Path, raw_dir: Path) -> None:
-    """조각 결과를 가장자리로 갈수록 작아지는 가중치로 섞어 이어 붙입니다 (VARestorer 타일 방식과 같은 원리)."""
-    import numpy as np
-
     size = tiles["size"]
-    ramp = np.minimum(np.arange(size) + 1, np.arange(size)[::-1] + 1).astype(np.float32)
-    weight = np.minimum.outer(ramp, ramp)[..., None]
     for stem, ((width, height), spots) in layouts.items():
-        total = np.zeros((height, width, 3), np.float32)
-        count = np.zeros((height, width, 1), np.float32)
+        pieces = []
         for x, y in spots:
             found = next(tile_out.rglob(f"{stem}__x{x}_y{y}.png"), None)
             if found is None:
                 raise FileNotFoundError(f"조각 결과가 없습니다: {stem}__x{x}_y{y}")
             with Image.open(found) as piece:
-                total[y:y + size, x:x + size] += np.asarray(piece.convert("RGB").resize((size, size)), np.float32) * weight
-            count[y:y + size, x:x + size] += weight
-        Image.fromarray(np.clip(np.rint(total / count), 0, 255).astype(np.uint8)).save(raw_dir / f"{stem}.png")
+                pieces.append(piece.convert("RGB").resize((size, size)))
+        Image.fromarray(blend_tiles(pieces, spots, width, height, size)).save(raw_dir / f"{stem}.png")
 
 
 def run(name: str, input_dir: Path, output_dir: Path, scale: int) -> dict:

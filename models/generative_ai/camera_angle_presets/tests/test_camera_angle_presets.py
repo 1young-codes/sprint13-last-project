@@ -127,7 +127,7 @@ def test_orbit_keeps_subject_center_in_place():
 def test_rotate_presets_run_end_to_end_without_models():
     photo = make_test_photo()
     names = [name for name, preset in load_angle_presets().items() if preset.method == "rotate"]
-    results, info = change_camera_angle(photo, names, photo_fov_deg=FOV, skip_generation=True)
+    results, info = change_camera_angle(photo, names, {"depth": None, "generation": None}, photo_fov_deg=FOV)
     assert [r.preset.name for r in results] == names and info["photo_fov_deg"] == FOV
     original = next(r.image for r in results if r.preset.name == "original")
     assert original.size[0] == 1024 and abs(original.size[0] / original.size[1] - 1.5) < .01
