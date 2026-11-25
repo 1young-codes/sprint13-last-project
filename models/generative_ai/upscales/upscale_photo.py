@@ -58,8 +58,12 @@ def load_models() -> dict:
     if config.use_venc:
         encoder = inference.load_dinov2(config.encoder_type, accelerator.device,
                                         repository=config.dinov2_repository, checkpoint=config.dinov2_checkpoint)
-    return {"inference": inference, "args": args, "config": config, "accelerator": accelerator, "model": model,
-            "flow": inference.build_flow(config, accelerator), "encoder": encoder, "tiles": spec["run"]["tiles"]}
+    models = {"inference": inference, "args": args, "config": config, "accelerator": accelerator, "model": model,
+              "flow": inference.build_flow(config, accelerator), "encoder": encoder, "tiles": spec["run"]["tiles"]}
+    # 첫 추론은 준비에 약 1분이 더 걸려서, 불러올 때 빈 조각 하나로 미리 치러 둠 (첫 요청이 느려지지 않게)
+    size = models["tiles"]["size"]
+    restore_tile(models, Image.new("RGB", (size, size)), args.seed)
+    return models
 
 
 def restore_tile(models: dict, tile: Image.Image, seed: int) -> Image.Image:
