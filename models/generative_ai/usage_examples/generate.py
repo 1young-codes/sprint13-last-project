@@ -6,7 +6,6 @@
 
 import gc
 import json
-import subprocess
 import time
 from pathlib import Path
 
@@ -27,60 +26,6 @@ def lora_file(condition: dict) -> Path | None:
     return path
 
 
-def gpu_users() -> list[str]:
-    """지금 그래픽 카드를 쓰는 다른 프로그램 (pid, 이름, 메모리). nvidia-smi가 없으면 빈 목록."""
-    try:
-        output = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,process_name,used_memory",
-                                 "--format=csv,noheader"], capture_output=True, text=True, check=True).stdout
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return []
-    return [line.strip() for line in output.splitlines() if line.strip()]
-
-
-def require_free_gpu() -> None:
-    """팀원이 그래픽 카드를 쓰는 중이면 멈춥니다. 같이 올리면 둘 다 메모리가 모자라 죽습니다 (L4 24GB)."""
-    if users := gpu_users():
-        raise RuntimeError("다른 프로그램이 그래픽 카드를 쓰는 중이라 멈춥니다. 끝난 뒤 다시 실행하세요:
-  " + "
-  ".join(users))
-
-
-def load_check(condition_names: list[str] | None = None) -> dict:
-    """추론 없이 모델이 그래픽 카드에 올라가는지만 봅니다: 문장 인코더, 그리고 조건마다 생성 모델과 로라 합치기.
-    올렸다가 바로 내리며, 단계마다 걸린 시간과 그래픽 메모리를 돌려줍니다."""
-    import torch
-
-    from ..fast_image_generation.moss_image_model import MossImageModel, load_text_encoder
-
-    require_free_gpu()
-    chosen = conditions(condition_names)
-    files = [lora_file(c) for c in chosen]
-    report = {}
-
-    def measure(name, load):
-        torch.cuda.reset_peak_memory_stats()
-        started = time.perf_counter()
-        loaded = load()
-        report[name] = {"load_seconds": round(time.perf_counter() - started, 1),
-                        "vram_gb": round(torch.cuda.memory_allocated() / 2**30, 1),
-                        "peak_vram_gb": round(torch.cuda.max_memory_allocated() / 2**30, 1)}
-        print(f"[올라감] {name}: {report[name]}", flush=True)
-        return loaded
-
-    encoder = measure("문장 인코더", load_text_encoder)
-    del encoder
-    gc.collect()
-    torch.cuda.empty_cache()
-    for condition, path in zip(chosen, files):
-        model = measure(f"생성 모델 + {condition['label']}", lambda: MossImageModel(path, condition.get("strength", 1.0),
-                                                                                  RATIOS_FILE))
-        report[f"생성 모델 + {condition['label']}"]["merged_lora_layers"] = model.merged_layers
-        del model
-        gc.collect()
-        torch.cuda.empty_cache()
-    return report
-
-
 def generate(jobs: list[dict], output_dir: Path, condition_names: list[str] | None = None,
              calibrate: bool = False) -> dict:
     """output_dir/<조건>/<id>.png를 만듭니다. calibrate면 MagCache 없이 모든 단계를 계산하며 크기 비율을 재서 저장합니다."""
@@ -89,7 +34,6 @@ def generate(jobs: list[dict], output_dir: Path, condition_names: list[str] | No
     from ..fast_image_generation.moss_image_model import MossImageModel, encode_prompts
     from ..fast_image_generation.qwen_image_caching.mag_cache import save_ratios
 
-    require_free_gpu()
     settings = load_settings()["generation"]
     chosen = conditions(condition_names)
     info_file = output_dir / "generate_info.json"
