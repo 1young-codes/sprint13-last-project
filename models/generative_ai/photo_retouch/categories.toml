@@ -1,18 +1,20 @@
-# 업종별 보정 규칙입니다. 새 업종은 표 하나를 더하면 됩니다.
+# 업종별 규칙입니다. 새 업종은 표 하나를 더하면 됩니다. 보정과 활용 예시 생성이 같이 씁니다.
 # hint: 해석 모델에게 주는 업종 설명 (영어가 지시를 더 잘 따름)
 # bounds: settings.toml [params] 범위를 이 업종에서 더 좁힘
 # fidelity: settings.toml [fidelity] 값을 이 업종에서 덮어씀
 # use_product_mask: 상품과 배경을 나눠 보정할지 (매장 전경은 나누지 않음)
 # studio_prompt: 스튜디오 조명에서 새로 그릴 배경과 빛 (없으면 그 업종은 스튜디오 조명을 쓰지 않음)
 # look: 바로잡은 뒤 더하는 약한 업종 색감, look_reason: 사장님께 보일 이유 (look이 비면 색감을 더하지 않음)
+# example_scene: 활용 예시 생성에서 해석 모델이 장면을 짤 때 따르는 방향 (usage_examples 폴더)
 
 [food]
 label = "음식"
-hint = "Food photo for a delivery app or menu. Should look appetizing but true to the real dish. Warm restaurant light and glossy highlights are normal, not problems."
+hint = "Food photo for a delivery app or menu: a finished dish, a drink, a dessert, or a raw ingredient (fish, meat, vegetables, fruit). Should look appetizing but true to the real food. Warm restaurant light and glossy highlights are normal, not problems."
 look = { temperature = 0.06, vibrance = 0.08 }
 look_reason = "음식이 먹음직스럽게 보이도록 아주 살짝 따뜻하고 생기 있게 했습니다"
 use_product_mask = true
 studio_prompt = "delicious food on a wooden table, bright soft daylight from a large window, clean bright restaurant"
+example_scene = "The food itself is the hero, plated or served in a setting that suits it (table, tableware, props, place). No people's faces. A finished dish, drink or dessert stays the same food. A raw ingredient becomes a dish cooked from that exact ingredient: keep its species or variety, cut and size recognizable."
 [food.bounds]
 temperature = [-0.2, 0.4]
 saturation = [-0.2, 0.3]
@@ -20,13 +22,44 @@ vibrance = [-0.2, 0.5]
 [food.fidelity]
 max_mean_delta_e = 10.0
 
+[cosmetic]
+label = "화장품"
+hint = "Cosmetics or skincare product photo (bottle, jar, tube, lipstick, palette). Packaging color and printed labels must stay faithful; a clean, bright, slightly soft look is expected."
+look = {}
+look_reason = ""
+use_product_mask = true
+studio_prompt = "cosmetic product on a clean marble surface, soft diffused studio lighting, beauty commercial photography"
+example_scene = "The product in a place where it is really used: a bathroom shelf, a vanity table, beside a sink, with a little texture swatch or a hand holding it. Show at most a hand, never a face. The packaging shape and color stay exactly as described."
+[cosmetic.bounds]
+temperature = [-0.2, 0.2]
+tint = [-0.15, 0.15]
+saturation = [-0.2, 0.1]
+[cosmetic.fidelity]
+max_mean_delta_e = 6.0
+
+[household]
+label = "생활용품·가전"
+hint = "Household goods or small home appliance photo (kitchenware, mug, towel, candle, kettle, toaster, lamp). Color and material must stay faithful; a clean, bright, homely look is expected."
+look = {}
+look_reason = ""
+use_product_mask = true
+studio_prompt = "product on a light wooden table in a bright clean home, soft daylight, lifestyle commercial photography"
+example_scene = "The item in use or in place in a lived-in, tidy home: a kitchen counter, a dining table, a living room shelf. Show at most a hand, never a face. The item's shape, material and color stay exactly as described."
+[household.bounds]
+temperature = [-0.3, 0.3]
+tint = [-0.2, 0.2]
+saturation = [-0.2, 0.15]
+[household.fidelity]
+max_mean_delta_e = 6.0
+
 [product]
 label = "상품"
-hint = "Product photo for an online store. Color must stay faithful to the real item; a neutral, clean, bright look is expected."
+hint = "Any other product photo for an online store (fashion, accessories, stationery, electronics, gifts). Color must stay faithful to the real item; a neutral, clean, bright look is expected."
 look = {}
 look_reason = ""
 use_product_mask = true
 studio_prompt = "product on a clean white surface, soft diffused studio lighting, commercial photography"
+example_scene = "The item in a natural setting where its buyer would use or display it. Show at most a hand, never a face. The item's shape and color stay exactly as described."
 [product.bounds]
 temperature = [-0.3, 0.3]
 tint = [-0.2, 0.2]
@@ -40,6 +73,7 @@ hint = "Store, interior or exterior photo. Should feel bright and welcoming with
 look = { vibrance = 0.05 }
 look_reason = "매장이 조금 더 생기 있게 보이도록 색을 아주 살짝 살렸습니다"
 use_product_mask = false
+example_scene = "The same kind of shop at its most welcoming moment: tidy, bright, a few customers seen from behind or far away, with no readable signs or logos."
 [store.bounds]
 saturation = [-0.2, 0.2]
 [store.fidelity]
