@@ -3,11 +3,12 @@ import Stepper from '../components/Stepper.jsx'
 import PhotoDrop from '../components/PhotoDrop.jsx'
 import PostCard from '../components/PostCard.jsx'
 import AnglePicker from '../components/AnglePicker.jsx'
-import { createPostJob, getPostJob } from '../api/postApi.js'
+import { createPostJob, getPostJob, POLL_MS, USE_SAMPLE } from '../api/postApi.js'
+import { estimateMinutes } from '../anglePresets.js'
+import { postSlides } from '../postSlides.js'
 
 // 가게 설정 화면이 생기기 전까지 쓰는 임시 가게 이름
 const STORE_NAME = '[가게 이름]'
-const POLL_MS = 500
 
 // 문구 생성 함수(유진님, generate_product_captions)가 받는 값과 같은 칸
 const EMPTY_FORM = { productName: '', unit: '', price: '', usageExample: '', notes: '' }
@@ -27,7 +28,10 @@ export default function CreatePost() {
   const [photoUrl, setPhotoUrl] = useState('')
   const [form, setForm] = useState(EMPTY_FORM) // 품목, 단위, 가격, 활용 예시, 기타
   const [angles, setAngles] = useState([]) // 고른 카메라 각도 id 목록 (비면 원본 그대로)
-  const [job, setJob] = useState(null) // { jobId, status, product_photo, usage_example, message }
+  const [job, setJob] = useState(null) // { jobId, angles, status, queue_position, product_photo, usage_example, message }
+  const [excluded, setExcluded] = useState([]) // 결과에서 체크를 꺼서 뺀 사진 key 목록
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('') // 서버가 돌려준 한국어 문장
 
   // 사진이 바뀌면 미리보기 주소를 새로 만들고, 이전 주소는 정리한다.
   function changePhoto(file) {
@@ -41,7 +45,7 @@ export default function CreatePost() {
     if (!job || (job.status !== 'queued' && job.status !== 'running')) return undefined
     const timer = setTimeout(async () => {
       const next = await getPostJob(job.jobId)
-      setJob({ jobId: job.jobId, ...next })
+      setJob({ jobId: job.jobId, angles: job.angles, ...next })
     }, POLL_MS)
     return () => clearTimeout(timer)
   }, [job])
@@ -62,17 +66,30 @@ export default function CreatePost() {
   const canStart = missing.length === 0
 
   async function start() {
-    const { jobId } = await createPostJob({
-      photoUrl,
-      productName: form.productName.trim(),
-      unit: form.unit.trim(),
-      priceKrw: price,
-      usageExample: form.usageExample.trim(),
-      notes: form.notes.trim(),
-      angles,
-    })
-    setJob({ jobId, status: 'queued' })
-    setStep(1)
+    setSubmitting(true)
+    setSubmitError('')
+    try {
+      const { jobId } = await createPostJob({
+        photo,
+        productName: form.productName.trim(),
+        unit: form.unit.trim(),
+        priceKrw: price,
+        usageExample: form.usageExample.trim(),
+        notes: form.notes.trim(),
+        angles,
+      })
+      setJob({ jobId, status: 'queued', angles })
+      setExcluded([])
+      setStep(1)
+    } catch (error) {
+      setSubmitError(error.message)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  function toggleSlide(key) {
+    setExcluded((prev) => (prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key]))
   }
 
   function restart() {
@@ -80,6 +97,7 @@ export default function CreatePost() {
     setForm(EMPTY_FORM)
     setAngles([])
     setJob(null)
+    setExcluded([])
     setStep(0)
   }
 
@@ -153,12 +171,13 @@ export default function CreatePost() {
 
             <AnglePicker selected={angles} onChange={setAngles} />
           </div>
+          {submitError && <div className="card status error" role="alert">{submitError}</div>}
           <div className="footer">
             <span className="hint">
-              {canStart ? '다음을 누르면 게시글을 만들기 시작합니다. 잠시 걸릴 수 있습니다.' : `${missing.join(', ')}을(를) 넣으면 다음으로 갈 수 있습니다.`}
+              {canStart ? `다음을 누르면 게시글을 만들기 시작합니다. 약 ${estimateMinutes(angles.length)}분 걸립니다.` : `${missing.join(', ')}을(를) 넣으면 다음으로 갈 수 있습니다.`}
             </span>
-            <button type="button" className="primary" disabled={!canStart} onClick={start}>
-              다음
+            <button type="button" className="primary" disabled={!canStart || submitting} onClick={start}>
+              {submitting ? '보내는 중…' : '다음'}
             </button>
           </div>
         </>
@@ -167,33 +186,52 @@ export default function CreatePost() {
       {step === 1 && (
         <ResultStep
           job={job}
+          excluded={excluded}
+          onToggle={toggleSlide}
           onBack={() => setStep(0)}
           onPublish={() => setStep(2)}
         />
       )}
 
       {step === 2 && job?.status === 'ready' && (
-        <PublishedStep job={job} onMore={restart} />
+        <PublishedStep job={job} excluded={excluded} onMore={restart} />
       )}
     </section>
   )
 }
 
-function ResultStep({ job, onBack, onPublish }) {
+function ResultStep({ job, excluded, onToggle, onBack, onPublish }) {
   const waiting = job.status === 'queued' || job.status === 'running'
   const ready = job.status === 'ready'
+  const product = job.product_photo
+  const requested = job.angles ?? []
+  const finished = product?.angle_images?.length ?? 0
+  const pendingAngles = requested.slice(finished)
+  const chosen = product ? postSlides(product).filter((slide) => slide.url && !excluded.includes(slide.key)) : []
+
+  let statusText = '사진과 문구를 만드는 중입니다'
+  if (job.status === 'queued') {
+    statusText = job.queue_position > 0 ? `순서를 기다리는 중입니다 (앞에 ${job.queue_position}개)` : '순서를 기다리는 중입니다'
+  } else if (product && pendingAngles.length > 0) {
+    statusText = `각도 사진을 만드는 중입니다 (${finished} / ${requested.length})`
+  } else if (product) {
+    statusText = '문구와 해시태그를 만드는 중입니다'
+  }
 
   return (
     <>
       <h1>{ready ? '게시글 2개를 만들었습니다' : '게시글을 만들고 있습니다'}</h1>
       <p className="lead">
-        {ready ? 'PC에서 게시물을 열었을 때의 모습입니다. 확인한 뒤 게시를 누르세요.' : '보통 1분 안에 끝납니다. 이 화면을 닫지 말고 기다려 주세요.'}
+        {ready
+          ? 'PC에서 게시물을 열었을 때의 모습입니다. 사진을 넘겨 보고, 어색한 사진은 체크를 꺼서 뺀 뒤 게시를 누르세요.'
+          : `약 ${estimateMinutes(requested.length)}분 걸립니다. 다 된 사진부터 아래에 나옵니다. 이 화면을 닫지 말고 기다려 주세요.`}
       </p>
+      {USE_SAMPLE && <p className="hint">지금은 서버 없이 예시 결과를 보여줍니다.</p>}
 
       {waiting && (
         <div className="card status" role="status">
           <span className="spinner" aria-hidden="true" />
-          {job.status === 'queued' ? '순서를 기다리는 중입니다' : '사진과 문구를 만드는 중입니다'}
+          {statusText}
         </div>
       )}
 
@@ -203,31 +241,43 @@ function ResultStep({ job, onBack, onPublish }) {
         </div>
       )}
 
-      {ready && (
-        <>
-          <PostCard kind="product" storeName={STORE_NAME} result={job.product_photo} />
-          <PostCard kind="usage" storeName={STORE_NAME} result={job.usage_example} />
+      {product && (
+        <PostCard
+          kind="product"
+          storeName={STORE_NAME}
+          result={product}
+          pendingAngles={waiting ? pendingAngles : []}
+          excluded={excluded}
+          onToggle={onToggle}
+        />
+      )}
+      {job.usage_example && <PostCard kind="usage" storeName={STORE_NAME} result={job.usage_example} />}
 
-          <div className="card">
-            <label className="field-label" htmlFor="revise">수정 요청</label>
-            <div className="row">
-              <input id="revise" type="text" placeholder="배경을 더 밝게, 문구는 짧게" disabled />
-              <button type="button" className="secondary" disabled>반영</button>
-            </div>
-            <p className="hint">게시글에 함께 반영됩니다. 하나만 고치려면 그 게시글의 버튼을 쓰세요. (기능 연결 전)</p>
+      {ready && (
+        <div className="card">
+          <label className="field-label" htmlFor="revise">수정 요청</label>
+          <div className="row">
+            <input id="revise" type="text" placeholder="배경을 더 밝게, 문구는 짧게" disabled />
+            <button type="button" className="secondary" disabled>반영</button>
           </div>
-        </>
+          <p className="hint">게시글에 함께 반영됩니다. 하나만 고치려면 그 게시글의 버튼을 쓰세요. (기능 연결 전)</p>
+        </div>
       )}
 
+      {ready && chosen.length === 0 && (
+        <p className="error">제품 소개 사진을 한 장 이상 넣어야 게시할 수 있습니다.</p>
+      )}
       <div className="footer">
         <button type="button" className="secondary" onClick={onBack}>이전</button>
-        <button type="button" className="primary" disabled={!ready} onClick={onPublish}>게시</button>
+        <button type="button" className="primary" disabled={!ready || chosen.length === 0} onClick={onPublish}>게시</button>
       </div>
     </>
   )
 }
 
-function PublishedStep({ job, onMore }) {
+function PublishedStep({ job, excluded, onMore }) {
+  const chosen = postSlides(job.product_photo).filter((slide) => slide.url && !excluded.includes(slide.key))
+
   return (
     <>
       <div className="card done-banner" role="status">
@@ -244,7 +294,7 @@ function PublishedStep({ job, onMore }) {
           </div>
         </header>
         <div className="grid">
-          <FeedTile label="제품 소개" url={job.product_photo.image_url} />
+          <FeedTile label="제품 소개" url={chosen[0]?.url} count={chosen.length} />
           <FeedTile label="활용 예시" url={job.usage_example.image_url} />
           <div className="tile empty">다음 게시글이 여기에 쌓입니다</div>
         </div>
@@ -260,10 +310,11 @@ function PublishedStep({ job, onMore }) {
   )
 }
 
-function FeedTile({ label, url }) {
+function FeedTile({ label, url, count = 1 }) {
   return (
     <div className="tile">
       <span className="tile-badge">새 게시물</span>
+      {count > 1 && <span className="tile-many" title={`사진 ${count}장`}>⧉ {count}</span>}
       {url ? <img src={url} alt={label} /> : <span>[{label} 사진]</span>}
     </div>
   )
