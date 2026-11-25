@@ -14,7 +14,7 @@
 ```bash
 cd ~/sprint13-last-project
 export HF_HOME=/data/models/hf_cache CAMERA_ANGLE_CODE_DIR=/data/models/vendor
-nohup /data/venv/bin/python serving/api.py > /data/outputs/na_sanghun/api.log 2>&1 &
+nohup /data/venv/bin/python serving/api.py > /data/outputs/na_sanghun/api.log 2>&1 < /dev/null &
 ```
 
 - `CAMERA_ANGLE_CODE_DIR`: 깊이 모델(MoGe) 코드 위치. 빠지면 모델을 못 불러와 서버가 켜지지 않습니다.
@@ -24,7 +24,7 @@ nohup /data/venv/bin/python serving/api.py > /data/outputs/na_sanghun/api.log 2>
 모델 없이 켜기 (화면 연결 확인용, 그래픽 카드 안 씀):
 
 ```bash
-nohup /data/venv/bin/python serving/api.py --no-models > /data/outputs/na_sanghun/api.log 2>&1 &
+nohup /data/venv/bin/python serving/api.py --no-models > /data/outputs/na_sanghun/api.log 2>&1 < /dev/null &
 ```
 
 각도는 모두 "이 각도는 만들지 못했습니다."로, 문구는 임시 문구로 돌려줍니다.
