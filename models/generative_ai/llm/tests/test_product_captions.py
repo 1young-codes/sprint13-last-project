@@ -1,23 +1,26 @@
 import json
+import os
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from models.generative_ai.llm.product_captions import generate_product_captions
 
 
 class ProductCaptionsTest(unittest.TestCase):
+    @patch.dict(os.environ, clear=True)
     @patch("models.generative_ai.llm.product_captions.OpenAI")
     def test_returns_both_captions_from_one_request(self, openai):
         inputs = {
             "product_name": "도미",
             "unit": "kg",
             "price_krw": 25000,
-            "usage_example": "도미 솥밥",
+            "usage_example": "도미찜",
             "notes": "제철 도미, 당일 조업, 원기 회복, 건강한 한 끼",
         }
         model_captions = {
             "product_caption": "당일 조업한 제철 도미입니다.",
-            "usage_caption": "기운이 빠지는 날, 따뜻한 도미 솥밥에 쪽파를 올려 든든한 저녁을 즐겨 보세요.",
+            "usage_caption": "기운이 빠지는 날, 따뜻한 도미찜에 쪽파를 올려 든든한 저녁을 즐겨 보세요.",
         }
         create = openai.return_value.__enter__.return_value.responses.create
         create.return_value.status = "completed"
@@ -39,11 +42,46 @@ class ProductCaptionsTest(unittest.TestCase):
         create.assert_called_once()
         request = create.call_args.kwargs
         self.assertEqual(request["model"], "gpt-5-mini")
+        self.assertNotIn("reasoning", request)
+        prompt = Path(__file__).resolve().parents[1] / "prompts" / "product_captions.md"
+        self.assertEqual(request["instructions"], prompt.read_text(encoding="utf-8"))
         self.assertEqual(json.loads(request["input"]), inputs)
         self.assertCountEqual(
             request["text"]["format"]["schema"]["required"],
             ["product_caption", "usage_caption"],
         )
+
+    @patch.dict(os.environ, clear=True)
+    @patch("models.generative_ai.llm.product_captions.OpenAI")
+    def test_forwards_model_and_effort_overrides(self, openai):
+        create = openai.return_value.__enter__.return_value.responses.create
+        create.return_value.status = "completed"
+        create.return_value.output_text = json.dumps(
+            {"product_caption": "제철 도미입니다.", "usage_caption": "저녁에 도미찜을 즐겨 보세요."}
+        )
+        for settings, model, effort in (
+            ({"OPENAI_CAPTION_MODEL": " gpt-6-luna "}, "gpt-6-luna", ""),
+            ({"OPENAI_CAPTION_REASONING_EFFORT": "low"}, "gpt-5-mini", "low"),
+            (
+                {
+                    "OPENAI_CAPTION_MODEL": "gpt-6-luna",
+                    "OPENAI_CAPTION_REASONING_EFFORT": " none ",
+                },
+                "gpt-6-luna",
+                "none",
+            ),
+        ):
+            with self.subTest(settings=settings), patch.dict(os.environ, settings):
+                create.reset_mock()
+                captions = generate_product_captions("도미", "kg", 25000, "도미찜")
+                create.assert_called_once()
+                request = create.call_args.kwargs
+                self.assertEqual(request["model"], model)
+                if effort:
+                    self.assertEqual(request["reasoning"], {"effort": effort})
+                else:
+                    self.assertNotIn("reasoning", request)
+                self.assertEqual(set(captions), {"product_caption", "usage_caption"})
 
     @patch("models.generative_ai.llm.product_captions.OpenAI")
     def test_preserves_free_form_unit_and_allows_omitting_notes(self, openai):
@@ -60,7 +98,7 @@ class ProductCaptionsTest(unittest.TestCase):
 
     @patch("models.generative_ai.llm.product_captions.OpenAI")
     def test_rejects_invalid_input_before_opening_client(self, openai):
-        inputs = dict(product_name="도미", unit="kg", price_krw=25000, usage_example="도미 솥밥")
+        inputs = dict(product_name="도미", unit="kg", price_krw=25000, usage_example="도미찜")
         for field, value in (
             ("product_name", " "),
             ("unit", ""),
@@ -88,4 +126,4 @@ class ProductCaptionsTest(unittest.TestCase):
             with self.subTest(payload=payload):
                 create.return_value.output_text = json.dumps(payload)
                 with self.assertRaisesRegex(ValueError, field):
-                    generate_product_captions("도미", "kg", 25000, "도미 솥밥")
+                    generate_product_captions("도미", "kg", 25000, "도미찜")
