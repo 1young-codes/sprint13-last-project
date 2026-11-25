@@ -39,6 +39,8 @@ figure {{ margin: 0; }}
 figure img {{ width: 100%; border-radius: 6px; cursor: zoom-in; display: block; }}
 figcaption {{ display: flex; justify-content: space-between; align-items: center; margin-top: 6px; gap: 8px; }}
 figcaption b {{ font-weight: 600; }}
+figcaption > span {{ min-width: 0; overflow-wrap: anywhere; }}
+figcaption select {{ flex: none; }}
 select {{ font: inherit; padding: 4px; }}
 details {{ font-size: 13px; }}
 #zoom {{ position: fixed; inset: 0; background: #000e; display: none; align-items: center; justify-content: center;
