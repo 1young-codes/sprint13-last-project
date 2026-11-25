@@ -36,7 +36,7 @@ def finish(image: Path, folder: Path, scene: str, category: str, presets: list[s
                *[arg for p in presets for arg in ("--preset", p)]],
               {"CAMERA_ANGLE_OUTPUT_DIR": str(angle_dir.resolve())})
     nested = angle_dir / image.stem
-    for result in nested.glob("*.png"):
+    for result in nested.iterdir():  # 그림과 함께 남는 run_info.json도 옮김
         shutil.move(result, angle_dir / result.name)
     nested.rmdir()
     shutil.copy(image, angle_dir / "front.png")  # 각도를 바꾸지 않은 생성 원본도 같이 다듬음
