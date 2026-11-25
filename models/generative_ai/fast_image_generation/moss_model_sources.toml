@@ -1,0 +1,18 @@
+# MOSS-Image 모델 출처입니다. Qwen 목록(model_sources.toml)과 나눠, 각도 기능의 모델 내려받기가 이 27GB를 같이 받지 않게 합니다.
+# MOSS-Image SFT 공식 저장소 (diffusers 형식, bf16). 활용 예시 생성이 씁니다. 약 27GB.
+# 파이프라인 코드(pipeline_moss_image.py)도 이 커밋의 것을 씁니다. 커밋을 고정해 파일 내용이 바뀌지 않습니다.
+[models.moss_sft]
+repo = "OpenMOSS-Team/MOSS-Image-SFT"
+revision = "f972bd4b4b9e3852133cc5da954d87bc32cd8fb9"
+files = ["model_index.json", "LICENSE", "pipeline_moss_image.py",
+         "scheduler/scheduler_config.json", "scheduler/pipeline_moss_image.py",
+         "text_encoder/config.json", "text_encoder/model.safetensors.index.json",
+         "text_encoder/model-00001-of-00004.safetensors", "text_encoder/model-00002-of-00004.safetensors",
+         "text_encoder/model-00003-of-00004.safetensors", "text_encoder/model-00004-of-00004.safetensors",
+         "tokenizer/chat_template.jinja", "tokenizer/tokenizer.json", "tokenizer/tokenizer_config.json",
+         "transformer/config.json", "transformer/pipeline_moss_image.py",
+         "transformer/diffusion_pytorch_model.safetensors.index.json",
+         "transformer/diffusion_pytorch_model-00001-of-00003.safetensors",
+         "transformer/diffusion_pytorch_model-00002-of-00003.safetensors",
+         "transformer/diffusion_pytorch_model-00003-of-00003.safetensors",
+         "vae/config.json", "vae/diffusion_pytorch_model.safetensors"]
