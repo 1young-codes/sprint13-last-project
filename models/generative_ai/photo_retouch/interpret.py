@@ -56,8 +56,9 @@ class Interpreter:
         if not key:
             raise RuntimeError(f"{self.settings['api_key_env']}가 없습니다. 프로젝트 루트 .env에 넣거나 --no-ai로 실행하세요")
         self.client = OpenAI(api_key=key, timeout=self.settings["timeout_seconds"])
+        self.usage = []  # 호출마다 {"step", "input_tokens", "output_tokens"}: 비용 계산용
 
-    def ask(self, images: list[np.ndarray], text: str) -> str:
+    def ask(self, step: str, images: list[np.ndarray], text: str) -> str:
         long_side = self.settings["image_long_side"]
         content = []
         for image in images:
@@ -70,12 +71,15 @@ class Interpreter:
         content.append({"type": "text", "text": text})
         response = self.client.chat.completions.create(model=self.settings["model"], response_format={"type": "json_object"},
                                                        messages=[{"role": "user", "content": content}])
+        if response.usage:
+            self.usage.append({"step": step, "input_tokens": response.usage.prompt_tokens,
+                               "output_tokens": response.usage.completion_tokens})
         return response.choices[0].message.content or ""
 
     def classify(self, image: np.ndarray) -> tuple[str, str]:
         categories = load_categories()
         listing = "\n".join(f"- {key}: {rule['hint']}" for key, rule in categories.items())
-        answer = parse_json(self.ask([image], self.prompts["classify"]["text"].format(categories=listing)))
+        answer = parse_json(self.ask("classify", [image], self.prompts["classify"]["text"].format(categories=listing)))
         category = answer.get("category") if answer.get("category") in categories else self.settings["fallback_category"]
         return category, str(answer.get("subject") or categories[category]["label"])
 
@@ -83,14 +87,14 @@ class Interpreter:
         """측정된 바로잡을 거리마다 진짜 문제인지, 분위기라 둘지 판단합니다."""
         findings = "\n".join(f"- {name}: {item['finding']}" for name, item in found.items()) or "- (none)"
         text = self.prompts["review"]["text"].format(label=rule["label"], hint=rule["hint"], subject=subject, findings=findings)
-        answer = self.ask([image], text)
+        answer = self.ask("review", [image], text)
         return clean_review(parse_json(answer), found), answer
 
     def judge(self, original: np.ndarray, candidates: list[np.ndarray], rule: dict, subject: str) -> tuple[int, str]:
         """후보 번호(0부터)와 한국어 이유. 답이 깨지면 첫 후보."""
         last = len(candidates) + 1
         text = self.prompts["judge"]["text"].format(last=last, label=rule["label"], subject=subject)
-        answer = parse_json(self.ask([original, *candidates], text))
+        answer = parse_json(self.ask("judge", [original, *candidates], text))
         choice = answer.get("choice")
         if isinstance(choice, int) and 2 <= choice <= last:
             return choice - 2, str(answer.get("reason", ""))

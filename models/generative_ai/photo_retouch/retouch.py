@@ -8,7 +8,8 @@
 6. (선택, 기본 끔) 배경 잡동사니 지우기: 상품 영역 밖만 지움. 해석 모델의 좌표가 부정확할 수 있음
 7. (선택) 스튜디오 조명: 새 조명의 밝기만 상품에 입히고, 다시 검사해서 통과할 때만 별도 결과로 냄
 
-모델은 단계마다 불러오고 바로 내려서, 그래픽 카드 L4(24GB) 한 장에서 돕니다.
+모델은 load_models()로 한 번 불러 두고, retouch(photo, models)를 사진마다 부릅니다.
+다 쓰면 unload_models(models)로 그래픽 메모리를 비웁니다.
 """
 
 from .adjustments import apply_regions, clamp_params, scale_params, to_array, to_image
@@ -52,22 +53,51 @@ def build_candidates(image, found, review, rule, mask, settings) -> list[dict]:
     return candidates
 
 
-def retouch(photo, category: str | None = None, use_ai: bool = True, cleanup: bool = False,
-            studio_light: bool = False) -> dict:
-    """photo: PIL 이미지. 결과: {"image", "studio_image"(선택), "report"}."""
-    settings = load_settings()
-    image = to_array(photo)
-    report = {"steps": []}
+def load_models(use_ai: bool = True, cleanup: bool = False, studio_light: bool = False) -> dict:
+    """한 번만 부릅니다. 켠 기능의 모델만 그래픽 카드에 올립니다."""
+    from .product_mask import load_mask_model
 
-    from .product_mask import product_mask
-
-    subject_mask = product_mask(image)
-
-    ai, review, subject = None, None, ""
+    models = {"mask": load_mask_model(), "ai": None, "inpaint": None, "relighter": None}
     if use_ai:
         from .interpret import Interpreter
 
-        ai = Interpreter()
+        models["ai"] = Interpreter()
+    if cleanup:
+        from .cleanup import load_inpaint_model
+
+        models["inpaint"] = load_inpaint_model()
+    if studio_light:
+        from .studio_light import Relighter
+
+        models["relighter"] = Relighter()
+    return models
+
+
+def unload_models(models: dict) -> None:
+    import gc
+
+    import torch
+
+    models.clear()
+    gc.collect()  # 스튜디오 조명 모델은 서로 참조하는 부분이 있어 먼저 거둬야 메모리가 풀림
+    torch.cuda.empty_cache()
+
+
+def retouch(photo, models: dict, category: str | None = None) -> dict:
+    """photo: PIL 이미지, models: load_models()의 결과. 결과: {"image", "studio_image"(선택), "report"}.
+
+    해석, 배경 지우기, 스튜디오 조명은 load_models()에서 켠 것만 돕니다.
+    """
+    from .product_mask import product_mask
+
+    settings = load_settings()
+    image = to_array(photo)
+    report = {"steps": []}
+    subject_mask = product_mask(models["mask"], image)
+
+    ai, review, subject = models["ai"], None, ""
+    usage_start = len(ai.usage) if ai else 0
+    if ai:
         if category is None:
             category, subject = ai.classify(image)
     category = category or settings["interpret"]["fallback_category"]
@@ -96,10 +126,14 @@ def retouch(photo, category: str | None = None, use_ai: bool = True, cleanup: bo
     report |= {"chosen": chosen["name"] if chosen else "original", "chosen_reason": why,
                "params": chosen["plan"] if chosen else {}, "reasons": chosen["reasons"] if chosen else {}}
 
-    if cleanup and review and review["distractions"]:
+    if ai:
+        report["ai_usage"] = ai.usage[usage_start:]
+
+    if models["inpaint"] and review and review["distractions"]:
         from .cleanup import remove_distractions
 
-        cleaned, removed = remove_distractions(result, review["distractions"], subject_mask, settings["cleanup"])
+        cleaned, removed = remove_distractions(models["inpaint"], result, review["distractions"], subject_mask,
+                                               settings["cleanup"])
         verdict = check(result, cleaned, subject_mask, rule["fidelity"])  # 상품 영역은 그대로여야 함
         if removed and verdict["ok"]:
             result = cleaned
@@ -107,14 +141,14 @@ def retouch(photo, category: str | None = None, use_ai: bool = True, cleanup: bo
         report["steps"].append({"cleanup": removed, "fidelity": verdict})
 
     output = {"image": to_image(result), "report": report}
-    if studio_light and rule["use_product_mask"] and rule.get("studio_prompt"):
+    if models["relighter"] and rule["use_product_mask"] and rule.get("studio_prompt"):
         from .studio_light import relight
 
         light = settings["studio_light"]
-        lit = relight(result, subject_mask, rule["studio_prompt"], light)
+        lit = relight(models["relighter"], result, subject_mask, rule["studio_prompt"], light)
         verdict = check(result, lit, subject_mask, rule["fidelity"] | light["fidelity"])
         report["studio_light"] = verdict
         output["studio_image" if verdict["ok"] else "studio_rejected"] = to_image(lit)
-    elif studio_light:
+    elif models["relighter"]:
         report["studio_light"] = {"ok": False, "problems": [f"{rule['label']} 사진에는 스튜디오 조명을 쓰지 않습니다"]}
     return output

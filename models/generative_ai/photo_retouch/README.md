@@ -65,7 +65,19 @@ python -m models.generative_ai.photo_retouch 사진.jpg --no-ai            # 해
 | `studio.png` | 스튜디오 조명 결과 (선택, 검사 통과 시) |
 | `compare.png` | 원본과 결과를 나란히 |
 | `설명.md` | 사장님용 설명: 본 문제, 바꾼 값과 이유, 실물 검사 결과 |
-| `report.json` | 전체 기록 |
+| `report.json` | 전체 기록. `ai_usage`에 해석 모델 호출마다 입력·출력 토큰 수가 남습니다 |
+
+## 코드에서 부르기
+
+모델은 한 번만 불러 두고 사진마다 처리만 합니다. 상주 서버에서도 이 순서로 씁니다.
+
+```python
+from models.generative_ai.photo_retouch.retouch import load_models, retouch, unload_models
+
+models = load_models(use_ai=True, cleanup=False, studio_light=False)  # 켠 기능의 모델만 올림
+output = retouch(photo, models)            # photo: PIL 이미지. 여러 번 불러도 모델을 다시 읽지 않음
+unload_models(models)                      # 그래픽 메모리 비우기
+```
 
 ## 조정
 

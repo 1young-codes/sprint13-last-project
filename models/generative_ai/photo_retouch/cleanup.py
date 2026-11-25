@@ -36,12 +36,16 @@ def inpaint(model, crop: np.ndarray, hole: np.ndarray, long_side: int) -> np.nda
     return resize(filled, (width, height))
 
 
-def remove_distractions(image: np.ndarray, distractions: list[dict], subject: np.ndarray, rule: dict) -> tuple[np.ndarray, list[str]]:
+def load_inpaint_model():
     import torch
 
+    return torch.jit.load(str(model_folder("inpaint") / "lama.pt"), map_location="cuda").eval()
+
+
+def remove_distractions(model, image: np.ndarray, distractions: list[dict], subject: np.ndarray,
+                        rule: dict) -> tuple[np.ndarray, list[str]]:
     height, width = image.shape[:2]
     keep = binary_dilation(subject > rule["subject_threshold"], iterations=rule["subject_margin_px"])
-    model = torch.jit.load(str(model_folder("inpaint") / "lama.pt"), map_location="cuda").eval()
     result, removed = image.copy(), []
     for item in distractions:
         x0, y0, x1, y1 = box_pixels(item["box"], width, height, rule["box_padding"])
@@ -57,6 +61,4 @@ def remove_distractions(image: np.ndarray, distractions: list[dict], subject: np
         filled = inpaint(model, crop, crop_hole, rule["crop_long_side"])
         result[cy0:cy1, cx0:cx1] = np.where(crop_hole[..., None], filled, crop)
         removed.append(item["label"])
-    del model
-    torch.cuda.empty_cache()
     return result, removed

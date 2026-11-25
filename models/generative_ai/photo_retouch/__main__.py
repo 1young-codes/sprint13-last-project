@@ -11,7 +11,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from .retouch import retouch
+from .retouch import load_models, retouch, unload_models
 from .settings import load_categories, project_path
 
 NAMES = {"exposure_ev": "밝기", "temperature": "색온도", "tint": "색조", "contrast": "대비", "highlights": "밝은 부분",
@@ -64,11 +64,10 @@ def main():
     parser.add_argument("--studio-light", action="store_true", help="생성형 스튜디오 조명 결과도 만듦")
     args = parser.parse_args()
 
+    models = load_models(use_ai=not args.no_ai, cleanup=args.cleanup, studio_light=args.studio_light)
     for photo_path in args.photos:
         photo = Image.open(photo_path).convert("RGB")
-        # ponytail: 사진마다 모델을 다시 불러옴. 여러 장을 자주 돌리면 모델을 한 번만 올리도록 바꿀 것
-        output = retouch(photo, args.category, use_ai=not args.no_ai, cleanup=args.cleanup,
-                         studio_light=args.studio_light)
+        output = retouch(photo, models, args.category)
         folder = project_path("output_dir") / photo_path.stem
         folder.mkdir(parents=True, exist_ok=True)
         output["image"].save(folder / "retouched.png")
@@ -82,6 +81,7 @@ def main():
         (folder / "report.json").write_text(json.dumps(output["report"], ensure_ascii=False, indent=2), encoding="utf-8")
         (folder / "설명.md").write_text(explain(output["report"]), encoding="utf-8")
         print(f"[완료] {photo_path.name} → {folder}")
+    unload_models(models)
 
 
 if __name__ == "__main__":

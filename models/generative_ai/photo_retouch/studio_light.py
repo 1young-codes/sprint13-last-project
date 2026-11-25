@@ -110,17 +110,10 @@ class Relighter:
                                           **common).images
             return resize(self.decode(latents), (width, height))
 
-    def close(self):
-        del self.text_to_image, self.image_to_image, self.vae
-        self.torch.cuda.empty_cache()
-
-
-def relight(image: np.ndarray, subject: np.ndarray, prompt: str, rule: dict) -> np.ndarray:
+def relight(relighter: Relighter, image: np.ndarray, subject: np.ndarray, prompt: str, rule: dict) -> np.ndarray:
     weight = subject[..., None]
     foreground = image * weight + 0.5 * (1 - weight)  # 공식 데모처럼 상품 밖은 회색
-    relighter = Relighter()
     lit = relighter.run(foreground, prompt, rule)
-    relighter.close()
     sigma = rule["detail_sigma_px"]
     if rule["keep_product_color"]:
         # 상품은 원본 색과 세부를 그대로 두고, 새 조명의 밝기 분포(그림자, 하이라이트)만 곱함
