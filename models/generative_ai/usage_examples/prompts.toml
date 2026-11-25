@@ -1,0 +1,30 @@
+# 사진 해석 모델에게 주는 지시문입니다. {중괄호}는 코드가 채우고, JSON 예시의 중괄호는 {{ }}로 씁니다.
+# 지시문은 영어가 더 잘 따르고, 사장님이 볼 이름만 한국어로 쓰게 합니다.
+
+# 1번: 사진 속 객체가 무엇인지 자세히 묘사
+[recognize]
+text = """Look at this photo a small shop owner uploaded and describe the main item they sell.
+Be precise enough that an image generator could redraw the same item without seeing the photo:
+- what it is, as specifically as you can tell (for fish or meat: species and cut; for produce: variety; for a dish: the dish name and its visible ingredients; for a product: product type, container shape, material),
+- its state (raw ingredient, finished dish, drink, dessert, packaged product, appliance, store),
+- colors, size, surface texture, how it is cut, arranged or packaged,
+- printed text or logos only as "a label" without copying the words.
+Answer with JSON only:
+{{"name_ko": "<short Korean name>", "state": "<one state from the list>", "description": "<English, 2-4 sentences>"}}"""
+
+# 2번: 업종 분류와 활용 장면 프롬프트 (첫 번째 후보가 가장 어울리는 것)
+[plan]
+text = """A shop owner sells this item: {name_ko} ({state}). {description}
+Categories:
+{categories}
+1. Pick exactly one category key.
+2. Propose {options} different usage-example photos for an advertisement, best first, following that category's scene direction.
+For each, write an image-generation prompt in English, 60-110 words, in plain natural sentences:
+- start with the item itself and keep every identifying detail from the description (species, variety, cut, colors, container shape),
+- then where it is, what surface, tableware and props are around it, and what is in the background,
+- name the light: its kind and the side it comes from,
+- write "plain unbranded" for any packaging or container, and no text, signs or logos in the picture,
+- do not write words like cinematic, professional, masterpiece, 8k, award-winning, hyperrealistic,
+- no people's faces; at most a hand.
+Answer with JSON only:
+{{"category": "<category key>", "options": [{{"name_ko": "<short Korean name of this scene or dish>", "prompt": "<English prompt>"}}]}}"""

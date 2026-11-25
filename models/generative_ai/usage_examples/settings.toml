@@ -1,0 +1,64 @@
+# 활용 예시 이미지 생성의 기본 설정입니다.
+# 경로는 프로젝트 루트 기준 상대 경로이고, .env나 환경 변수의 USAGE_EXAMPLES_<이름>이 있으면 그 값이 우선합니다.
+# 업종과 업종별 장면 방향은 보정 기능과 같이 쓰는 ../photo_retouch/categories.toml에 있습니다.
+
+[paths]
+output_dir = "outputs/usage_examples"     # USAGE_EXAMPLES_OUTPUT_DIR (가상 머신: /data/outputs/usage_examples)
+lora_dir = "models/loras"                 # USAGE_EXAMPLES_LORA_DIR (가상 머신: /data/models/loras)
+
+# ── 사진 해석 (OpenAI) ───────────────────────────────────
+[interpret]
+model = "gpt-6-luna"
+api_key_env = "OPENAI_API_KEY"   # 이 이름의 환경 변수, 없으면 프로젝트 루트 .env
+image_long_side = 1024
+jpeg_quality = 90
+detail = "high"
+timeout_seconds = 120
+
+# ── 생성 (MOSS-Image SFT) ─────────────────────────────────
+# 단계 수, CFG, 빈 부정 프롬프트는 공식 기본값입니다. 부정 갈래의 22번 블록 건너뛰기도 공식 파이프라인 기본값 그대로입니다.
+[generation]
+steps = 50
+cfg = 3.0
+seed = 20261125                  # 사진마다 seed + 순번. 같은 사진은 세 조건이 같은 시드를 씀
+negative_prompt = ""
+default_orientation = "landscape"
+default_condition = "original"   # 한 장만 만들 때(run) 쓰는 조건
+# SDXL 공식 해상도 중 약 3:2 (둘 다 약 100만 화소, 16의 배수)
+[generation.sizes]
+landscape = [1216, 832]
+portrait = [832, 1216]
+
+# 비교 조건. file은 lora_dir 안의 파일 이름, trigger는 프롬프트 맨 앞에 붙일 단어입니다.
+# 세기와 트리거 단어는 각 로라 배포 페이지의 권장값입니다.
+[[conditions]]
+name = "original"
+label = "오리지널"
+
+[[conditions]]
+name = "lora1"
+label = "로라1"
+file = "MOSSRealisticSnapshotV1.safetensors"
+page = "https://civitai.com/models/2268008"
+sha256 = "67d6eca47c4a01b5ae03791916cce86226defe44598a66b4bb246f24d3772bb4"
+strength = 1.0
+trigger = ""
+
+[[conditions]]
+name = "lora2"
+label = "로라2"
+file = "cndamiph_Candid_Amateur_iPhone_MOSS_v1.safetensors"
+page = "https://civitai.com/models/3012015"
+sha256 = "d2161fcfd335d813e3d56ddfb2c9ef93e162ef32052a7fac96615c241065eefa"
+strength = 1.0
+trigger = "cndamiph"
+
+# ── 생성 뒤 단계 (각도 → 업스케일 → 보정) ──────────────────────
+# 단계마다 가상환경과 그래픽 메모리가 달라서 따로 실행합니다. 비어 있으면 지금 쓰는 파이썬으로 실행합니다.
+[finish]
+angle_presets = ["all"]
+upscale_model = "pixrestore"
+upscale_scale = 2
+angle_python = ""                # USAGE_EXAMPLES_ANGLE_PYTHON
+upscale_python = ""              # USAGE_EXAMPLES_UPSCALE_PYTHON
+retouch_python = ""              # USAGE_EXAMPLES_RETOUCH_PYTHON (가상 머신: /data/venvs/photo_retouch/bin/python)
