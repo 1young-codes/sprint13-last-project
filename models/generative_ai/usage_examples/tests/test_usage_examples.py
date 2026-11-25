@@ -76,7 +76,7 @@ def test_review_page_and_summary(tmp_path):
     plan = {"id": "fish", "file": "fish.jpg", "name_ko": "고등어", "category_label": "음식", "orientation": "landscape",
             "option": {"name_ko": "고등어조림", "prompt": "Braised <mackerel>."}}
     page = build([plan], images, photos, out).read_text(encoding="utf-8")
-    assert "MOSSRealisticSnapshotV1.safetensors" in page and "cndamiph_Candid_Amateur_iPhone_MOSS_v1" in page
+    assert "Realistic Snapshot" in page and "MOSSRealisticSnapshotV1" not in page and "cndamiph_Candid_Amateur_iPhone_MOSS_v1" in page
     assert "Braised &lt;mackerel&gt;." in page  # 프롬프트는 글자로만 보임
     assert len(list((out / "images").iterdir())) == 3
 

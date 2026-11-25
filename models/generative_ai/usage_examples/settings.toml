@@ -38,6 +38,7 @@ label = "오리지널"
 [[conditions]]
 name = "lora1"
 label = "로라1"
+display_name = "Realistic Snapshot"  # 비교 페이지에 보이는 이름 (배포 페이지 공식 이름)
 file = "MOSSRealisticSnapshotV1.safetensors"
 page = "https://civitai.com/models/2268008"
 sha256 = "67d6eca47c4a01b5ae03791916cce86226defe44598a66b4bb246f24d3772bb4"

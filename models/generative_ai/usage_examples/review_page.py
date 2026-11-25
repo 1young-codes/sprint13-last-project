@@ -120,7 +120,7 @@ def build(plans: list[dict], images_dir: Path, photos_dir: Path, out: Path) -> P
         for condition in chosen:
             name = f"{plan['id']}_{condition['name']}.png"
             shutil.copy(images_dir / condition["name"] / f"{plan['id']}.png", out / "images" / name)
-            lora = condition.get("file", "로라 없음")
+            lora = condition.get("display_name") or condition.get("file", "로라 없음")
             images.append({"condition": condition["name"], "label": condition["label"], "lora": lora})
             options = "".join(f'<option value="{r}">{r}위</option>' for r in (1, 2, 3))
             figures.append(
