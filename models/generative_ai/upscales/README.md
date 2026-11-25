@@ -57,7 +57,32 @@ python -m models.generative_ai.upscales.setup_model
 python -m models.generative_ai.upscales.run_model pixrestore --input 사진폴더 --scale 2
 ```
 
-L4에서 1024×683 사진을 ×2로 키우는 데 한 장에 약 98초 걸립니다.
+L4에서 1024×683 사진을 ×2로 키우는 데 한 장에 약 98초 걸립니다. 사진마다 모델을 새로 읽기 때문입니다.
+
+### 모델을 한 번만 불러 두고 쓰기
+
+상주 서버나 여러 장을 이어서 처리할 때는 `upscale_photo.py`를 씁니다. 추론 코드를 같은 프로세스에서 불러 쓰므로 모델 가상환경의 파이썬으로 실행합니다.
+
+```bash
+/data/venvs/upscales/pixrestore/bin/python -m models.generative_ai.upscales.upscale_photo 사진.jpg 사진2.jpg --scale 2
+```
+
+```python
+from models.generative_ai.upscales.upscale_photo import load_models, unload_models, upscale
+
+models = load_models()                     # 모델을 올리고 첫 실행 준비까지 끝냄
+big = upscale(photo, models, scale=2)      # photo: PIL 이미지. 여러 번 불러도 다시 읽지 않음
+unload_models(models)                      # 그래픽 메모리 비우기
+```
+
+| 항목 | 사진마다 새로 실행 (`run_model`) | 한 번 불러 두기 (`upscale_photo`) |
+| --- | --- | --- |
+| 모델 불러오기 | 사진마다 | 처음 한 번 약 82초 (첫 실행 준비 포함) |
+| 1024×683 사진 ×2 | 약 91초 | 약 5.7초 |
+| 그래픽 메모리 | 약 4.1기가바이트 | 같음 |
+
+첫 실행 때 추론 코드 일부(`torch.compile`)를 번역하는 데 약 1분이 들어서, 불러올 때 미리 끝내 둡니다.
+두 방식의 결과는 조각마다 쓰는 난수 순서만 달라, 화소 차이가 최대 3/255입니다.
 
 ## 검증
 

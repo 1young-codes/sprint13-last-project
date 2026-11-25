@@ -2,6 +2,9 @@
 
 회전(rotate) 프리셋: 원본을 원하는 방향과 렌즈로 다시 찍기 → 원본 밖 빈 곳만 채우기
 3D 이동(orbit) 프리셋: 깊이 추정 → 피사체 중심으로 카메라 돌려 그리기 → 원본을 참고해 구멍 채우기
+
+모델은 load_models()로 한 번 불러 두고, change_camera_angle(photo, presets, models)를 사진마다 부릅니다.
+다 쓰면 unload_models(models)로 그래픽 메모리를 비웁니다.
 """
 
 import math
@@ -77,8 +80,8 @@ def widen_photo(photo: Image.Image, photo_fov_deg: float, target: CameraView, sc
 
 
 def render_and_fill(photo: Image.Image, photo_fov_deg: float, camera: CameraView, scene_description: str, seed: int,
-                    steps: int, model_getter) -> tuple[Image.Image, dict[str, Image.Image]]:
-    """(결과, 중간 단계). 원본을 camera로 다시 찍고 빈 곳을 채웁니다.
+                    steps: int, model) -> tuple[Image.Image, dict[str, Image.Image]]:
+    """(결과, 중간 단계). 원본을 camera로 다시 찍고 빈 곳을 채웁니다. model이 None이면 채우지 않습니다.
 
     1. 원본이 화면의 작은 일부뿐이면 정면 화각을 나눠서 넓혀 둡니다 (widen_photo).
     2. 어안처럼 휘는 렌즈는 생성 모델이 휜 그림을 이어 그리지 못하므로, 같은 방향의 일반 렌즈로 찍어 채운 뒤 휘게 만듭니다.
@@ -89,16 +92,15 @@ def render_and_fill(photo: Image.Image, photo_fov_deg: float, camera: CameraView
     flat = camera if camera.lens_curve == 1 else replace(
         camera, fov_deg=min(camera.fov_deg, settings["photo"]["max_fov_deg"]), lens_curve=1.0)
     source, source_fov, stages = photo, photo_fov_deg, []
-    if model_getter is not None:
-        source, source_fov, stages = widen_photo(photo, photo_fov_deg, flat, scene_description, seed, steps,
-                                                 model_getter())
+    if model is not None:
+        source, source_fov, stages = widen_photo(photo, photo_fov_deg, flat, scene_description, seed, steps, model)
     rendered, empty_mask = render_rotated_view(source, source_fov, flat, color)
     steps_shown = {f"widened_{i + 1}": stage for i, stage in enumerate(stages)}
     steps_shown.update(before_fill=rendered, empty_mask=empty_mask)
-    if model_getter is None:
+    if model is None:
         return rendered, steps_shown
     from .fill_empty_area import fill_empty_area
-    image = fill_empty_area(model_getter(), rendered, empty_mask, scene_description, seed, steps)
+    image = fill_empty_area(model, rendered, empty_mask, scene_description, seed, steps)
     if flat is not camera:
         steps_shown["before_lens_curve"] = image
         image, _ = render_rotated_view(image, flat.fov_deg, replace(camera, yaw_deg=0, pitch_deg=0, roll_deg=0), "#000000")
@@ -116,11 +118,33 @@ def select_presets(names: list[str]) -> list[AnglePreset]:
     return [presets[n] for n in names]
 
 
-def change_camera_angle(photo: Image.Image, preset_names: list[str], scene_description: str = "",
-                        seed: int | None = None, steps: int | None = None, photo_fov_deg: float | None = None,
-                        skip_generation: bool = False, model=None) -> tuple[list[AngleResult], dict]:
-    """(결과 목록, 실행 정보). skip_generation이면 생성 모델 없이 빈 곳을 표시색으로 남겨 계산만 확인합니다.
-    model을 주면 그 생성 모델을 씁니다 (여러 사진을 이어서 처리할 때 한 번만 불러오도록)."""
+def load_models(depth: bool = True, generation: bool = True) -> dict:
+    """한 번만 부릅니다. depth: 깊이 모델(3D 이동, 화각 추정), generation: 빈 곳 채우기 생성 모델.
+    생성 모델 없이 부르면 빈 곳을 표시색으로 남겨 계산만 확인합니다."""
+    models = {"depth": None, "generation": None}
+    if depth:
+        from .estimate_depth import load_depth_model
+        models["depth"] = load_depth_model(load_settings()["depth"]["model"])
+    if generation:
+        from ..fast_image_generation.qwen_image_model import QwenImageModel
+        models["generation"] = QwenImageModel(ratios_file=RATIOS_FILE)
+    return models
+
+
+def unload_models(models: dict) -> None:
+    import gc
+
+    import torch
+
+    models.clear()
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
+def change_camera_angle(photo: Image.Image, preset_names: list[str], models: dict, scene_description: str = "",
+                        seed: int | None = None, steps: int | None = None,
+                        photo_fov_deg: float | None = None) -> tuple[list[AngleResult], dict]:
+    """(결과 목록, 실행 정보). models: load_models()의 결과."""
     settings = load_settings()
     presets = select_presets(preset_names)
     photo = photo.convert("RGB")
@@ -128,25 +152,19 @@ def change_camera_angle(photo: Image.Image, preset_names: list[str], scene_descr
     steps = steps or settings["generation"]["steps"]
     photo_fov_deg = photo_fov_deg or settings["photo"]["fov_deg"] or None
 
-    depth = None
+    depth, model = None, models["generation"]
     if photo_fov_deg is None or any(p.method == "orbit" for p in presets):
+        if models["depth"] is None:
+            raise ValueError("화각 추정이나 3D 이동 프리셋에는 깊이 모델이 필요합니다: load_models(depth=True)")
         from .estimate_depth import estimate_depth_and_fov
-        depth = estimate_depth_and_fov(photo)
+        depth = estimate_depth_and_fov(models["depth"], photo)
         photo_fov_deg = photo_fov_deg or depth.fov_deg
 
-    def get_model():
-        nonlocal model
-        if model is None:
-            from ..fast_image_generation.qwen_image_model import QwenImageModel
-            model = QwenImageModel(ratios_file=RATIOS_FILE)
-        return model
-
-    model_getter = None if skip_generation else get_model
     results, seconds = [], {}
     for preset in (p for p in presets if p.method == "rotate"):
         started = time.perf_counter()
         image, steps_shown = render_and_fill(photo, photo_fov_deg, output_camera(preset, photo, photo_fov_deg),
-                                             scene_description, seed, steps, model_getter)
+                                             scene_description, seed, steps, model)
         results.append(AngleResult(preset, image, steps_shown))
         seconds[preset.name] = round(time.perf_counter() - started, 1)
     orbit = settings["orbit"]
@@ -162,14 +180,14 @@ def change_camera_angle(photo: Image.Image, preset_names: list[str], scene_descr
         size = output_size(photo, None, settings["photo"]["output_long_side"])
         moved = moved.resize(size, Image.Resampling.LANCZOS)
         image = moved
-        if model_getter is not None:
+        if model is not None:
             from .complete_new_viewpoint import complete_view_with_reference
-            image = complete_view_with_reference(model_getter(), photo, moved, seed, steps)
+            image = complete_view_with_reference(model, photo, moved, seed, steps)
         results.append(AngleResult(preset, image, {"moved_view": moved, "hole_mask": hole_mask}))
         seconds[preset.name] = round(time.perf_counter() - started, 1)
 
     info = {"presets": preset_names, "photo_fov_deg": photo_fov_deg, "seed": seed, "steps": steps,
-            "scene_description": scene_description, "skip_generation": skip_generation,
+            "scene_description": scene_description, "skip_generation": model is None,
             "depth_fov_deg": depth.fov_deg if depth else None,
-            "seconds_per_preset": seconds}  # 생성 모델을 처음 불러오는 시간은 첫 프리셋에 들어갑니다
+            "seconds_per_preset": seconds}
     return results, info

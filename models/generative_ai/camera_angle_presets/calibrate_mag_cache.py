@@ -12,7 +12,7 @@ from pathlib import Path
 from PIL import Image
 
 from ..fast_image_generation.qwen_image_caching.mag_cache import save_ratios
-from .change_camera_angle import RATIOS_FILE, change_camera_angle
+from .change_camera_angle import RATIOS_FILE, change_camera_angle, load_models, unload_models
 from .settings import load_angle_presets, load_settings
 
 
@@ -23,17 +23,17 @@ def main():
     parser.add_argument("--preset", action="append", required=True, help="프리셋 이름 (여러 번 지정 가능, all이면 전부)")
     args = parser.parse_args()
 
-    from ..fast_image_generation.qwen_image_model import QwenImageModel
-
     names = list(load_angle_presets()) if "all" in args.preset else args.preset
-    model = QwenImageModel(ratios_file=RATIOS_FILE)
+    models = load_models()
+    model = models["generation"]
     model.calibration = {}
     for path in args.input:
         with Image.open(path) as photo:
-            _, info = change_camera_angle(photo, names, model=model)
+            _, info = change_camera_angle(photo, names, models)
         print(f"{path.name}: 프리셋별 초 (MagCache 없이) {info['seconds_per_preset']}", flush=True)
     save_ratios(RATIOS_FILE, model.calibration, load_settings()["generation"]["steps"], len(args.input))
     print(f"저장했습니다: {RATIOS_FILE.name} ({', '.join(f'{k} {len(v)}회' for k, v in model.calibration.items())})")
+    unload_models(models)
 
 
 if __name__ == "__main__":

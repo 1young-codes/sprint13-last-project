@@ -7,11 +7,12 @@
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 from PIL import Image
 
-from .change_camera_angle import change_camera_angle
+from .change_camera_angle import change_camera_angle, load_models, unload_models
 from .settings import PROJECT_ROOT, load_angle_presets, project_path
 
 
@@ -37,9 +38,14 @@ def main():
         parser.error("--input과 --preset이 필요합니다 (프리셋 목록: --list-presets)")
     names = list(presets) if "all" in args.preset else args.preset
 
+    needs_depth = args.photo_fov is None or any(presets[n].method == "orbit" for n in names)
+    started = time.perf_counter()
+    models = load_models(depth=needs_depth, generation=not args.skip_generation)
+    load_seconds = round(time.perf_counter() - started, 1)
     with Image.open(args.input) as photo:
-        results, info = change_camera_angle(photo, names, args.scene, args.seed, args.steps, args.photo_fov,
-                                            args.skip_generation)
+        results, info = change_camera_angle(photo, names, models, args.scene, args.seed, args.steps, args.photo_fov)
+    unload_models(models)
+    info["load_seconds"] = load_seconds
     folder = project_path("output_dir") / args.input.stem
     folder.mkdir(parents=True, exist_ok=True)
     for result in results:

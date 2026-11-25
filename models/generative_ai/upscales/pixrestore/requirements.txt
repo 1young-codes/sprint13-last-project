@@ -1,4 +1,4 @@
-# PixRestore 저장소 requirements.txt(커밋 909ca06) 그대로입니다. 추론 코드가 쓰는 torchvision을 torch 2.4.0에 맞춰 더했고, torch.compile이 쓰는 triton이 setuptools를 찾아서 함께 넣었습니다.
+# PixRestore 저장소 requirements.txt(커밋 909ca06) 그대로입니다. 추론 코드가 쓰는 torchvision을 torch 2.4.0에 맞춰 더했고, torch.compile이 쓰는 triton이 setuptools를 찾아서 함께 넣었습니다. 파이썬 3.10에서 설정 파일을 읽으려고 tomli도 넣었습니다.
 accelerate>=0.31,<1.0
 diffusers>=0.30.3,<0.31
 einops>=0.7
@@ -12,3 +12,4 @@ wandb>=0.15
 torch==2.4.0
 torchvision==0.19.0
 setuptools
+tomli
