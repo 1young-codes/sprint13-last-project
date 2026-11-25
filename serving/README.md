@@ -1,0 +1,63 @@
+# API 서버 켜고 끄기
+
+화면(React)이 부르는 게시글 만들기 API(`serving/api.py`)입니다. 주소와 값은 [docs/api-spec.md](../docs/api-spec.md)를 따릅니다.
+서버는 VM 안 `127.0.0.1:8003`에서 서빙 담당 계정으로 돌립니다.
+
+## 켜기 전에
+
+- 그래픽 카드를 약 19GB 씁니다. 정리표 "GPU 사용 기록" 탭과 디스코드에 켠다고 남깁니다.
+- `nvidia-smi`로 다른 작업이 그래픽 카드를 쓰고 있지 않은지 봅니다 (L4 23GB).
+- 패키지는 공용 venv(`/data/venv`)에 이미 있습니다. 새로 깔 때는 `serving/requirements.txt`.
+
+## 켜기
+
+```bash
+cd ~/sprint13-last-project
+export HF_HOME=/data/models/hf_cache CAMERA_ANGLE_CODE_DIR=/data/models/vendor
+nohup /data/venv/bin/python serving/api.py > /data/outputs/na_sanghun/api.log 2>&1 &
+```
+
+- `CAMERA_ANGLE_CODE_DIR`: 깊이 모델(MoGe) 코드 위치. 빠지면 모델을 못 불러와 서버가 켜지지 않습니다.
+- 모델을 다 불러온 뒤에 요청을 받습니다. 불러오기에 약 1분 걸리고, 실패하면 서버가 켜지지 않고 로그에 이유가 남습니다.
+- 켜졌는지 확인: `curl -s localhost:8003/presets` 가 각도 목록을 돌려주면 됩니다.
+
+모델 없이 켜기 (화면 연결 확인용, 그래픽 카드 안 씀):
+
+```bash
+nohup /data/venv/bin/python serving/api.py --no-models > /data/outputs/na_sanghun/api.log 2>&1 &
+```
+
+각도는 모두 "이 각도는 만들지 못했습니다."로, 문구는 임시 문구로 돌려줍니다.
+
+## 끄기
+
+```bash
+pkill -u "$USER" -f serving/api.py
+```
+
+끈 뒤에 `ss -ltn | grep :8003` 이 아무것도 안 나오면 꺼진 것입니다. 기록 탭에 종료 시각을 적고 디스코드에 끝났다고 남깁니다.
+
+## 내 PC에서 부르기
+
+각자 계정으로 SSH 터널을 열면 `http://localhost:8003`으로 부를 수 있습니다. PowerShell에서는 `--` 대신 `--ssh-flag`를 씁니다.
+
+```
+gcloud compute ssh <내 계정>@sprint-ai03-team1 --zone=us-central1-c --project=sprint-ai-chunk2-03 --ssh-flag="-L 8003:127.0.0.1:8003"
+```
+
+## 걸리는 시간 (11/25 측정, 도미 사진, 각도 3개)
+
+| | 첫 요청 | 두 번째부터 |
+| --- | --- | --- |
+| 서버 켤 때 모델 불러오기 | 56초 (한 번만) | 없음 |
+| 광각 (회전) | 90초 | 44초 |
+| 올려다보기, 내려다보기 (3D 이동) | 각 30초 | 각 29초 |
+| 요청 전체 | 150초 | 101초 |
+
+- 서버를 켠 뒤 첫 각도만 약 47초 더 걸립니다. 시연 전에 요청을 한 번 보내 두면 첫 사용자가 기다리지 않습니다.
+- 그래픽 카드 최대 18.6GB. 깊이 추정은 각도마다 다시 하지만 한 번에 0.2초라 영향이 거의 없습니다.
+
+## 지금 단계에서 비어 있는 것
+
+- 문구는 임시 문구, 해시태그는 빈 목록입니다. 문구(`generate_product_captions`)와 해시태그(`generate_hashtags`) 연결은 다음 티켓에서 합니다. 이때 키는 서빙 담당 홈의 `~/.openai.env`, `~/.gemini.env`(본인만 읽기)에서 읽습니다.
+- 대표 사진은 보정 전 원본입니다. 보정 연결도 다음 티켓입니다.

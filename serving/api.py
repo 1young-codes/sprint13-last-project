@@ -1,8 +1,6 @@
 """화면(React)이 부르는 게시글 만들기 API. 주소와 값은 docs/api-spec.md를 따른다.
 
-VM에서 켜기 (공용 venv):
-    /data/venv/bin/python serving/api.py              # 각도 모델을 불러 둔다 (그래픽 카드 약 19GB)
-    /data/venv/bin/python serving/api.py --no-models  # 모델 없이. 각도는 모두 실패로 돌려준다 (화면 연결 확인용)
+켜고 끄는 방법은 serving/README.md.
 """
 import argparse
 import io
@@ -124,10 +122,8 @@ def run_job(job_id: str) -> None:
         job["usage_example"], job["status"] = usage, "ready"
 
 
-def worker(load_models: bool) -> None:
-    global make_angle, running
-    if load_models:
-        make_angle = load_angle_model()
+def worker() -> None:
+    global running
     while True:
         job_id = work.get()
         with lock:  # 대기열에서 빼기와 running 표시를 한 번에. 사이에 조회가 끼면 queue_position을 못 구한다
@@ -148,11 +144,11 @@ def worker(load_models: bool) -> None:
             log.info("%s 끝 %.1f초", job_id, time.perf_counter() - started)
 
 
-def create_app(load_models: bool = False) -> FastAPI:
+def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app):
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        threading.Thread(target=worker, args=(load_models,), daemon=True).start()
+        threading.Thread(target=worker, daemon=True).start()
         yield
 
     app = FastAPI(title="게시글 만들기 API", lifespan=lifespan)
@@ -254,4 +250,7 @@ if __name__ == "__main__":
     p.add_argument("--port", type=int, default=8003)
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    uvicorn.run(create_app(load_models=not args.no_models), host="127.0.0.1", port=args.port)
+    if not args.no_models:
+        # 요청을 받기 전에 불러온다. 실패하면 여기서 멈춰서, 모든 각도가 조용히 실패하는 서버가 뜨지 않는다.
+        make_angle = load_angle_model()
+    uvicorn.run(create_app(), host="127.0.0.1", port=args.port)
