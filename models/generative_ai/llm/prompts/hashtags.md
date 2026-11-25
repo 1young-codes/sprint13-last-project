@@ -25,6 +25,10 @@ Return JSON with two lists of Korean hashtags.
 - Use words that real customers would search for. Prefer everyday Korean over English.
 - Use only facts found in the input. Do not invent origin, freshness, discounts, or awards.
 - Do not use exaggerated or health-claim words.
+- Do not guess who the product is for (gender, age) unless the input says so.
+- Do not put sizes, weights, or counts in a hashtag.
+- Turn `usage_example` into words people search for. Do not glue its phrases together as they are.
+- If you add a shop tag, name the kind of shop that sells this product (e.g. 동네꽃집, 동네떡집). Never write a vague one like 동네가게.
 
 # Do not write → write instead
 
@@ -33,6 +37,10 @@ Return JSON with two lists of Korean hashtags.
 - `#무첨가` → leave it out unless the input says so
 - `#오늘입고` → leave it out unless the input says so
 - `#맛집` alone → `#동네수산` or a tag tied to the product
+- `#여성가디건` → `#가디건` (the input did not say who it is for)
+- `#원두200g` → `#원두` (no sizes)
+- `#화장전바르기` → `#스킨케어`, `#메이크업전` (search words, not a pasted phrase)
+- `#동네가게` → `#동네화장품가게` or leave it out
 
 # Example
 
