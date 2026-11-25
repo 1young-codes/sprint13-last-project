@@ -51,7 +51,7 @@ details {{ font-size: 13px; }}
 <h1>활용 예시 로라 비교 평가</h1>
 <p class="muted">기준: AI 같은 질감을 얼마나 걷어냈나(얼마나 실제 사진 같나). 음식마다 세 장에 1위(가장 실제 사진 같음)부터 3위까지 매기세요. 사진을 누르면 크게 보입니다.</p>
 <div class="bar"><label>평가자 이름 <input id="who" placeholder="이름"></label>
-<span id="count" class="muted"></span><button id="save">CSV 저장</button></div>
+<span id="count" class="muted"></span><button id="save">CSV 저장</button><span id="saved" class="muted"></span></div>
 {sections}
 <div id="zoom"><img alt=""></div>
 <script>
@@ -88,7 +88,8 @@ document.querySelectorAll("img[data-zoom]").forEach(img => img.addEventListener(
 zoom.addEventListener("click", () => zoom.classList.remove("open"));
 document.addEventListener("keydown", e => {{ if (e.key === "Escape") zoom.classList.remove("open"); }});
 document.getElementById("save").addEventListener("click", () => {{
-  if (!who.value.trim()) {{ who.focus(); alert("평가자 이름을 적어 주세요"); return; }}
+  const note = document.getElementById("saved");
+  if (!who.value.trim()) {{ who.focus(); note.textContent = "저장 안 됨: 평가자 이름을 먼저 적어 주세요"; return; }}
   const rows = [{fields}];
   DATA.forEach((item, i) => item.images.forEach(im => {{
     const s = document.querySelector(`select[name="${{item.id}}|${{im.condition}}"]`);
@@ -97,7 +98,9 @@ document.getElementById("save").addEventListener("click", () => {{
   const text = "\\ufeff" + rows.map(r => r.map(v => `"${{String(v).replaceAll('"', '""')}}"`).join(",")).join("\\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([text], {{type: "text/csv"}}));
-  a.download = `순위_${{who.value.trim()}}.csv`; a.click();
+  a.download = `순위_${{who.value.trim()}}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();  // 페이지에 붙여야 모든 브라우저가 내려받음
+  note.textContent = `저장함: 다운로드 폴더의 ${{a.download}}`;
 }});
 </script></body></html>
 """
@@ -142,7 +145,7 @@ def build(plans: list[dict], images_dir: Path, photos_dir: Path, out: Path) -> P
             f'<details><summary>생성 프롬프트</summary>{html.escape(option["prompt"])}</details></div></div>'
             f'<div class="grid">{"".join(figures)}</div></section>')
     page = PAGE.format(sections="\n".join(sections), data=json.dumps(data, ensure_ascii=False),
-                       fields=json.dumps(CSV_FIELDS, ensure_ascii=False)[1:-1])
+                       fields=json.dumps(CSV_FIELDS, ensure_ascii=False))
     (out / "index.html").write_text(page, encoding="utf-8")
     return out / "index.html"
 
