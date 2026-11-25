@@ -1,0 +1,27 @@
+# 자동 보정에 쓰는 모델입니다. 허깅페이스 캐시(HF_HOME)에 커밋을 고정해 받습니다.
+# files는 내려받을 파일 패턴입니다. 큰 파일만 적지 않고 불러오는 데 필요한 설정 파일까지 적습니다.
+
+# 상품(앞쪽 피사체) 영역 분리 (MIT). 저장소 안 파이썬 코드로 불러옵니다(trust_remote_code)
+[models.product_mask]
+repo = "ZhengPeng7/BiRefNet"
+revision = "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4"
+files = ["*.py", "config.json", "model.safetensors"]
+
+# 배경 잡동사니 지우기: LaMa big-lama TorchScript (Apache-2.0)
+[models.inpaint]
+repo = "JosephCatrambone/big-lama-torchscript"
+revision = "7dfbdc6dc27602d370909e8688f8f84404a1f995"
+files = ["lama.pt"]
+
+# 스튜디오 조명(선택 기능): IC-Light 전경 조건 가중치 (코드 Apache-2.0)
+[models.relight]
+repo = "lllyasviel/ic-light"
+revision = "9cad1878695f546a7fb9eaca14e2a89131ba5ffe"
+files = ["iclight_sd15_fc.safetensors"]
+
+# IC-Light 공식 데모가 쓰는 SD1.5 기반 모델 (creativeml-openrail-m)
+[models.relight_base]
+repo = "stablediffusionapi/realistic-vision-v51"
+revision = "19e3643d7d963c156d01537188ec08f0b79a514a"
+files = ["model_index.json", "scheduler/*", "tokenizer/*", "text_encoder/config.json", "text_encoder/model.safetensors",
+         "unet/config.json", "unet/diffusion_pytorch_model.safetensors", "vae/config.json", "vae/diffusion_pytorch_model.safetensors"]
