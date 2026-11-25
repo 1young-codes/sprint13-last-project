@@ -86,23 +86,19 @@ def load_depth_model(model_name: str):
 
 
 @torch.inference_mode()
-def estimate_depth_and_fov(photo: Image.Image) -> DepthResult:
-    """모델을 불러와 한 번 추론하고, 그래픽 메모리를 비운 뒤 결과를 돌려줍니다."""
+def estimate_depth_and_fov(model, photo: Image.Image) -> DepthResult:
+    """model: load_depth_model()의 결과. 한 번 불러 둔 모델로 추론만 합니다."""
     depth = load_settings()["depth"]
-    model = load_depth_model(depth["model"])
-    try:
-        rgb = np.array(photo.convert("RGB"))
-        source = torch.from_numpy(rgb).permute(2, 0, 1).to("cuda", dtype=torch.float32) / 255
-        options = dict(resolution_level=depth["resolution_level"], apply_mask=True, force_projection=True)
-        if depth["model"] == "moge3":
-            options["refine_steps"] = depth["refine_steps"]
-        with torch.autocast("cuda", dtype=torch.float16):
-            geometry = model.infer(source, **options)
-        points = geometry["points"].float().cpu().numpy()
-        valid = np.isfinite(points).all(-1) & (points[..., 2] > 0) & geometry["mask"].cpu().numpy().astype(bool)
-        focal = float(geometry["intrinsics"].float().cpu().numpy()[0, 0])  # 가로 길이로 나눈 초점 거리
-    finally:
-        del model
-        torch.cuda.empty_cache()
+    rgb = np.array(photo.convert("RGB"))
+    source = torch.from_numpy(rgb).permute(2, 0, 1).to("cuda", dtype=torch.float32) / 255
+    options = dict(resolution_level=depth["resolution_level"], apply_mask=True, force_projection=True)
+    if depth["model"] == "moge3":
+        options["refine_steps"] = depth["refine_steps"]
+    with torch.autocast("cuda", dtype=torch.float16):
+        geometry = model.infer(source, **options)
+    points = geometry["points"].float().cpu().numpy()
+    valid = np.isfinite(points).all(-1) & (points[..., 2] > 0) & geometry["mask"].cpu().numpy().astype(bool)
+    focal = float(geometry["intrinsics"].float().cpu().numpy()[0, 0])  # 가로 길이로 나눈 초점 거리
+    del geometry, source
     points = np.nan_to_num(points) * np.array([1, -1, 1], dtype=np.float32)  # MoGe는 y가 아래쪽
     return DepthResult(points=points, valid=valid, fov_deg=float(np.degrees(2 * np.arctan(0.5 / focal))))
