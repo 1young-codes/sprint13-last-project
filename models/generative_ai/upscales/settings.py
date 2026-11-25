@@ -5,7 +5,10 @@
 """
 
 import os
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # PixRestore 가상환경은 파이썬 3.10이라 tomllib이 없음
+    import tomli as tomllib
 from functools import cache
 from pathlib import Path
 
