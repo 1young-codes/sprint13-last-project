@@ -1,0 +1,114 @@
+# 자동 보정 기본 설정입니다. 경로는 프로젝트 루트 기준 상대 경로이고, .env의 RETOUCH_<이름>이 있으면 그 값이 우선합니다.
+# 업종별 규칙은 categories.toml, 모델 출처는 model_sources.toml, 사진 해석 지시문은 prompts.toml에 있습니다.
+
+[paths]
+output_dir = "outputs/photo_retouch"      # RETOUCH_OUTPUT_DIR
+
+# ── 보정 값 ─────────────────────────────────────────────
+# 모든 값은 0이 "그대로"입니다. 여기 범위는 어떤 업종에서도 넘지 않는 바깥 한계이고, 업종별로 더 좁힙니다.
+[params]
+exposure_ev = [-1.0, 1.0]     # 노출 (스톱)
+temperature = [-1.0, 1.0]     # +따뜻하게 / -차갑게
+tint = [-1.0, 1.0]            # +자홍 / -초록
+contrast = [-1.0, 1.0]
+highlights = [-1.0, 1.0]      # -밝은 곳 누르기 / +키우기
+shadows = [-1.0, 1.0]         # +어두운 곳 밝히기
+vibrance = [-1.0, 1.0]        # 채도가 낮은 색 위주로 생동감
+saturation = [-1.0, 1.0]
+
+# 값 1이 실제로 얼마나 바꾸는지
+[ops]
+white_balance_gain = 0.25     # temperature 1이면 빨강 +25%, 파랑 -25% (선형 빛 기준)
+tint_gain = 0.15
+contrast_gain = 0.35
+tone_gain = 0.45              # highlights, shadows
+saturation_gain = 0.5
+
+# ── 바로잡을 거리 재기 ──────────────────────────────────
+# 값은 여기 기준으로만 계산합니다. 해석 모델은 무엇을 바로잡을지(분위기라 둘지)만 판단합니다.
+# 윤곽·선명도는 경계에 테두리를 만들고 업스케일이 이미 하므로 쓰지 않습니다.
+[auto]
+min_ev = 0.1                  # 이보다 작은 노출 차이는 문제로 보지 않음
+mid_gray_band = [0.32, 0.6]   # 밝기 중앙값(sRGB)이 이 범위 밖일 때만 가까운 끝으로 맞춤. 상품 마스크가 있으면 상품 영역 기준
+max_auto_ev = 0.8
+headroom_percentile = 99.5     # 밝힐 때 사진 전체에서 이 백분위 화소가 날아가지 않을 만큼만 밝힘
+white_balance_strength = 0.6  # 무채색 화소로 잰 색 치우침을 이만큼만 바로잡음
+low_percentile = 0.5          # 대비 늘리기 기준 (어두운 쪽 백분위)
+high_percentile = 99.5
+target_spread = 0.85          # 두 백분위 밝기 차이가 이보다 작으면 대비를 올림
+contrast_per_spread = 2.0     # 모자란 차이 1당 올릴 대비
+min_color_shift = 0.05        # 이보다 작은 색 치우침은 문제로 보지 않음
+neutral_brightness = [0.2, 0.97]   # 색 치우침을 잴 무채색 후보의 밝기 범위 (날아간 흰색, 뭉개진 검정은 정보가 없어 뺌)
+neutral_max_chroma = 0.12     # (가장 밝은 채널 - 가장 어두운 채널) / 가장 밝은 채널이 이보다 작으면 무채색 후보
+min_neutral_share = 0.02      # 무채색 후보가 상품 영역(없으면 사진 전체)의 이 비율보다 적으면 색 치우침을 재지 않음
+highlight_level = 0.95        # 상품 영역에서 이보다 밝은 화소가
+highlight_share = 0.05        # 이 비율을 넘으면 밝은 곳을 누름
+highlight_strength = 0.3
+shadow_level = 0.05           # 상품 영역에서 이보다 어두운 화소가
+shadow_share = 0.1            # 이 비율을 넘으면 어두운 곳을 밝힘
+shadow_strength = 0.3
+calm_background = { saturation = -0.15 }   # 해석 모델이 배경이 산만하다고 볼 때 배경에만 더함
+
+# ── 모델 ────────────────────────────────────────────
+# 사진 해석(업종 판단, 진단, 후보 고르기)은 OpenAI 모델이 합니다. 픽셀은 바꾸지 않습니다
+[interpret]
+model = "gpt-5.4-mini"
+api_key_env = "OPENAI_API_KEY"   # 이 이름의 환경 변수, 없으면 프로젝트 루트 .env
+image_long_side = 1024        # 보낼 사진 긴 변
+jpeg_quality = 90
+detail = "high"
+timeout_seconds = 120
+fallback_category = "product" # 업종 판단 답이 깨졌을 때
+
+[product_mask]
+input_size = 1024             # BiRefNet 학습 해상도
+
+# ── 후보 ────────────────────────────────────────────
+# 바로잡기 + 업종 색감에 곱하는 세기. 1.0이 계산 그대로.
+[candidates]
+strengths = [1.0, 0.6]
+include_measured = true       # 해석 판단 없이 잰 바로잡기를 전부 적용한 후보도 비교 (업종 색감 없음)
+
+# ── 충실도 검사 (상품 영역, 보정 전후 비교) ────────────────────
+# 업종별로 categories.toml에서 덮어씁니다.
+[fidelity]
+max_mean_delta_e = 8.0        # 평균 색 차이 (CIELAB ΔE76)
+min_structure = 0.95          # 밝기 구조 유사도 (SSIM의 구조 항)
+max_new_clipping = 0.005      # 새로 하얗게/까맣게 날아간 화소 비율
+clip_level = 0.995
+clip_margin = 0.1             # 끝에서 이만큼 떨어져 있던(세부가 있던) 화소가 날아갈 때만 셈
+clip_region = "image"         # 날아감은 사진 전체에서 셈. 하늘이 날아가도 실패. subject면 상품 영역만
+structure_sigma_px = 1.5
+min_region_share = 0.01       # 상품 영역이 사진의 이 비율보다 작으면 사진 전체로 검사
+
+# ── 배경 잡동사니 지우기 (LaMa) ─────────────────────────────
+[cleanup]
+max_box_share = 0.05          # 해석 모델이 낸 상자가 사진의 이 비율보다 크면 지우지 않음 (큰 영역은 지우면 티가 남)
+box_padding = 0.15            # 상자 크기 대비 여유
+context_scale = 1.5           # 지울 곳 둘레로 이만큼 더 잘라 LaMa에게 보여 줌
+crop_long_side = 768          # LaMa 입력 긴 변 상한
+subject_threshold = 0.3       # 이 값 넘는 상품 마스크 영역은 절대 지우지 않음
+subject_margin_px = 8
+
+# ── 스튜디오 조명 (IC-Light, 선택 기능) ─────────────────────────
+# 공식 데모(gradio_demo.py) 기본값을 따릅니다
+[studio_light]
+long_side = 768               # 첫 생성 긴 변 (64의 배수로 맞춤)
+highres_scale = 1.5
+steps = 25
+cfg = 2.0
+lowres_denoise = 0.9
+highres_denoise = 0.5
+seed = 12345
+light_direction = "none"      # none, left, right, top, bottom
+added_prompt = "best quality"
+negative_prompt = "lowres, bad anatomy, bad hands, cropped, worst quality"
+detail_sigma_px = 3.0         # 이보다 작은 세부(질감, 글자)는 원본에서 가져옴
+keep_product_color = true     # 상품은 원본 색 유지, 새 조명의 밝기 분포만 입힘
+shade_range = [0.25, 4.0]     # 상품 밝기를 바꾸는 배율 한계
+shade_sigma = 0.01            # 옮길 빛의 크기 (긴 변 대비). 작으면 새로 그린 잔무늬까지 묻어옴
+edge_band = [0.3, 0.7]        # 상품 마스크가 이 사이인 반투명 테두리는 새 조명 쪽 화소를 씀 (원래 배경색이 띠로 남지 않게). 넓히면 손처럼 마스크가 덜 확실한 곳까지 바뀜
+[studio_light.fidelity]       # 조명은 색을 일부러 바꾸므로 색 기준만 넓히고 구조 기준은 그대로
+clip_region = "subject"       # 배경은 새로 그리므로 날아감은 상품 영역만 셈
+max_mean_delta_e = 25.0
+max_new_clipping = 0.02

@@ -1,0 +1,26 @@
+# 사진 해석 모델에게 주는 지시문입니다. {중괄호}는 코드가 채우고, JSON 예시의 중괄호는 {{ }}로 씁니다.
+# 지시문은 영어가 더 잘 따르고, 사장님이 읽을 이유만 한국어로 쓰게 합니다.
+
+[classify]
+text = """Classify this photo for a small-business advertisement into exactly one category.
+Categories:
+{categories}
+Answer with JSON only: {{"category": "<category key>", "subject": "<what is being sold, a few Korean words>"}}"""
+
+[review]
+text = """You are a senior commercial photo retoucher checking this photo before it goes into a small-business advertisement.
+Category: {label}. {hint}
+Main subject: {subject}.
+Measurements found these possible problems, each with the correction that would be applied:
+{findings}
+For each one decide: is it a real flaw a professional would correct, or part of the intended look or scene that should be kept (for example warm restaurant light is not a color cast, a blue sky or sea is not a blue cast, a dark-colored subject is not underexposure, a dark moody background is not underexposure)? When unsure, keep.
+Also decide whether the background clearly steals attention from the subject (busy or loud colors). Only then give a reason in "calm_background" and its colors will be calmed slightly; otherwise leave it an empty string.
+List small distracting objects in the background a retoucher would remove (litter, stray cables, stains). Never list the subject, people, text, logos or watermarks. Boxes are [x0, y0, x1, y1] normalized to 0-1000. Leave the list empty when unsure.
+Write every reason in Korean as one short plain sentence a shop owner understands, in past tense describing what was seen and done (for example "사진이 푸르게 치우쳐 색을 바로잡았습니다").
+Answer with JSON only, using only the problem names listed above:
+{{"fix": {{"<name>": "<Korean: what looked wrong and what changes>"}}, "keep": {{"<name>": "<Korean: why it is left as is>"}}, "calm_background": "<Korean reason, or empty string>", "distractions": [{{"label": "<Korean>", "box": [0, 0, 0, 0]}}]}}"""
+
+[judge]
+text = """Image 1 is the original photo. Images 2 to {last} are retouched candidates for a {label} advertisement of {subject}.
+Pick the candidate that looks most like professional commercial retouching while keeping the real item truthful: no unnatural colors, no blown highlights, no crushed shadows, natural skin if people appear.
+Answer with JSON only: {{"choice": <image number from 2 to {last}>, "reason": "<one Korean sentence for the shop owner>"}}"""
