@@ -1,0 +1,40 @@
+# PixRestore (arXiv 2608.16793): VAE 없이 픽셀 공간에서 바로 복원하는 확산 트랜스포머, DINOv2 특징을 조건으로 씀.
+# 코드·가중치 Apache-2.0. XL 가중치는 DINO-GAN으로 미세조정된 한 단계 모델입니다(config.json의 eval_sampling_steps = 1).
+# 1배 복원 모델이라 바이큐빅으로 먼저 키운 뒤 복원합니다.
+# 512×512(64×64 토큰)일 때만 학습한 위치 정보(RoPE)를 그대로 씁니다. 다른 크기에서는 위치를 64칸에 눌러 담는 보간을 쓰고,
+# DINOv2 특징도 사진 전체를 448 정사각형으로 찌그러뜨려 뽑아서, 큰 사진을 통째로 넣으면 8픽셀 격자 무늬로 무너집니다.
+# 공식 평가도 512로 잘라 씁니다(--test-mode center_crop). 그래서 키운 사진을 512 조각으로 나눠 돌리고 겹쳐 이어 붙입니다.
+# 가중치의 config.json이 DINOv2 위치를 절대 경로(/dinov2)로 적어 두어, VOSR이 공개한 같은 DINOv2를 캐시에서 받아 대신 넘깁니다.
+
+[environment]
+python = "3.10"
+
+[code]
+repo = "csslc/PixRestore"
+revision = "909ca06e614cf72e218d52b4fa41077c603d872b"
+
+[weights.pixrestore]
+repo = "VCLab-PolyU/PixRestore"
+revision = "a5fe719a0c517422cff9f7a4895ab303e2320d51"
+files = ["pixrestore-xl/*"]
+
+[weights.dinov2]
+repo = "CSWRY/VOSR"
+revision = "f24b3061b7f350b81e1907bdcfc27f71fb4ff3f3"
+files = ["torch_cache/facebookresearch_dinov2_main/*", "torch_cache/checkpoints/dinov2_vitl14_pretrain.pth"]
+
+[links]
+"checkpoints/pixrestore-xl" = "pixrestore:pixrestore-xl"
+"checkpoints/dinov2" = "dinov2:torch_cache/facebookresearch_dinov2_main"
+"checkpoints/dinov2_vitl14_pretrain.pth" = "dinov2:torch_cache/checkpoints/dinov2_vitl14_pretrain.pth"
+
+[run]
+scales = [2, 4]
+tiles = { size = 512, overlap = 64 }   # 실행 도구가 먼저 키운 뒤 조각내므로 명령의 {scale}에는 1이 들어감
+command = [
+  "inference.py", "-c", "checkpoints/pixrestore-xl",
+  "-i", "{input_dir}", "-o", "{output_dir}", "--upscale", "{scale}",
+  "--infer-steps", "1", "--cfg-scale", "1.0", "--seed", "0",
+  "--dinov2-repository", "checkpoints/dinov2",
+  "--dinov2-checkpoint", "checkpoints/dinov2_vitl14_pretrain.pth",
+]
