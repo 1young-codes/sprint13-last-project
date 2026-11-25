@@ -71,6 +71,8 @@ python -m models.generative_ai.fast_image_generation.moss_image_model   # 모델
 
 ## 실행
 
+그래픽 카드를 쓰는 명령(`check`, `calibrate`, `generate`, `finish`, `run`)은 시작할 때 `nvidia-smi`로 다른 프로그램이 그래픽 카드를 쓰는지 보고, 쓰고 있으면 멈춥니다. 팀원과 같이 올리면 둘 다 메모리가 모자라 죽기 때문입니다. `check`는 추론 없이 문장 인코더와 조건별 생성 모델·로라를 올렸다 내리기만 하며, 올라가는지와 그래픽 메모리를 확인할 때 씁니다.
+
 사진 한 장을 끝까지 만듭니다. 결과는 `<출력 폴더>/<사진 이름>/`에 쌓입니다.
 
 ```bash
@@ -82,6 +84,7 @@ python -m models.generative_ai.usage_examples run --input 사진.jpg
 ```bash
 R=/data/outputs/usage_examples/lora-compare
 python -m models.generative_ai.usage_examples plan --input photos --run $R           # 해석
+python -m models.generative_ai.usage_examples check                                  # 추론 없이 올라가는지만
 python -m models.generative_ai.usage_examples calibrate --run $R --category food     # MagCache 비율
 python -m models.generative_ai.usage_examples generate --run $R --category food      # 30장 × 3조건
 python -m models.generative_ai.usage_examples generate --run $R --category cosmetic household --condition original

@@ -49,27 +49,32 @@ def embedding_file(cache_dir: Path, prompt: str) -> Path:
     return cache_dir / f"{hashlib.sha256(prompt.encode()).hexdigest()[:20]}.pt"
 
 
-def encode_prompts(prompts: list[str], cache_dir: Path) -> dict[str, Path]:
-    """프롬프트마다 인코딩 파일 경로. 이미 있는 것은 건너뛰고, 없는 것만 인코더를 올려 만듭니다."""
+def load_text_encoder() -> SimpleNamespace:
+    """문장 인코더를 그래픽 카드에 바로 올립니다 (시스템 메모리를 거치지 않음). 공식 encode_prompt가 쓰는 모양으로 돌려줍니다."""
     from transformers import AutoModel, AutoTokenizer
 
+    folder = model_folder(MODEL_KEY, SOURCES_FILE)
+    tokenizer = AutoTokenizer.from_pretrained(folder / "tokenizer", local_files_only=True)
+    encoder = AutoModel.from_pretrained(folder / "text_encoder", dtype=torch.bfloat16, device_map=DEVICE,
+                                        local_files_only=True).eval()
+    return SimpleNamespace(text_encoder=encoder, tokenizer=tokenizer, _execution_device=torch.device(DEVICE))
+
+
+def encode_prompts(prompts: list[str], cache_dir: Path) -> dict[str, Path]:
+    """프롬프트마다 인코딩 파일 경로. 이미 있는 것은 건너뛰고, 없는 것만 인코더를 올려 만듭니다."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     files = {prompt: embedding_file(cache_dir, prompt) for prompt in dict.fromkeys(prompts)}
     missing = [prompt for prompt, file in files.items() if not file.is_file()]
     if not missing:
         return files
-    folder = model_folder(MODEL_KEY, SOURCES_FILE)
-    tokenizer = AutoTokenizer.from_pretrained(folder / "tokenizer", local_files_only=True)
-    encoder = AutoModel.from_pretrained(folder / "text_encoder", dtype=torch.bfloat16, device_map=DEVICE,
-                                        local_files_only=True).eval()
     # 공식 encode_prompt를 그대로 부릅니다 (채팅 형식, thinking 켬, 마지막 은닉 상태)
-    owner = SimpleNamespace(text_encoder=encoder, tokenizer=tokenizer, _execution_device=torch.device(DEVICE))
+    owner = load_text_encoder()
     try:
         for prompt in missing:
             embeds, _ = official_code().MOSSImagePipeline.encode_prompt(owner, prompt)
             torch.save(embeds[0].cpu(), files[prompt])
     finally:
-        del owner, encoder
+        del owner
         gc.collect()
         torch.cuda.empty_cache()
     return files

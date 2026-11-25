@@ -89,3 +89,13 @@ def test_review_page_and_summary(tmp_path):
     result = summarize([tmp_path / "가.csv", tmp_path / "나.csv"])
     assert list(result["평균 순위"].values()) == [1.5, 1.5, 3.0]
     assert result["1위 횟수"]["오리지널 (로라 없음)"] == 1
+
+
+def test_gpu_guard_stops_when_someone_else_uses_the_gpu(monkeypatch):
+    from models.generative_ai.usage_examples import generate
+
+    monkeypatch.setattr(generate, "gpu_users", lambda: [])
+    generate.require_free_gpu()
+    monkeypatch.setattr(generate, "gpu_users", lambda: ["4242, python, 9000 MiB"])
+    with pytest.raises(RuntimeError, match="4242"):
+        generate.require_free_gpu()

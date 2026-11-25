@@ -1,10 +1,14 @@
 """활용 예시 이미지를 만듭니다. 원본 사진 → 해석(GPT) → MOSS 생성 → 각도 → 업스케일 → 보정.
 
+그래픽 카드를 쓰는 명령(check, calibrate, generate, finish, run)은 다른 프로그램이 그래픽 카드를 쓰고 있으면 시작하지 않습니다.
+check는 추론 없이 모델을 올렸다 내리기만 합니다.
+
 사진 한 장을 끝까지:
     python -m models.generative_ai.usage_examples run --input 사진.jpg
 
 비교 실험은 단계별로 (폴더 하나가 실험 하나):
     python -m models.generative_ai.usage_examples plan --input 사진폴더 --run 실험폴더
+    python -m models.generative_ai.usage_examples check
     python -m models.generative_ai.usage_examples calibrate --run 실험폴더
     python -m models.generative_ai.usage_examples generate --run 실험폴더 --category food
     python -m models.generative_ai.usage_examples generate --run 실험폴더 --category cosmetic household --condition original
@@ -126,6 +130,8 @@ def main():
         step.add_argument("--condition", nargs="+", help="이 조건만 (기본: settings.toml 전부)")
         if name == "calibrate":
             step.add_argument("--count", type=int, default=6, help="비율을 잴 사진 수")
+    step = commands.add_parser("check", help="추론 없이 모델이 그래픽 카드에 올라가는지만 확인")
+    step.add_argument("--condition", nargs="+")
     step = commands.add_parser("finish", help="생성 이미지 한 장을 각도 → 업스케일 → 보정")
     step.add_argument("--run", type=Path, required=True)
     step.add_argument("--id", required=True)
@@ -152,8 +158,15 @@ def main():
         plans = calibration_plans(load_plans(args.run, args.category), args.count)
         generate(jobs_of(plans), args.run / "calibration", args.condition, calibrate=True)
         print(f"MagCache 비율을 저장했습니다 ({len(plans)}장)")
+    elif args.command == "check":
+        from .generate import load_check
+
+        print(json.dumps(load_check(args.condition), ensure_ascii=False, indent=2))
     elif args.command == "finish":
         from .finish import finish
+        from .generate import require_free_gpu
+
+        require_free_gpu()
 
         plan = next(p for p in load_plans(args.run) if p["id"] == args.id)
         print(finish(args.run / "images" / args.condition / f"{args.id}.png", args.run / "finish" / args.id,
