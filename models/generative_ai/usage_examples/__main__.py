@@ -20,7 +20,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from .settings import load_settings, project_path
+from .settings import PROJECT_ROOT, load_settings, project_path
 
 SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 
@@ -34,6 +34,12 @@ def read_photos(path: Path) -> tuple[Path, list[dict]]:
         with open(sources, "rb") as file:
             return path, [{"id": p["id"], "file": p["file"], "group": p["group"]} for p in tomllib.load(file)["photos"]]
     return path, [{"id": p.stem, "file": p.name, "group": ""} for p in sorted(path.iterdir()) if p.suffix.lower() in SUFFIXES]
+
+
+def portable(folder: Path) -> str:
+    """프로젝트 안이면 프로젝트 기준 상대 경로로 남겨, 다른 컴퓨터에서도 실험 폴더를 읽을 수 있게 합니다."""
+    folder = folder.resolve()
+    return folder.relative_to(PROJECT_ROOT).as_posix() if folder.is_relative_to(PROJECT_ROOT) else str(folder)
 
 
 def assign_orientation(plans: list[dict]) -> None:
@@ -69,7 +75,7 @@ def command_plan(photo_path: Path, run: Path) -> list[dict]:
         plans = [done[p["id"]] | {"seed": seed + i} for i, p in enumerate(photos) if p["id"] in done]
         assign_orientation(plans)
         usage = planner.ai.usage
-        plans_file.write_text(json.dumps({"photos_dir": str(folder.resolve()), "plans": plans,
+        plans_file.write_text(json.dumps({"photos_dir": portable(folder), "plans": plans,
                                           "usage": {"calls": len(usage),
                                                     "input_tokens": sum(u["input_tokens"] for u in usage),
                                                     "output_tokens": sum(u["output_tokens"] for u in usage)}},
@@ -155,7 +161,7 @@ def main():
         from .review_page import build
 
         plans = load_plans(args.run, args.category)
-        photos_dir = Path(json.loads((args.run / "plans.json").read_text(encoding="utf-8"))["photos_dir"])
+        photos_dir = PROJECT_ROOT / json.loads((args.run / "plans.json").read_text(encoding="utf-8"))["photos_dir"]
         print(build(plans, args.run / "images", photos_dir, args.out))
     elif args.command == "summarize":
         from .review_page import summarize

@@ -23,8 +23,10 @@ For each, write an image-generation prompt in English, 60-110 words, in plain na
 - start with the item itself and keep every identifying detail from the description (species, variety, cut, colors, container shape),
 - then where it is, what surface, tableware and props are around it, and what is in the background,
 - name the light: its kind and the side it comes from,
-- write "plain unbranded" for any packaging or container, and no text, signs or logos in the picture,
+- write "plain unbranded" for any packaging or container,
+- describe only what is in the picture: never write negations such as "no people" or "no text", because the generator may draw the words it reads; to keep text and faces out, simply do not mention them,
+- never refer to the photo, the description or the shop owner ("the described fish", "as in the photo"); the generator sees only this prompt,
 - do not write words like cinematic, professional, masterpiece, 8k, award-winning, hyperrealistic,
-- no people's faces; at most a hand.
+- at most a hand may appear, never a face.
 Answer with JSON only:
 {{"category": "<category key>", "options": [{{"name_ko": "<short Korean name of this scene or dish>", "prompt": "<English prompt>"}}]}}"""
