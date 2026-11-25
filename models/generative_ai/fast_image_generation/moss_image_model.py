@@ -75,13 +75,14 @@ def encode_prompts(prompts: list[str], cache_dir: Path) -> dict[str, Path]:
     return files
 
 
-def lora_deltas(weights: dict[str, torch.Tensor], strength: float) -> dict[str, torch.Tensor]:
-    """로라 파일 → {층 이름: 가중치에 더할 값}. 두 형식을 받습니다.
+def lora_deltas(weights: dict[str, torch.Tensor], strength: float, device="cpu"):
+    """로라 파일 → (층 이름, 가중치에 더할 값)을 한 층씩 냅니다. 두 형식을 받습니다.
 
     - LoRA(PEFT): <층>.lora_A.weight, <층>.lora_B.weight, (선택) <층>.alpha. 더할 값 = B·A × alpha/rank
     - LoKr(완전 행렬): <층>.lokr_w1, <층>.lokr_w2. 더할 값 = w1 ⊗ w2. 두 행렬이 분해되지 않았으므로 alpha는 쓰지 않습니다
       (ComfyUI weight_adapter/lokr.py와 같음). 이 파일의 q, k, v 자리 alpha 키는 짝이 없어 그냥 넘깁니다.
     proj.qkv는 이 모델에서 q, k, v 세 층이라 행을 셋으로 나눕니다 ([q; k; v] 순서).
+    한꺼번에 만들지 않고 한 층씩 device에서 계산합니다. LoKr는 층마다 완전 행렬이라 모두 모으면 18GB가 넘습니다.
     """
     groups: dict[str, dict[str, torch.Tensor]] = {}
     for key, value in weights.items():
@@ -89,38 +90,39 @@ def lora_deltas(weights: dict[str, torch.Tensor], strength: float) -> dict[str, 
                        if key.endswith(s)), None)
         if suffix is None:
             raise ValueError(f"지원하지 않는 로라 키입니다: {key}")
-        groups.setdefault(key[:-len(suffix)].removeprefix("diffusion_model."), {})[suffix] = value.float()
-    deltas = {}
+        groups.setdefault(key[:-len(suffix)].removeprefix("diffusion_model."), {})[suffix] = value
     for name, parts in groups.items():
-        if ".lora_A.weight" in parts:
-            down, up = parts[".lora_A.weight"], parts[".lora_B.weight"]
-            alpha = parts.get(".alpha")
+        part = {k: v.to(device, torch.float32) for k, v in parts.items()}
+        if ".lora_A.weight" in part:
+            down, up = part[".lora_A.weight"], part[".lora_B.weight"]
+            alpha = part.get(".alpha")
             delta = up @ down * (float(alpha) / down.shape[0] if alpha is not None else 1.0)
-        elif ".lokr_w1" in parts:
-            delta = torch.kron(parts[".lokr_w1"], parts[".lokr_w2"])
+        elif ".lokr_w1" in part:
+            delta = torch.kron(part[".lokr_w1"], part[".lokr_w2"])
         else:
             continue  # alpha만 있는 자리
         delta = delta * strength
         if name.endswith(".qkv"):
-            for part, rows in zip("qkv", delta.chunk(3, dim=0)):
-                deltas[f"{name[:-3]}{part}"] = rows
+            for letter, rows in zip("qkv", delta.chunk(3, dim=0)):
+                yield f"{name[:-3]}{letter}", rows
         else:
-            deltas[name] = delta
-    return deltas
+            yield name, delta
 
 
 def merge_lora(transformer: torch.nn.Module, lora_file: Path, strength: float) -> int:
     """로라를 가중치에 합칩니다. 합친 층 수를 돌려줍니다. 떼려면 모델을 다시 불러옵니다."""
     from safetensors.torch import load_file
 
-    deltas = lora_deltas(load_file(str(lora_file)), strength)
-    for name, delta in deltas.items():
+    device = next(transformer.parameters()).device
+    merged = 0
+    for name, delta in lora_deltas(load_file(str(lora_file)), strength, device):
         layer = transformer.get_submodule(name)
         if not isinstance(layer, torch.nn.Linear) or tuple(layer.weight.shape) != tuple(delta.shape):
             raise ValueError(f"{lora_file.name}: {name}의 모양이 모델과 다릅니다")
         weight = layer.weight.data
-        weight.copy_((weight.float() + delta.to(weight.device)).to(weight.dtype))
-    return len(deltas)
+        weight.copy_((weight.float() + delta).to(weight.dtype))
+        merged += 1
+    return merged
 
 
 def register_moss_blocks() -> None:

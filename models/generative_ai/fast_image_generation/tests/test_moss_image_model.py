@@ -20,7 +20,7 @@ def test_peft_lora_is_up_times_down_with_alpha():
     weights = {"diffusion_model.layers.0.proj.o.lora_A.weight": down,
                "diffusion_model.layers.0.proj.o.lora_B.weight": up,
                "diffusion_model.layers.0.proj.o.alpha": torch.tensor(1.0)}
-    delta = lora_deltas(weights, strength=0.5)["layers.0.proj.o"]
+    delta = dict(lora_deltas(weights, strength=0.5))["layers.0.proj.o"]
     torch.testing.assert_close(delta, up @ down * (1.0 / 2) * 0.5)
 
 
@@ -28,7 +28,7 @@ def test_lokr_fused_qkv_splits_into_q_k_v_and_ignores_alpha():
     w1, w2 = torch.randn(3, 1), torch.randn(8, 8)  # kron → (24, 8) = [q; k; v]
     weights = {"diffusion_model.layers.0.proj.qkv.lokr_w1": w1, "diffusion_model.layers.0.proj.qkv.lokr_w2": w2,
                **{f"diffusion_model.layers.0.proj.{p}.alpha": torch.tensor(1e10) for p in "qkv"}}
-    deltas = lora_deltas(weights, strength=1.0)
+    deltas = dict(lora_deltas(weights, strength=1.0))
     full = torch.kron(w1, w2)
     assert set(deltas) == {"layers.0.proj.q", "layers.0.proj.k", "layers.0.proj.v"}
     torch.testing.assert_close(deltas["layers.0.proj.k"], full[8:16])
