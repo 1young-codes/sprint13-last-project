@@ -74,14 +74,16 @@ def test_no_angles_gives_empty_list(client):
 
 
 @pytest.mark.parametrize("data, photo, angles, detail", [
-    ({**FIELDS, "price_krw": "0"}, None, (), "price_krw는 0보다 큰 정수여야 합니다."),
-    ({**FIELDS, "price_krw": "abc"}, None, (), "price_krw는 0보다 큰 정수여야 합니다."),
-    ({**FIELDS, "unit": " "}, None, (), "unit 값을 입력해 주세요."),
+    ({**FIELDS, "price_krw": "0"}, None, (), "가격은 0보다 큰 숫자로 입력해 주세요."),
+    ({**FIELDS, "price_krw": "abc"}, None, (), "가격은 0보다 큰 숫자로 입력해 주세요."),
+    ({**FIELDS, "unit": " "}, None, (), "단위를 입력해 주세요."),
+    ({**FIELDS, "product_name": ""}, None, (), "품목 이름을 입력해 주세요."),
+    ({**FIELDS, "usage_example": " "}, None, (), "활용 예시를 입력해 주세요."),
     (FIELDS, None, ("no_such",), "없는 각도입니다: no_such"),
     (FIELDS, b"not an image", (), "사진 파일을 읽을 수 없습니다."),
     (FIELDS, png(fmt="GIF"), (), "사진은 jpg, png, webp 파일이어야 합니다."),
     (FIELDS, b"0" * (api.MAX_BYTES + 1), (), "사진은 10MB 이하여야 합니다."),
-], ids=["price-zero", "price-text", "unit-blank", "angle-unknown", "not-image", "gif", "too-big"])
+], ids=["price-zero", "price-text", "unit-blank", "name-blank", "usage-blank", "angle-unknown", "not-image", "gif", "too-big"])
 def test_bad_input_is_one_korean_sentence(client, data, photo, angles, detail):
     r = post(client, data=data, photo=photo, angles=angles)
     assert r.status_code == 422 and r.json() == {"detail": detail}

@@ -174,12 +174,13 @@ def create_app() -> FastAPI:
     ):
         if photo is None:
             bad("제품 사진을 올려 주세요.")
-        for field, value in (("product_name", product_name), ("unit", unit), ("usage_example", usage_example)):
+        # 화면에 그대로 보여주므로 값 이름 대신 화면에 보이는 이름으로 쓴다
+        for label, value in (("품목 이름을", product_name), ("단위를", unit), ("활용 예시를", usage_example)):
             if not value.strip():
-                bad(f"{field} 값을 입력해 주세요.")
+                bad(f"{label} 입력해 주세요.")
         price = price_krw.strip()
         if not price.isdecimal() or int(price) <= 0:
-            bad("price_krw는 0보다 큰 정수여야 합니다.")
+            bad("가격은 0보다 큰 숫자로 입력해 주세요.")
         unknown = [a for a in angles if a not in PRESET_IDS]
         if unknown:
             bad(f"없는 각도입니다: {', '.join(unknown)}")
