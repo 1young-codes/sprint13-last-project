@@ -32,10 +32,10 @@ nohup /data/venv/bin/python serving/api.py --no-models > /data/outputs/na_sanghu
 ## 끄기
 
 ```bash
-pkill -u "$USER" -f serving/api.py
+pkill -u "$USER" -f "[s]erving/api.py"
 ```
 
-끈 뒤에 `ss -ltn | grep :8003` 이 아무것도 안 나오면 꺼진 것입니다. 기록 탭에 종료 시각을 적고 디스코드에 끝났다고 남깁니다.
+`[s]`는 이 명령을 실행한 셸 자신이 같이 꺼지지 않게 하는 표시입니다. 끈 뒤에 `ss -ltn | grep :8003` 이 아무것도 안 나오면 꺼진 것입니다. 기록 탭에 종료 시각을 적고 디스코드에 끝났다고 남깁니다.
 
 ## 내 PC에서 부르기
 
