@@ -45,12 +45,14 @@ def test_clean_plan_drops_empty_options_and_unknown_category():
 
 
 def test_orientation_is_half_and_half_inside_each_group():
-    plans = [{"group": g, "category": "food"} for g in ["raw"] * 4 + ["korean"] * 2 + ["drink"] * 3]
+    groups = ["raw"] * 8 + ["korean"] * 10 + ["western"] * 5 + ["dessert"] * 4 + ["drink"] * 3  # 실험의 음식 30장
+    plans = [{"group": g, "category": "food"} for g in groups]
     assign_orientation(plans)
-    for group in ("raw", "korean"):
-        sides = [p["orientation"] for p in plans if p["group"] == group]
-        assert sides.count("landscape") == sides.count("portrait")
-    assert [p["orientation"] for p in plans if p["group"] == "drink"] == ["landscape", "portrait", "landscape"]
+    sides = [p["orientation"] for p in plans]
+    assert sides.count("landscape") == sides.count("portrait") == 15
+    for group in set(groups):
+        mine = [p["orientation"] for p in plans if p["group"] == group]
+        assert abs(mine.count("landscape") - mine.count("portrait")) <= 1
 
 
 def test_calibration_picks_across_groups():

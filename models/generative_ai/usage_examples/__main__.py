@@ -43,12 +43,13 @@ def portable(folder: Path) -> str:
 
 
 def assign_orientation(plans: list[dict]) -> None:
-    """묶음(원재료, 한식 ...) 안에서 가로와 세로를 번갈아 줘서 전체와 묶음마다 반반이 되게 합니다."""
+    """업종 안에서 묶음(원재료, 한식 ...) 순서대로 가로와 세로를 번갈아 줍니다.
+    묶음이 바뀌어도 이어서 번갈아 주므로 업종 전체는 정확히 반반이고, 묶음마다는 많아야 한 장 차이입니다."""
+    plans.sort(key=lambda p: (p["category"], p["group"]))  # 같은 묶음끼리 붙어 있게 (안정 정렬이라 묶음 안 순서는 그대로)
     seen: dict[str, int] = {}
     for plan in plans:
-        group = plan["group"] or plan["category"]
-        plan["orientation"] = ("landscape", "portrait")[seen.get(group, 0) % 2]
-        seen[group] = seen.get(group, 0) + 1
+        plan["orientation"] = ("landscape", "portrait")[seen.get(plan["category"], 0) % 2]
+        seen[plan["category"]] = seen.get(plan["category"], 0) + 1
 
 
 def load_plans(run: Path, categories: list[str] | None = None) -> list[dict]:
