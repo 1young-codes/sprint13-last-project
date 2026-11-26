@@ -28,23 +28,27 @@ def test_product_fits_canvas_and_keeps_colors():
     assert product.getpixel((product.width // 2, product.height // 2)) == (200, 30, 30, 255)
 
 
-def test_shadow_layer_restores_scene_brightness():
+def test_shadow_layer_keeps_shadow_and_light_but_not_new_objects_or_grain():
     rng = np.random.default_rng(0)
-    empty = rng.uniform(0.3, 0.8, (*SIZE[::-1], 3)).astype(np.float32)
-    scene = empty.copy()
-    scene[180:200, 60:200] *= 0.5            # 그림자
-    scene[150:170, 60:200] = np.minimum(scene[150:170, 60:200] + 0.2, 1)  # 반사
+    empty = np.full((*SIZE[::-1], 3), [0.8, 0.7, 0.6], np.float32)
+    scene = empty + rng.normal(0, 0.05, empty.shape).astype(np.float32)  # 다시 채운 바닥의 잔무늬 차이
+    scene[200:240, 40:220] *= 0.5                                         # 그림자
+    scene[20:60, 40:220] = scene[20:60, 40:220] + 0.15                    # 빛
+    scene[70:100, 20:50] = [0.8, 0.1, 0.1]                                # 모델이 더 그린 빨간 물건
     on_product = np.zeros(SIZE[::-1], np.float32)
     on_product[100:180, 100:160] = 1
-    region = shadow_region(on_product, 1.0, 0.5)
-    layer = shadow_layer(scene, empty, region, on_product, 0)
+    rule = SETTINGS["shadow"] | {"blur": 0.04}  # 작은 테스트 그림이라 흐림 폭을 실제 1024px 정도의 화소 수로 맞춤
+    layer = shadow_layer(scene, empty, shadow_region(on_product, 1.0, 0.5), on_product, rule)
     rebuilt = Image.fromarray((empty * 255).round().astype(np.uint8)).convert("RGBA")
     rebuilt.alpha_composite(layer)
-    restored = to_float(rebuilt) @ np.array([0.299, 0.587, 0.114], np.float32)
-    expected = scene @ np.array([0.299, 0.587, 0.114], np.float32)
-    outside = on_product < 0.5
-    assert np.abs(restored - expected)[outside].max() < 0.03
-    assert np.asarray(layer)[..., 3][on_product > 0.5].max() == 0  # 제품 자리에는 그림자를 두지 않음
+    lum = np.array([0.299, 0.587, 0.114], np.float32)
+    restored, expected = to_float(rebuilt) @ lum, scene @ lum
+    assert abs(restored[210:230, 80:180].mean() - expected[210:230, 80:180].mean()) < 0.03   # 그림자 그대로
+    assert abs(restored[30:50, 80:180].mean() - expected[30:50, 80:180].mean()) < 0.03       # 빛 그대로
+    alpha = np.asarray(layer)[..., 3]
+    assert alpha[75:95, 25:45].max() == 0          # 빨간 물건은 그림자로 담지 않음
+    assert alpha[120:160, 60:90].max() == 0        # 잔무늬만 다른 곳도 담지 않음
+    assert alpha[on_product > 0.5].max() == 0      # 제품 자리에는 그림자를 두지 않음
 
 
 def test_text_boxes_found_outside_product_with_color():

@@ -70,16 +70,33 @@ def grown(solid: np.ndarray, distance: int) -> np.ndarray:
     return ndimage.distance_transform_edt(~solid) <= distance
 
 
+def blurred(values: np.ndarray, radius: int) -> np.ndarray:
+    from ..camera_angle_presets.fill_empty_area import box_blur
+
+    for _ in range(3):  # 상자 평균 세 번 ≈ 가우시안 흐림
+        values = box_blur(values, radius)
+    return values
+
+
 def shadow_layer(scene: np.ndarray, empty: np.ndarray, region: np.ndarray, product_mask: np.ndarray,
-                 min_alpha: float) -> Image.Image:
+                 rule: dict) -> Image.Image:
     """제품이 있는 장면과 빈 배경의 밝기 차이로 그림자(검정)와 반사·빛(흰색) 레이어를 만듭니다.
-    빈 배경 위에 이 레이어를 얹으면 장면의 밝기가 그대로 돌아옵니다: 검정은 bg·(1-a), 흰색은 bg + (1-bg)·a."""
+    빈 배경 위에 이 레이어를 얹으면 장면의 밝기가 돌아옵니다: 검정은 bg·(1-a), 흰색은 bg + (1-bg)·a.
+
+    둘 다 흐린 뒤 비교합니다. 빈 배경을 새로 채우면 나무 결 같은 잔무늬가 달라지는데, 그건 그림자가 아닙니다.
+    색이 달라진 곳도 뺍니다. 그림자와 빛은 세 색을 거의 같은 비율로 바꾸지만, 생성 모델이 제품 옆에
+    더 그린 물건(예: 딸기 하나 더)은 색이 다릅니다. 그런 물건을 밝기만 남기면 검은 덩어리가 됩니다."""
+    radius = max(1, round(rule["blur"] * scene.shape[1] / 3))
+    scene, empty = blurred(scene, radius), blurred(empty, radius)
     weights = np.array([0.299, 0.587, 0.114], np.float32)
     lit, bare = scene @ weights, empty @ weights
     darker = np.clip((bare - lit) / np.maximum(bare, 1e-3), 0, 1)
     brighter = np.clip((lit - bare) / np.maximum(1 - bare, 1e-3), 0, 1)
-    alpha = np.where(lit < bare, darker, brighter) * region * (1 - product_mask)
-    alpha[alpha < min_alpha] = 0
+    ratio = (scene + 1e-3) / (empty + 1e-3)
+    tinted = (ratio.max(axis=2) - ratio.min(axis=2)) / ratio.mean(axis=2) >= rule["max_tint"]
+    neutral = ~grown(tinted, 3 * radius)  # 흐림 때문에 물건 가장자리는 색이 옅어지므로 그만큼 더 뺍니다
+    alpha = np.where(lit < bare, darker, brighter) * region * neutral * (1 - product_mask)
+    alpha[alpha < rule["min_alpha"]] = 0
     color = np.where(lit < bare, 0, 255).astype(np.uint8)
     rgba = np.dstack([color, color, color, (alpha * 255).round().astype(np.uint8)])
     return Image.fromarray(rgba, "RGBA")
@@ -88,7 +105,14 @@ def shadow_layer(scene: np.ndarray, empty: np.ndarray, region: np.ndarray, produ
 def find_text_boxes(draft: np.ndarray, base: np.ndarray, product_mask: np.ndarray, rule: dict) -> list[dict]:
     """초안(base 위에 모델이 글자를 그린 그림)과 base의 차이로 글자 줄 자리와 색을 찾습니다. 큰 것부터 돌려줍니다."""
     height, width = base.shape[:2]
-    difference = np.abs(draft - base).max(axis=2)
+    # 생성 모델은 글자만 더하지 않고 그림 전체를 조금씩 다시 그립니다(색, 밝기, 나무 결).
+    # 넓게 번지는 차이는 흐려서 빼고, 글자처럼 좁고 선명한 차이만 남깁니다.
+    # 번지는 차이를 잴 때 글자처럼 크게 바뀐 화소는 빼고 잽니다. 넣으면 글자 둘레까지 차이가 번져 상자가 커집니다.
+    change = draft - base
+    calm = (np.abs(change).max(axis=2) <= rule["diff_threshold"]).astype(np.float32)
+    radius = max(1, round(rule["drift_blur"] * width / 3))
+    drift = blurred(change * calm[..., None], radius) / np.maximum(blurred(calm, radius), 1e-3)[..., None]
+    difference = np.abs(change - drift).max(axis=2)
     keep_out = grown(product_mask > 0.5, max(1, round(rule["product_margin"] * width)))
     changed = (difference > rule["diff_threshold"]) & ~keep_out
     reach = np.ones((max(1, round(rule["merge_y"] * height)) * 2 + 1, max(1, round(rule["merge_x"] * width)) * 2 + 1), bool)
@@ -101,6 +125,8 @@ def find_text_boxes(draft: np.ndarray, base: np.ndarray, product_mask: np.ndarra
         rows, cols = inside.nonzero()
         y0, x0 = area[0].start + rows.min(), area[1].start + cols.min()
         y1, x1 = area[0].start + rows.max() + 1, area[1].start + cols.max() + 1
+        if y1 - y0 > rule["max_height"] * height or (x1 - x0) * (y1 - y0) > rule["max_box_area"] * width * height:
+            continue  # 글자 한 줄로 보기엔 너무 큰 영역: 바닥 무늬나 물건이 통째로 바뀐 곳
         # 글자 색: 바뀐 화소 중 가장 많이 바뀐 30%의 중앙값 (가장자리 흐림과 배경이 섞인 화소를 뺌)
         strength = difference[area][inside]
         colors = draft[area][inside][strength >= np.quantile(strength, 0.7)]

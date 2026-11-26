@@ -84,36 +84,65 @@ def make_ad(photo: Image.Image, fields: dict, mood_key: str, idea: str, models: 
     background.save(folder / "background.png")
     lap("background")
 
-    # 5. 그림자·반사: 제품 위치 기준 상대 좌표로 저장해, 제품을 옮기면 같이 옮깁니다
-    shadow = shadow_layer(to_float(scene), to_float(background), region, on_product, shadow_rule["min_alpha"])
-    box = shadow.getbbox() or (x, y, x + 1, y + 1)
-    shadow.crop(box).save(folder / "shadow.png")
-    layout = {"size": list(size), "mood": mood_key, "seed": seed, "scene_prompt": scene_text,
+    # 5. 그림자·반사
+    layout = {"size": list(size), "mood": mood_key, "seed": seed, "fields": fields, "scene_prompt": scene_text,
               "background": {"file": "background.png"},
-              "product": {"file": "product.png", "x": x, "y": y},
-              "shadow": {"file": "shadow.png", "dx": box[0] - x, "dy": box[1] - y},
-              "texts": []}
+              "product": {"file": "product.png", "x": x, "y": y}, "texts": []}
+    layout["shadow"] = save_shadow(folder, layout, scene, background)
     base = compose(layout, folder)
+    base.save(folder / "base.png")
     lap("shadow")
 
-    # 6. 글자 초안 → 글자 자리
-    draft = model.edit(base, generation["draft_prompt"].format(style=mood["style"]), seed, steps).resize(size)
-    draft.save(folder / "draft.png")
-    boxes = find_text_boxes(to_float(draft), to_float(base), on_product, settings["text_boxes"])
+    # 6. 글자 초안 (초안과 base의 차이로 글자 자리를 찾습니다)
+    model.edit(base, generation["draft_prompt"].format(style=mood["style"]), seed, steps).resize(size).save(
+        folder / "draft.png")
     lap("draft")
 
-    # 7~8. 문구와 글자 레이어
-    copy = write_copy(ai, to_float(draft), boxes, fields, mood) if boxes else []
-    layout["texts"] = [box | line | {"font": mood["fonts"][line["role"]], "file": f"text_{i}_{line['role']}.png"}
-                       for i, (box, line) in enumerate(zip(boxes, copy), start=1) if line["role"] != "skip"]
-    render_texts(layout["texts"], size, folder)
+    # 7~9. 글자 자리, 문구, 글자 레이어, 합치기
+    write_texts(folder, layout, ai)
     lap("text")
-
-    # 9. 합치기
-    compose(layout, folder).save(folder / "ad.png")
     layout["seconds"] = timings
     save_layout(layout, folder)
     return layout
+
+
+def save_shadow(folder: Path, layout: dict, scene: Image.Image, background: Image.Image) -> dict:
+    """그림자·반사 레이어를 저장합니다. 제품 위치 기준 상대 좌표라 제품을 옮기면 같이 옮겨집니다."""
+    settings = load_settings()
+    product, x, y = Image.open(folder / layout["product"]["file"]), layout["product"]["x"], layout["product"]["y"]
+    on_product = product_canvas_mask(product, x, y, scene.size)
+    region = shadow_region(on_product, settings["shadow"]["reach"], settings["product"]["mask_threshold"])
+    shadow = shadow_layer(to_float(scene), to_float(background), region, on_product, settings["shadow"])
+    box = shadow.getbbox() or (x, y, x + 1, y + 1)
+    shadow.crop(box).save(folder / "shadow.png")
+    return {"file": "shadow.png", "dx": box[0] - x, "dy": box[1] - y}
+
+
+def write_texts(folder: Path, layout: dict, ai) -> None:
+    """draft.png와 base.png로 글자 자리를 찾고, 문구를 쓰고, 글자 레이어를 그려 ad.png로 합칩니다."""
+    settings = load_settings()
+    mood = settings["moods"][layout["mood"]]
+    product = Image.open(folder / layout["product"]["file"])
+    on_product = product_canvas_mask(product, layout["product"]["x"], layout["product"]["y"], tuple(layout["size"]))
+    draft = to_float(Image.open(folder / "draft.png"))
+    boxes = find_text_boxes(draft, to_float(Image.open(folder / "base.png")), on_product, settings["text_boxes"])
+    copy = write_copy(ai, draft, boxes, layout["fields"], mood) if boxes else []
+    for old in folder.glob("text_*.png"):
+        old.unlink()
+    layout["texts"] = [box | line | {"font": mood["fonts"][line["role"]], "file": f"text_{i}_{line['role']}.png"}
+                       for i, (box, line) in enumerate(zip(boxes, copy), start=1) if line["role"] != "skip"]
+    render_texts(layout["texts"], tuple(layout["size"]), folder)
+    compose(layout, folder).save(folder / "ad.png")
+
+
+def relayout(folder: Path, ai) -> None:
+    """생성 모델 없이 그림자와 글자를 처음부터 다시 계산합니다 (설정값을 바꿔 볼 때).
+    저장된 scene.png, background.png, base.png, draft.png를 그대로 씁니다."""
+    layout = load_layout(folder)
+    layout["shadow"] = save_shadow(folder, layout, Image.open(folder / "scene.png").convert("RGB"),
+                                   Image.open(folder / "background.png").convert("RGB"))
+    write_texts(folder, layout, ai)
+    save_layout(layout, folder)
 
 
 def recompose(folder: Path) -> None:
@@ -128,6 +157,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("photo", nargs="?", type=Path, help="보정까지 끝난 제품 사진")
     p.add_argument("--recompose", type=Path, help="이 폴더의 layout.json으로 글자만 다시 그려 합치기")
+    p.add_argument("--relayout", type=Path, help="이 폴더의 생성 결과로 그림자·글자 자리·문구를 다시 계산하기")
     p.add_argument("--name", help="품목 이름")
     p.add_argument("--unit", default="")
     p.add_argument("--price", type=int)
@@ -140,6 +170,11 @@ def main() -> None:
     args = p.parse_args()
     if args.recompose:
         recompose(args.recompose)
+        return
+    if args.relayout:
+        from ..photo_retouch.interpret import Interpreter
+
+        relayout(args.relayout, Interpreter())
         return
     if not args.photo or not args.name or not args.price:
         p.error("사진, --name, --price가 필요합니다 (문구만 다시 합칠 때는 --recompose)")
