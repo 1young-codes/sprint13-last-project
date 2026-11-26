@@ -45,11 +45,42 @@ class GenerateHashtagsTest(unittest.TestCase):
             generate_hashtags(**DOMI)
         self.assertEqual(call.call_args.args[2], "gemini-other")
 
+    @patch.object(hashtags.time, "sleep")
     @patch.object(hashtags, "_call_gemini")
-    def test_returns_empty_lists_when_api_fails(self, call):
+    def test_returns_empty_lists_when_api_fails(self, call, sleep):
         for error in (urllib.error.URLError("down"), TimeoutError(), ValueError("bad json")):
             call.side_effect = error
             self.assertEqual(generate_hashtags(**DOMI), {"product_photo": [], "usage_example": []})
+
+    @patch.object(hashtags.time, "sleep")
+    @patch.object(hashtags, "_call_gemini")
+    def test_retries_when_gemini_is_busy_or_slow(self, call, sleep):
+        busy = urllib.error.HTTPError(hashtags.API_URL, 503, "Service Unavailable", None, None)
+        for temporary in (busy, TimeoutError("timed out")):
+            call.reset_mock()
+            sleep.reset_mock()
+            call.side_effect = [temporary, gemini_reply({"product_photo": ["#도미"], "usage_example": ["#도미회"]})]
+
+            self.assertEqual(generate_hashtags(**DOMI), {"product_photo": ["#도미"], "usage_example": ["#도미회"]})
+            self.assertEqual(call.call_count, 2)
+            sleep.assert_called_once_with(hashtags.RETRY_DELAY_S)
+
+    @patch.object(hashtags.time, "sleep")
+    @patch.object(hashtags, "_call_gemini")
+    def test_gives_up_after_max_retries(self, call, sleep):
+        call.side_effect = urllib.error.HTTPError(hashtags.API_URL, 503, "Service Unavailable", None, None)
+        self.assertEqual(generate_hashtags(**DOMI), {"product_photo": [], "usage_example": []})
+        self.assertEqual(call.call_count, hashtags.MAX_RETRIES + 1)
+
+    @patch.object(hashtags.time, "sleep")
+    @patch.object(hashtags, "_call_gemini")
+    def test_does_not_retry_limit_or_key_errors(self, call, sleep):
+        for code in (400, 403, 429):
+            call.reset_mock()
+            call.side_effect = urllib.error.HTTPError(hashtags.API_URL, code, "error", None, None)
+            self.assertEqual(generate_hashtags(**DOMI), {"product_photo": [], "usage_example": []})
+            self.assertEqual(call.call_count, 1)
+        sleep.assert_not_called()
 
     @patch.object(hashtags, "_call_gemini")
     def test_returns_empty_lists_when_reply_is_strange(self, call):

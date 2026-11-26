@@ -36,6 +36,7 @@ Return JSON with two lists of Korean hashtags.
 - `#원기회복` → `#든든한한끼` (no health effects)
 - `#무첨가` → leave it out unless the input says so
 - `#오늘입고` → leave it out unless the input says so
+- `#제철생선` → `#생선` (the input did not say it is in season)
 - `#맛집` alone → `#동네수산` or a tag tied to the product
 - `#여성가디건` → `#가디건` (the input did not say who it is for)
 - `#원두200g` → `#원두` (no sizes)
@@ -48,4 +49,4 @@ Input:
 {"product_name": "자연산 도미", "usage_example": "회, 소금구이", "product_caption": "...", "usage_caption": "..."}
 
 Output:
-{"product_photo": ["#자연산도미", "#도미", "#제철생선", "#동네수산"], "usage_example": ["#도미회", "#도미소금구이", "#생선구이", "#집밥"]}
+{"product_photo": ["#자연산도미", "#도미", "#생선", "#동네수산"], "usage_example": ["#도미회", "#도미소금구이", "#생선구이", "#집밥"]}
