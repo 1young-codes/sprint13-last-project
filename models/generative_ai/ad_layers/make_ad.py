@@ -134,7 +134,12 @@ def write_texts(folder: Path, layout: dict, ai) -> None:
     boxes = find_text_boxes(draft, base, on_product, settings["text_boxes"])
     layout["text_source"] = "draft" if boxes else "template"
     boxes = boxes or template_boxes(base, settings["template"])
-    copy = write_copy(ai, draft, boxes, layout["fields"], mood)
+    copy = write_copy(ai, draft, boxes, layout["fields"], mood, template=layout["text_source"] == "template")
+    if layout["text_source"] == "draft" and all(line["role"] == "skip" for line in copy):
+        # 찾은 자리가 모두 글자가 아니었던 경우 (언어모델이 전부 건너뜀): 기본 배치 틀로 다시 씁니다
+        layout["text_source"] = "template"
+        boxes = template_boxes(base, settings["template"])
+        copy = write_copy(ai, draft, boxes, layout["fields"], mood, template=True)
     for old in folder.glob("text_*.png"):
         old.unlink()
     layout["texts"] = [box | line | {"font": mood["fonts"][line["role"]], "file": f"text_{i}_{line['role']}.png"}
