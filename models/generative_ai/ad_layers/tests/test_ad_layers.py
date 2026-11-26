@@ -44,6 +44,18 @@ def test_contact_shadow_darkens_only_near_the_footprint():
     assert overhead.height > shadow.height and overhead_dy < dy
 
 
+def test_contact_shadow_follows_uneven_product_bases():
+    product = Image.new("RGBA", (100, 80))
+    product.paste((200, 30, 30, 255), (0, 0, 55, 50))
+    product.paste((200, 30, 30, 255), (50, 35, 100, 80))
+    shadow, dx, dy = contact_shadow(product, overhead=False)
+    canvas = Image.new("RGBA", SIZE, "white")
+    canvas.alpha_composite(shadow, (50 + dx, 60 + dy))
+    assert canvas.getpixel((75, 110))[0] < 255
+    assert canvas.getpixel((125, 140))[0] < 255
+    assert canvas.getpixel((75, 140))[0] == 255
+
+
 def test_text_boxes_found_outside_product_with_color():
     base = np.full((*SIZE[::-1], 3), 0.9, np.float32)
     draft = base.copy()

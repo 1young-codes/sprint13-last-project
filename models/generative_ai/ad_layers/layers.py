@@ -58,19 +58,30 @@ def product_canvas_mask(product: Image.Image, x: int, y: int, size: tuple[int, i
 
 
 def contact_shadow(product: Image.Image, overhead: bool) -> tuple[Image.Image, int, int]:
-    """제품 마스크를 바닥에 투영해 제품 위치 기준의 부드러운 접지 그림자를 만듭니다."""
+    """제품 마스크에서 바닥에 닿는 윤곽을 읽어 부드러운 그림자를 만듭니다."""
     width, height = product.size
     unit = max(width, height)
     pad = max(1, round(unit * 0.12))
-    depth = height if overhead else max(1, round(height * 0.12))
-    footprint = product.getchannel("A").resize((width, depth), Image.Resampling.LANCZOS)
-    alpha = Image.new("L", (width + 2 * pad, depth + 2 * pad))
+    footprint = product.getchannel("A")
+    if not overhead:
+        # 앞뒤로 놓인 물건은 같은 사진에서도 바닥에 닿는 높이가 다릅니다.
+        coverage = np.asarray(footprint)
+        rows = np.arange(height)[:, None]
+        bottom = np.where(coverage > 128, rows, -height).max(axis=0)
+        depth = max(1, round(unit * 0.045))
+        near_bottom = (rows > bottom - depth) & (rows <= bottom + 1)
+        footprint = Image.fromarray(np.where(near_bottom, coverage, 0).astype(np.uint8))
+    alpha = Image.new("L", (width + 2 * pad, height + 2 * pad))
     alpha.paste(footprint, (pad, pad))
     tight = alpha.filter(ImageFilter.GaussianBlur(max(1, unit * 0.008))).point(lambda v: round(v * 0.38))
     soft = alpha.filter(ImageFilter.GaussianBlur(max(1, unit * 0.025))).point(lambda v: round(v * 0.20))
     shadow = Image.new("RGBA", alpha.size)
     shadow.putalpha(ImageChops.screen(tight, soft))
-    return shadow, -pad + round(unit * 0.012), height - depth - pad + round(unit * 0.012)
+    offset = round(unit * 0.012) - pad
+    box = shadow.getbbox()
+    if box is None:
+        return shadow, offset, offset
+    return shadow.crop(box), offset + box[0], offset + box[1]
 
 
 def grown(solid: np.ndarray, distance: int) -> np.ndarray:
