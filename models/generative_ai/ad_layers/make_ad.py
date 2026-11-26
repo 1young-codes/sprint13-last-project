@@ -24,7 +24,7 @@ from PIL import Image
 
 from .copywriter import scene_description, write_copy
 from .layers import (PROJECT_ROOT, compose, find_text_boxes, load_layout, load_settings, place_product,
-                     product_canvas_mask, save_layout, shadow_layer, shadow_region, to_float)
+                     product_canvas_mask, save_layout, shadow_layer, shadow_region, template_boxes, to_float)
 from .text_render import render_texts
 
 
@@ -93,9 +93,15 @@ def make_ad(photo: Image.Image, fields: dict, mood_key: str, idea: str, models: 
     base.save(folder / "base.png")
     lap("shadow")
 
-    # 6. 글자 초안 (초안과 base의 차이로 글자 자리를 찾습니다)
-    model.edit(base, generation["draft_prompt"].format(style=mood["style"]), seed, steps).resize(size).save(
-        folder / "draft.png")
+    # 6. 글자 초안 (초안과 base의 차이로 글자 자리를 찾습니다). 모델이 글자를 안 그리기도 해서 몇 번 다시 그립니다
+    rule = settings["text_boxes"]
+    for attempt in range(rule["draft_tries"]):
+        draft = model.edit(base, generation["draft_prompt"].format(style=mood["style"]), seed + attempt,
+                           steps).resize(size)
+        draft.save(folder / "draft.png")
+        if find_text_boxes(to_float(draft), to_float(base), on_product, rule):
+            break
+    layout["draft_tries"] = attempt + 1
     lap("draft")
 
     # 7~9. 글자 자리, 문구, 글자 레이어, 합치기
@@ -124,9 +130,11 @@ def write_texts(folder: Path, layout: dict, ai) -> None:
     mood = settings["moods"][layout["mood"]]
     product = Image.open(folder / layout["product"]["file"])
     on_product = product_canvas_mask(product, layout["product"]["x"], layout["product"]["y"], tuple(layout["size"]))
-    draft = to_float(Image.open(folder / "draft.png"))
-    boxes = find_text_boxes(draft, to_float(Image.open(folder / "base.png")), on_product, settings["text_boxes"])
-    copy = write_copy(ai, draft, boxes, layout["fields"], mood) if boxes else []
+    draft, base = to_float(Image.open(folder / "draft.png")), to_float(Image.open(folder / "base.png"))
+    boxes = find_text_boxes(draft, base, on_product, settings["text_boxes"])
+    layout["text_source"] = "draft" if boxes else "template"
+    boxes = boxes or template_boxes(base, settings["template"])
+    copy = write_copy(ai, draft, boxes, layout["fields"], mood)
     for old in folder.glob("text_*.png"):
         old.unlink()
     layout["texts"] = [box | line | {"font": mood["fonts"][line["role"]], "file": f"text_{i}_{line['role']}.png"}

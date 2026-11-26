@@ -95,7 +95,9 @@ def shadow_layer(scene: np.ndarray, empty: np.ndarray, region: np.ndarray, produ
     ratio = (scene + 1e-3) / (empty + 1e-3)
     tinted = (ratio.max(axis=2) - ratio.min(axis=2)) / ratio.mean(axis=2) >= rule["max_tint"]
     neutral = ~grown(tinted, 3 * radius)  # 흐림 때문에 물건 가장자리는 색이 옅어지므로 그만큼 더 뺍니다
-    alpha = np.where(lit < bare, darker, brighter) * region * neutral * (1 - product_mask)
+    # 다시 채운 둘레는 전체 밝기도 장면과 조금 다릅니다. 둘레 끝에서 뚝 끊기면 경계선이 보이므로 끝으로 갈수록 옅게 합니다
+    fade = np.clip(ndimage.distance_transform_edt(region) / max(1.0, rule["fade"] * scene.shape[1]), 0, 1)
+    alpha = np.where(lit < bare, darker, brighter) * fade * neutral * (1 - product_mask)
     alpha[alpha < rule["min_alpha"]] = 0
     color = np.where(lit < bare, 0, 255).astype(np.uint8)
     rgba = np.dstack([color, color, color, (alpha * 255).round().astype(np.uint8)])
@@ -134,6 +136,17 @@ def find_text_boxes(draft: np.ndarray, base: np.ndarray, product_mask: np.ndarra
         boxes.append({"x": int(x0), "y": int(y0), "w": int(x1 - x0), "h": int(y1 - y0), "color": color})
     boxes.sort(key=lambda b: b["w"] * b["h"], reverse=True)
     return boxes[:rule["max_boxes"]]
+
+
+def template_boxes(base: np.ndarray, rule: list[dict]) -> list[dict]:
+    """생성 모델이 초안에 글자를 그리지 않았을 때 쓰는 기본 배치 틀. 글자 색은 그 자리 배경이 밝으면 검정, 어두우면 흰색."""
+    height, width = base.shape[:2]
+    boxes = []
+    for slot in rule:
+        x, y, w, h = (round(v * size) for v, size in zip(slot["box"], (width, height, width, height)))
+        light = base[y:y + h, x:x + w].mean() > 0.55
+        boxes.append({"x": x, "y": y, "w": w, "h": h, "color": "#1a1a1a" if light else "#ffffff"})
+    return boxes
 
 
 def compose(layout: dict, folder: Path) -> Image.Image:

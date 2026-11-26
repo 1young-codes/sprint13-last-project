@@ -5,7 +5,8 @@ from PIL import Image
 
 from models.generative_ai.ad_layers.copywriter import clean_copy
 from models.generative_ai.ad_layers.layers import (compose, find_text_boxes, load_settings, place_product,
-                                                   product_canvas_mask, shadow_layer, shadow_region, to_float)
+                                                   product_canvas_mask, shadow_layer, shadow_region, template_boxes,
+                                                   to_float)
 
 SETTINGS = load_settings()
 SIZE = (256, 256)
@@ -66,6 +67,15 @@ def test_text_boxes_found_outside_product_with_color():
     assert (title["x"], title["y"], title["w"], title["h"]) == (30, 20, 184, 30)
     assert title["color"] == "#cc1a1a"
     assert boxes[1]["y"] == 200
+
+
+def test_no_text_in_draft_means_no_boxes_and_template_picks_readable_color():
+    base = np.full((*SIZE[::-1], 3), 0.9, np.float32)
+    drifted = np.clip(base * 0.8 + np.random.default_rng(1).normal(0, 0.02, base.shape), 0, 1).astype(np.float32)
+    assert find_text_boxes(drifted, base, np.zeros(SIZE[::-1], np.float32), SETTINGS["text_boxes"]) == []
+    boxes = template_boxes(base, SETTINGS["template"])
+    assert len(boxes) == len(SETTINGS["template"]) and boxes[0]["color"] == "#1a1a1a"
+    assert template_boxes(base * 0.1, SETTINGS["template"])[0]["color"] == "#ffffff"
 
 
 def test_clean_copy_keeps_known_roles_once_and_uses_real_price():
