@@ -97,6 +97,9 @@ def shadow_layer(scene: np.ndarray, empty: np.ndarray, region: np.ndarray, produ
     neutral = ~grown(tinted, 3 * radius)  # 흐림 때문에 물건 가장자리는 색이 옅어지므로 그만큼 더 뺍니다
     # 다시 채운 둘레는 전체 밝기도 장면과 조금 다릅니다. 둘레 끝에서 뚝 끊기면 경계선이 보이므로 끝으로 갈수록 옅게 합니다
     fade = np.clip(ndimage.distance_transform_edt(region) / max(1.0, rule["fade"] * scene.shape[1]), 0, 1)
+    # 제품 바로 둘레가 밝아진 것은 대개 생성 모델이 제품을 조금 더 크게 그린 흔적입니다 (흰 테두리로 보임). 그림자만 남깁니다
+    near_product = grown(product_mask > 0.5, max(1, round(rule["light_margin"] * scene.shape[1])))
+    brighter[near_product] = 0
     alpha = np.where(lit < bare, darker, brighter) * fade * neutral * (1 - product_mask)
     alpha[alpha < rule["min_alpha"]] = 0
     color = np.where(lit < bare, 0, 255).astype(np.uint8)
@@ -129,13 +132,16 @@ def find_text_boxes(draft: np.ndarray, base: np.ndarray, product_mask: np.ndarra
         y1, x1 = area[0].start + rows.max() + 1, area[1].start + cols.max() + 1
         if y1 - y0 > rule["max_height"] * height or (x1 - x0) * (y1 - y0) > rule["max_box_area"] * width * height:
             continue  # 글자 한 줄로 보기엔 너무 큰 영역: 바닥 무늬나 물건이 통째로 바뀐 곳
+        edge = rule["border"] * width
+        if x0 < edge or y0 < edge or x1 > width - edge or y1 > height - edge:
+            continue  # 광고 글자는 캔버스 끝에 붙지 않습니다. 끝에 닿는 것은 대개 바닥 무늬나 빛이 바뀐 곳
         # 글자 색: 바뀐 화소 중 가장 많이 바뀐 30%의 중앙값 (가장자리 흐림과 배경이 섞인 화소를 뺌)
         strength = difference[area][inside]
         colors = draft[area][inside][strength >= np.quantile(strength, 0.7)]
         color = "#" + "".join(f"{round(v * 255):02x}" for v in np.median(colors, axis=0))
         boxes.append({"x": int(x0), "y": int(y0), "w": int(x1 - x0), "h": int(y1 - y0), "color": color})
     boxes.sort(key=lambda b: b["w"] * b["h"], reverse=True)
-    return boxes[:rule["max_boxes"]]
+    return sorted(boxes[:rule["max_boxes"]], key=lambda b: b["y"])  # 위에서 아래 순서 (언어모델이 읽는 순서)
 
 
 def template_boxes(base: np.ndarray, rule: list[dict]) -> list[dict]:

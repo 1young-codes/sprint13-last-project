@@ -22,9 +22,10 @@ Leave clear empty space for advertising text. Do not describe the product itself
 Never mention text, letters, signs, labels or logos.
 Answer as JSON: {{"scene": "..."}}"""
 
-COPY_REQUEST = """이 이미지는 광고 초안입니다. 이미지 생성 모델이 빈 자리에 가짜 글자를 그렸고, 그 글자 자리는 아래와 같습니다.
-상자마다 가로·세로 화소와, 그 크기에 들어가는 한글 글자 수 어림값이 있습니다.
+COPY_REQUEST = """이 이미지(가로 {width}, 세로 {height} 화소)는 광고 초안입니다. 이미지 생성 모델이 빈 자리에 가짜 글자를 그렸고,
+그림이 달라진 자리를 찾아 아래 상자로 적었습니다. 상자마다 왼쪽 위 좌표, 가로·세로 화소, 들어가는 한글 글자 수 어림값이 있습니다.
 {boxes}
+이 상자들 중 일부는 글자가 아니라 바닥 무늬나 빛이 바뀐 자리일 수 있습니다. 그 자리에 글자가 보이지 않으면 skip으로 두세요.
 
 상품 정보
 - 품목: {product}
@@ -71,9 +72,10 @@ def clean_copy(raw: dict, count: int, price_text: str) -> list[dict]:
 
 
 def write_copy(ai, draft: np.ndarray, boxes: list[dict], fields: dict, mood: dict) -> list[dict]:
-    listing = "\n".join(f"- 상자 {i}: 가로 {b['w']}, 세로 {b['h']}, 약 {fit_chars(b)}자"
+    listing = "\n".join(f"- 상자 {i}: 왼쪽 위 ({b['x']}, {b['y']}), 가로 {b['w']}, 세로 {b['h']}, 약 {fit_chars(b)}자"
                         for i, b in enumerate(boxes, start=1))
-    text = COPY_REQUEST.format(boxes=listing, product=json.dumps(fields["product_name"], ensure_ascii=False),
+    height, width = draft.shape[:2]
+    text = COPY_REQUEST.format(width=width, height=height, boxes=listing, product=json.dumps(fields["product_name"], ensure_ascii=False),
                                unit=json.dumps(fields["unit"], ensure_ascii=False),
                                usage=json.dumps(fields.get("usage_example", ""), ensure_ascii=False),
                                notes=json.dumps(fields.get("notes", ""), ensure_ascii=False), mood=mood["label"])
