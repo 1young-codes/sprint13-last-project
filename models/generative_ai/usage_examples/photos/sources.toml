@@ -1,0 +1,363 @@
+# 실험 원본 사진 목록입니다. 모두 Unsplash 이용 허락이며, 저장소에는 긴 변 1280픽셀로 줄여 넣었습니다.
+# Source photos for the ad-image generation experiment.
+# All files are 800-2000 px on the long side. Licenses: Unsplash License (https://unsplash.com/license).
+
+[[photos]]
+id = "food_raw_mackerel"
+file = "food_raw_mackerel.jpg"
+group = "food_raw"
+subject = "three whole raw mackerel on a dark steel tray"
+page = "https://unsplash.com/photos/shallow-focus-photo-of-fish-on-stainless-steel-surface-3NU0OTivB9E"
+image_url = "https://images.unsplash.com/photo-1567087978459-8a8eeac7bc75?fm=jpg&q=85&w=1600"
+author = "Ben Wicks"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_raw_seabream"
+file = "food_raw_seabream.jpg"
+group = "food_raw"
+subject = "whole raw sea bream on a floral ceramic plate, wooden table"
+page = "https://unsplash.com/photos/fish-on-white-and-blue-floral-ceramic-plate-ThwSJkPjkW8"
+image_url = "https://images.unsplash.com/photo-1621590183062-bca4b1667268?fm=jpg&q=85&w=1600"
+author = "henry perks"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_raw_beef"
+file = "food_raw_beef.jpg"
+group = "food_raw"
+subject = "two raw ribeye steaks seasoned with salt on a wire rack"
+page = "https://unsplash.com/photos/two-raw-ribeye-steaks-seasoned-with-salt-on-a-rack-E5GBbE74cLc"
+image_url = "https://images.unsplash.com/photo-1772285466464-8ccda2c3be92?fm=jpg&q=85&w=1600"
+author = "Magnus Jonasson"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_raw_shrimp"
+file = "food_raw_shrimp.jpg"
+group = "food_raw"
+subject = "raw whole shrimp in a steel bowl"
+page = "https://unsplash.com/photos/a-bucket-full-of-shrimp-sitting-on-top-of-a-table--3JrrX2qHpY"
+image_url = "https://images.unsplash.com/photo-1676250249336-2b73830368b1?fm=jpg&q=85&w=1600"
+author = "Bai Z"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_raw_vegetables"
+file = "food_raw_vegetables.jpg"
+group = "food_raw"
+subject = "heads of fresh napa cabbage at a market"
+page = "https://unsplash.com/photos/several-heads-of-fresh-napa-cabbage-lined-up-BCXgdJJ5nPY"
+image_url = "https://images.unsplash.com/photo-1779738192854-92a3daec9b45?fm=jpg&q=85&w=1600"
+author = "Jason Leung"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_raw_fruit"
+file = "food_raw_fruit.jpg"
+group = "food_raw"
+subject = "white bowl of fresh strawberries on a plain white background"
+page = "https://unsplash.com/photos/a-white-bowl-filled-with-lots-of-ripe-strawberries-8FZb_jdLalQ"
+image_url = "https://images.unsplash.com/photo-1717182388352-d6962b0cb219?fm=jpg&q=85&w=1600"
+author = "Natalia Gasiorowska"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_raw_eggs"
+file = "food_raw_eggs.jpg"
+group = "food_raw"
+subject = "brown eggs in straw in a wooden box"
+page = "https://unsplash.com/photos/brown-egg-on-brown-nest-qlLCBkTSYAI"
+image_url = "https://images.unsplash.com/photo-1598965675045-45c5e72c7d05?fm=jpg&q=85&w=1600"
+author = "Nick Fewings"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_raw_mushrooms"
+file = "food_raw_mushrooms.jpg"
+group = "food_raw"
+subject = "cluster of brown beech mushrooms on a dark background"
+page = "https://unsplash.com/photos/brown-mushrooms-in-tilt-shift-lens-sAtSL8jak8Q"
+image_url = "https://images.unsplash.com/photo-1628237117116-3afb22d021f2?fm=jpg&q=85&w=1600"
+author = "blackieshoot"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_korean_bibimbap"
+file = "food_korean_bibimbap.jpg"
+group = "food_korean"
+subject = "stone-pot bibimbap with egg yolk and side dishes"
+page = "https://unsplash.com/photos/korean-bibimbap-with-side-dishes-is-served-SbHulgzS_eo"
+image_url = "https://images.unsplash.com/photo-1741295017668-c8132acd6fc0?fm=jpg&q=85&w=1600"
+author = "Dmitry Pavlovsky"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_korean_kimchistew"
+file = "food_korean_kimchistew.jpg"
+group = "food_korean"
+subject = "spicy kimchi stew with tofu and scallions, close-up"
+page = "https://unsplash.com/photos/close-up-of-spicy-korean-stew-with-tofu-and-scallions-1_SenAyTAXg"
+image_url = "https://images.unsplash.com/photo-1760228865341-675704c22a5b?fm=jpg&q=85&w=1600"
+author = "rawkkim"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_korean_tteokbokki"
+file = "food_korean_tteokbokki.jpg"
+group = "food_korean"
+subject = "tteokbokki in a cast-iron pan on a wooden board, dark slate"
+page = "https://unsplash.com/photos/a-bowl-of-food-on-top-of-a-wooden-cutting-board-Kgmk9NYGxNQ"
+image_url = "https://images.unsplash.com/photo-1730900737734-f159ca5640c3?fm=jpg&q=85&w=1600"
+author = "Ömer Taha Çetin"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_korean_braisedfish"
+file = "food_korean_braisedfish.jpg"
+group = "food_korean"
+subject = "whole braised fish in spicy red sauce on an oval plate"
+page = "https://unsplash.com/photos/a-plate-of-food-with-a-spoon-in-it-xyzFcGnwkrY"
+image_url = "https://images.unsplash.com/photo-1708657950896-1acb4ede7fad?fm=jpg&q=85&w=1600"
+author = "Jvn Mangyao"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_korean_grilledmeat"
+file = "food_korean_grilledmeat.jpg"
+group = "food_korean"
+subject = "marinated meat grilling on a mesh barbecue grill"
+page = "https://unsplash.com/photos/a-person-is-grilling-meat-on-a-grill-hWxFxd-VySY"
+image_url = "https://images.unsplash.com/photo-1677029969065-c9f4003a9ad5?fm=jpg&q=85&w=1600"
+author = "Subagus Indra"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_korean_ramen"
+file = "food_korean_ramen.jpg"
+group = "food_korean"
+subject = "bowl of ramen with chashu pork and egg on a wooden table"
+page = "https://unsplash.com/photos/a-bowl-of-noodles-meat-and-vegetables-on-a-wooden-table-bTjyvExI4Qw"
+image_url = "https://images.unsplash.com/photo-1706128999187-327ac1ef054e?fm=jpg&q=85&w=1600"
+author = "Cindy Segovia"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_korean_sushi"
+file = "food_korean_sushi.jpg"
+group = "food_korean"
+subject = "nigiri sushi on a black slate with chopsticks and soy sauce"
+page = "https://unsplash.com/photos/sushi-on-black-square-plate-Dbx6-XZY6Dg"
+image_url = "https://images.unsplash.com/photo-1617196034796-73dfa7b1fd56?fm=jpg&q=85&w=1600"
+author = "Mahmoud Fawzy"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_korean_dumplings"
+file = "food_korean_dumplings.jpg"
+group = "food_korean"
+subject = "pan-fried dumplings on a blue plate with dipping sauce"
+page = "https://unsplash.com/photos/fried-dumplings-arranged-on-a-plate-with-dipping-sauce-BKHhTsvDnZw"
+image_url = "https://images.unsplash.com/photo-1768046308289-469b32eeec5c?fm=jpg&q=85&w=1600"
+author = "Lara Bellens"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_korean_friedchicken"
+file = "food_korean_friedchicken.jpg"
+group = "food_korean"
+subject = "Korean sweet-spicy glazed fried chicken in a blue bowl with chopsticks"
+page = "https://unsplash.com/photos/a-blue-bowl-filled-with-meat-and-vegetables-hcOBrGaalp8"
+image_url = "https://images.unsplash.com/photo-1687966699414-095ca9c35593?fm=jpg&q=85&w=1600"
+author = "Javier Esteban"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_korean_japchae"
+file = "food_korean_japchae.jpg"
+group = "food_korean"
+subject = "japchae glass noodles with vegetables on a dark plate"
+page = "https://unsplash.com/photos/bowl-of-cooked-food-H6iSwrAOMG0"
+image_url = "https://images.unsplash.com/photo-1564834724105-918b73d1b9e0?fm=jpg&q=85&w=1600"
+author = "Ryan Kwok"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_western_pizza"
+file = "food_western_pizza.jpg"
+group = "food_western"
+subject = "margherita pizza on a white plate, terrazzo table"
+page = "https://unsplash.com/photos/cooked-food-on-round-white-ceramic-plate-cC0_UO1Obg4"
+image_url = "https://images.unsplash.com/photo-1564936281291-294551497d81?fm=jpg&q=85&w=1600"
+author = "Louis Hansel"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_western_pasta"
+file = "food_western_pasta.jpg"
+group = "food_western"
+subject = "spaghetti with tomato sauce on a plate, blue background"
+page = "https://unsplash.com/photos/pasta-with-red-sauce-on-white-ceramic-round-plate-qits91IZv1o"
+image_url = "https://images.unsplash.com/photo-1598866594230-a7c12756260f?fm=jpg&q=85&w=1600"
+author = "Danijela Prijovic"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_western_burger"
+file = "food_western_burger.jpg"
+group = "food_western"
+subject = "cheeseburger on a wooden board, white background"
+page = "https://unsplash.com/photos/a-hamburger-sitting-on-top-of-a-wooden-cutting-board-MNHQqLNEvow"
+image_url = "https://images.unsplash.com/photo-1713330801172-03f8d1c0dde7?fm=jpg&q=85&w=1600"
+author = "amirali mirhashemian"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_western_steak"
+file = "food_western_steak.jpg"
+group = "food_western"
+subject = "grilled ribeye steak with vegetables, mash and sauce on a white plate"
+page = "https://unsplash.com/photos/a-white-plate-topped-with-meat-and-veggies-wkms_RlOuDU"
+image_url = "https://images.unsplash.com/photo-1676300185292-e23bb3db50fa?fm=jpg&q=85&w=1600"
+author = "Orkun Orcan"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_western_salad"
+file = "food_western_salad.jpg"
+group = "food_western"
+subject = "green salad with cherry tomatoes in a white bowl, white background"
+page = "https://unsplash.com/photos/vegetable-salad-on-white-ceramic-plate-xeTv9N2FjXA"
+image_url = "https://images.unsplash.com/photo-1607532941433-304659e8198a?fm=jpg&q=85&w=1600"
+author = "Tania Melnyczuk"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_dessert_cake"
+file = "food_dessert_cake.jpg"
+group = "food_dessert"
+subject = "slice of strawberry shortcake on a wooden table"
+page = "https://unsplash.com/photos/white-and-red-strawberry-cake-fENvSZUzbzU"
+image_url = "https://images.unsplash.com/photo-1602663491496-73f07481dbea?fm=jpg&q=85&w=1600"
+author = "Takuya Nagaoka"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_dessert_bread"
+file = "food_dessert_bread.jpg"
+group = "food_dessert"
+subject = "sourdough loaf on linen, light background"
+page = "https://unsplash.com/photos/brown-bread-on-white-textile-mha2dvydACg"
+image_url = "https://images.unsplash.com/photo-1616841888027-89693dec0827?fm=jpg&q=85&w=1600"
+author = "Monika Grabkowska"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_dessert_macarons"
+file = "food_dessert_macarons.jpg"
+group = "food_dessert"
+subject = "stack of colorful macarons on a white background"
+page = "https://unsplash.com/photos/3-yellow-pink-and-green-macaroons-i5BQNYI0jIU"
+image_url = "https://images.unsplash.com/photo-1597895139322-0a1ef77b3c30?fm=jpg&q=85&w=1600"
+author = "Divani"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_dessert_icecream"
+file = "food_dessert_icecream.jpg"
+group = "food_dessert"
+subject = "ice cream cone standing on a pink cloth background"
+page = "https://unsplash.com/photos/a-cone-of-ice-cream-on-a-pink-background-_gN4PnJ3ygg"
+image_url = "https://images.unsplash.com/photo-1705103654884-cbd03d95761a?fm=jpg&q=85&w=1600"
+author = "Orissa Humes"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_drink_latte"
+file = "food_drink_latte.jpg"
+group = "food_drink"
+subject = "latte with latte art in a cup and saucer on a wooden table"
+page = "https://unsplash.com/photos/a-cup-of-coffee-with-latte-art-on-a-saucer-T3fFz5W0Foc"
+image_url = "https://images.unsplash.com/photo-1760163178873-7644a924519e?fm=jpg&q=85&w=1600"
+author = "nameless 3791"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_drink_smoothie"
+file = "food_drink_smoothie.jpg"
+group = "food_drink"
+subject = "strawberry smoothie in a glass with fresh strawberries, marble background"
+page = "https://unsplash.com/photos/strawberry-shake-in-clear-drinking-glass-rwBJaJdesGg"
+image_url = "https://images.unsplash.com/photo-1579954115545-a95591f28bfc?fm=jpg&q=85&w=1600"
+author = "Sebastian Coman Photography"
+license = "Unsplash License"
+
+[[photos]]
+id = "food_drink_bubbletea"
+file = "food_drink_bubbletea.jpg"
+group = "food_drink"
+subject = "brown sugar bubble tea in a lidded plastic cup on a cafe table"
+page = "https://unsplash.com/photos/clear-plastic-container-dHQQv-BKTjo"
+image_url = "https://images.unsplash.com/photo-1558857563-b371033873b8?fm=jpg&q=85&w=1600"
+author = "Orimi Protograph"
+license = "Unsplash License"
+
+[[photos]]
+id = "cosmetic_serum"
+file = "cosmetic_serum.jpg"
+group = "cosmetic"
+subject = "amber glass serum bottle with dropper on a beige background"
+page = "https://unsplash.com/photos/a-dropper-bottle-with-a-dropper-on-top-of-it-io6vt4rAFo0"
+image_url = "https://images.unsplash.com/photo-1707539160277-e39464517645?fm=jpg&q=85&w=1600"
+author = "George Dagerotip"
+license = "Unsplash License"
+
+[[photos]]
+id = "cosmetic_cream"
+file = "cosmetic_cream.jpg"
+group = "cosmetic"
+subject = "open jar of white face cream on a rock, gray background"
+page = "https://unsplash.com/photos/a-jar-of-white-cream-on-a-rock-VRnf9ErHwUE"
+image_url = "https://images.unsplash.com/photo-1763503834047-ac85c4105c0b?fm=jpg&q=85&w=1600"
+author = "Eveling Salazar"
+license = "Unsplash License"
+
+[[photos]]
+id = "cosmetic_lipstick"
+file = "cosmetic_lipstick.jpg"
+group = "cosmetic"
+subject = "red lipstick on a red background"
+page = "https://unsplash.com/photos/red-lipstick-on-red-surface-Yh9FrbN5Bts"
+image_url = "https://images.unsplash.com/photo-1626895872564-b691b6877b83?fm=jpg&q=85&w=1600"
+author = "Qasim Malick"
+license = "Unsplash License"
+
+[[photos]]
+id = "household_ceramics"
+file = "household_ceramics.jpg"
+group = "household"
+subject = "speckled green handmade ceramic cup on a wooden table"
+page = "https://unsplash.com/photos/a-speckled-green-ceramic-cup-on-a-wooden-table-BGEqCc-bQHg"
+image_url = "https://images.unsplash.com/photo-1782351076283-73aa35f76058?fm=jpg&q=85&w=1600"
+author = "Adam Rasheed"
+license = "Unsplash License"
+
+[[photos]]
+id = "household_kettle"
+file = "household_kettle.jpg"
+group = "household"
+subject = "black gooseneck kettle on a wooden table"
+page = "https://unsplash.com/photos/black-kettle-on-brown-wooden-table-NTa2s1hgqSc"
+image_url = "https://images.unsplash.com/photo-1592417766326-088bf3da80c5?fm=jpg&q=85&w=1600"
+author = "Charlie Firth"
+license = "Unsplash License"
+
+[[photos]]
+id = "household_candle"
+file = "household_candle.jpg"
+group = "household"
+subject = "handmade scented candles in ceramic jars on a wooden board"
+page = "https://unsplash.com/photos/black-and-white-candle-on-brown-wooden-holder-YasQvzPbGOQ"
+image_url = "https://images.unsplash.com/photo-1603905179139-db12ab535ca9?fm=jpg&q=85&w=1600"
+author = "Hanna Balan"
+license = "Unsplash License"
