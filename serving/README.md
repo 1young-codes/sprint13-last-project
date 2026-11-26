@@ -14,20 +14,22 @@
 ```bash
 cd ~/sprint13-last-project
 export HF_HOME=/data/models/hf_cache CAMERA_ANGLE_CODE_DIR=/data/models/vendor
+set -a; . ~/.openai.env; . ~/.gemini.env; set +a
 nohup /data/venv/bin/python serving/api.py > /data/outputs/na_sanghun/api.log 2>&1 < /dev/null &
 ```
 
 - `CAMERA_ANGLE_CODE_DIR`: 깊이 모델(MoGe) 코드 위치. 빠지면 모델을 못 불러와 서버가 켜지지 않습니다.
+- `set -a` 줄: 서빙 담당 홈의 키 파일(본인만 읽기)을 환경 변수로 불러옵니다. 키는 저장소와 `/data`에 두지 않습니다. 빠지면 서버는 켜지지만 로그에 경고가 남고, 문구는 모두 "문구를 만들지 못했습니다."로, 해시태그는 빈 목록으로 나갑니다.
 - 모델을 다 불러온 뒤에 요청을 받습니다. 불러오기에 약 1분 걸리고, 실패하면 서버가 켜지지 않고 로그에 이유가 남습니다.
 - 켜졌는지 확인: `curl -s localhost:8003/presets` 가 각도 목록을 돌려주면 됩니다.
 
-모델 없이 켜기 (화면 연결 확인용, 그래픽 카드 안 씀):
+모델 없이 켜기 (화면 연결 확인용, 그래픽 카드 안 씀. 위의 `cd`, `export`, `set -a` 줄 다음에):
 
 ```bash
 nohup /data/venv/bin/python serving/api.py --no-models > /data/outputs/na_sanghun/api.log 2>&1 < /dev/null &
 ```
 
-각도는 모두 "이 각도는 만들지 못했습니다."로, 문구는 임시 문구로 돌려줍니다.
+각도는 모두 "이 각도는 만들지 못했습니다."로 돌려줍니다. 문구와 해시태그는 실제로 만들어서, 요청마다 OpenAI 비용이 듭니다.
 
 ## 끄기
 
@@ -59,5 +61,4 @@ gcloud compute ssh <내 계정>@sprint-ai03-team1 --zone=us-central1-c --project
 
 ## 지금 단계에서 비어 있는 것
 
-- 문구는 임시 문구, 해시태그는 빈 목록입니다. 문구(`generate_product_captions`)와 해시태그(`generate_hashtags`) 연결은 다음 티켓에서 합니다. 이때 키는 서빙 담당 홈의 `~/.openai.env`, `~/.gemini.env`(본인만 읽기)에서 읽습니다.
 - 대표 사진은 보정 전 원본입니다. 보정 연결도 다음 티켓입니다.
