@@ -802,15 +802,13 @@ input[aria-invalid='true'] {
 }
 
 .guide-shot {
-  display: grid;
-  place-items: center;
+  display: block;
+  width: 100%;
   aspect-ratio: 9 / 16;
-  max-height: 240px;
-  border: 1.5px dashed var(--line);
+  object-fit: cover;
+  border: 1px solid var(--line);
   border-radius: 10px;
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
+  background: #111;
 }
 
 /* 위쪽 줄 오른쪽의 연결된 계정 */
