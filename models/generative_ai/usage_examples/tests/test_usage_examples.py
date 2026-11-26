@@ -1,11 +1,14 @@
 """그래픽 카드와 OpenAI 없이 활용 예시의 계획, 조건, 평가 페이지를 검증합니다."""
 
 import csv
+import json
 
 import pytest
 from PIL import Image
 
-from models.generative_ai.usage_examples.__main__ import assign_orientation, calibration_plans, read_photos
+from models.generative_ai.usage_examples import plan as plan_module
+from models.generative_ai.usage_examples.__main__ import (assign_orientation, calibration_plans, command_plan,
+                                                           read_photos)
 from models.generative_ai.usage_examples.plan import clean_plan
 from models.generative_ai.usage_examples.review_page import CSV_FIELDS, build, summarize
 from models.generative_ai.usage_examples.settings import condition_prompt, conditions, load_categories, load_settings
@@ -64,6 +67,31 @@ def test_read_photos_uses_sources_list(tmp_path):
     (tmp_path / "sources.toml").write_text('[[photos]]\nid = "x"\nfile = "x.jpg"\ngroup = "food_raw"\n',
                                            encoding="utf-8")
     assert read_photos(tmp_path)[1] == [{"id": "x", "file": "x.jpg", "group": "food_raw"}]
+
+
+def test_plan_usage_adds_up_across_runs(tmp_path, monkeypatch):
+    """다시 실행해도 이전 실행의 사용량이 지워지지 않고 더해져야 합니다."""
+    class FakePlanner:
+        def __init__(self):
+            self.ai = type("AI", (), {"usage": []})()
+
+        def plan(self, photo):
+            self.ai.usage += [{"step": "recognize", "input_tokens": 100, "output_tokens": 10}] * 2
+            return {"category": "food", "category_label": "음식", "name_ko": "", "options": [{"name_ko": "", "prompt": "p"}]}
+
+    monkeypatch.setattr(plan_module, "Planner", FakePlanner)
+    photos, run = tmp_path / "photos", tmp_path / "run"
+    photos.mkdir()
+    for name in ("a", "b"):
+        Image.new("RGB", (8, 8)).save(photos / f"{name}.png")
+    usage = lambda: json.loads((run / "plans.json").read_text(encoding="utf-8"))["usage"]
+    command_plan(photos, run)
+    assert usage() == {"calls": 4, "input_tokens": 400, "output_tokens": 40}
+    Image.new("RGB", (8, 8)).save(photos / "c.png")
+    command_plan(photos, run)  # 새 사진 하나만 해석
+    assert usage() == {"calls": 6, "input_tokens": 600, "output_tokens": 60}
+    command_plan(photos, run)  # 할 일이 없어도 그대로
+    assert usage()["calls"] == 6
 
 
 def test_review_page_and_summary(tmp_path):

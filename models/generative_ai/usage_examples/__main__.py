@@ -68,18 +68,21 @@ def command_plan(photo_path: Path, run: Path) -> list[dict]:
     folder, photos = read_photos(photo_path)
     run.mkdir(parents=True, exist_ok=True)
     plans_file = run / "plans.json"
-    done = {p["id"]: p for p in json.loads(plans_file.read_text(encoding="utf-8"))["plans"]} if plans_file.is_file() else {}
+    saved = json.loads(plans_file.read_text(encoding="utf-8")) if plans_file.is_file() else {}
+    done = {p["id"]: p for p in saved.get("plans", [])}
+    before = saved.get("usage") or {"calls": 0, "input_tokens": 0, "output_tokens": 0}  # 이전 실행에서 쓴 양
     planner, seed = Planner(), load_settings()["generation"]["seed"]
 
     def save() -> list[dict]:
-        """해석이 끝난 사진까지 저장합니다. 중간에 끊겨도 다시 실행하면 남은 사진만 해석합니다."""
+        """해석이 끝난 사진까지 저장합니다. 중간에 끊겨도 다시 실행하면 남은 사진만 해석합니다.
+        사용량은 이전 실행 것에 이번 실행 것을 더해, 다시 실행해도 지워지지 않습니다."""
         plans = [done[p["id"]] | {"seed": seed + i} for i, p in enumerate(photos) if p["id"] in done]
         assign_orientation(plans)
         usage = planner.ai.usage
         plans_file.write_text(json.dumps({"photos_dir": portable(folder), "plans": plans,
-                                          "usage": {"calls": len(usage),
-                                                    "input_tokens": sum(u["input_tokens"] for u in usage),
-                                                    "output_tokens": sum(u["output_tokens"] for u in usage)}},
+                                          "usage": {"calls": before["calls"] + len(usage),
+                                                    "input_tokens": before["input_tokens"] + sum(u["input_tokens"] for u in usage),
+                                                    "output_tokens": before["output_tokens"] + sum(u["output_tokens"] for u in usage)}},
                                          ensure_ascii=False, indent=2), encoding="utf-8")
         return plans
 
