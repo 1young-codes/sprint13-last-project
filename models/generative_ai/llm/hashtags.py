@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -24,6 +25,11 @@ API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:gener
 # gemini-2.5-flash는 새 사용자에게 막혀 있어서(2026-11 확인) 가벼운 3.5 Flash Lite를 씁니다.
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 DEFAULT_TIMEOUT_S = 5.0
+# Gemini가 잠깐 바빠서 거절하면(503 등) 조금 쉬었다가 다시 부릅니다. 2026-11-26 서버에서 3번 중 1번꼴로 503이 났습니다.
+# 429(사용 한도 초과)는 1분쯤 지나야 풀려서 다시 불러도 한도만 더 쓰므로 다시 부르지 않습니다.
+RETRY_STATUS = (500, 502, 503, 504)
+MAX_RETRIES = 2
+RETRY_DELAY_S = 1.0
 
 POSTS = ("product_photo", "usage_example")
 MAX_TAGS = 6
@@ -72,6 +78,28 @@ def _call_gemini(payload: dict, api_key: str, model: str, timeout_s: float) -> d
         return json.loads(response.read().decode("utf-8"))
 
 
+def _is_temporary(error: Exception) -> bool:
+    """다시 부르면 나을 수 있는 오류인지: Gemini가 잠깐 바쁨(5xx) 또는 시간 초과."""
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code in RETRY_STATUS
+    if isinstance(error, urllib.error.URLError):
+        return isinstance(error.reason, TimeoutError)
+    return isinstance(error, TimeoutError)
+
+
+def _call_gemini_with_retry(payload: dict, api_key: str, model: str, timeout_s: float) -> dict:
+    """잠깐 생기는 오류(RETRY_STATUS, 시간 초과)일 때만 최대 MAX_RETRIES번 더 부릅니다. 그 밖의 오류는 그대로 냅니다."""
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return _call_gemini(payload, api_key, model, timeout_s)
+        except (urllib.error.URLError, TimeoutError) as error:
+            if not _is_temporary(error) or attempt == MAX_RETRIES:
+                raise
+            logger.info("해시태그 요청이 잠깐 실패해 다시 부릅니다 (%d/%d): %s", attempt + 1, MAX_RETRIES, error)
+            time.sleep(RETRY_DELAY_S)
+    raise AssertionError("도달하지 않음")
+
+
 def generate_hashtags(
     product_name: str,
     usage_example: str,
@@ -114,7 +142,7 @@ def generate_hashtags(
     }
 
     try:
-        response = _call_gemini(payload, api_key, model, timeout_s)
+        response = _call_gemini_with_retry(payload, api_key, model, timeout_s)
         text = response["candidates"][0]["content"]["parts"][0]["text"]
         result = json.loads(text)
     except (urllib.error.URLError, TimeoutError, OSError, KeyError, IndexError, TypeError, ValueError) as error:
