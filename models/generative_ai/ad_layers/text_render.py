@@ -15,9 +15,11 @@ FONT_HOST = "http://fonts.local/"  # 브라우저가 이 주소로 폰트를 요
 FIT_SCRIPT = """() => {
   for (const el of document.querySelectorAll('.t')) {
     const w = el.clientWidth, h = el.clientHeight;
-    let size = Math.floor(h * 0.9);
+    const text = document.createRange();
+    text.selectNodeContents(el);
+    let size = Math.min(Math.floor(h * 0.9), Number(el.dataset.maxFontSize));
     el.style.fontSize = size + 'px';
-    while ((el.scrollWidth > w || el.scrollHeight > h) && size > 6) {
+    while ((text.getBoundingClientRect().width > w || el.scrollHeight > h) && size > 6) {
       size -= 1;
       el.style.fontSize = size + 'px';
     }
@@ -42,7 +44,8 @@ def page_html(texts: list[dict], size: tuple[int, int]) -> str:
                     f"font-weight: 100 900; }}" for font in {fonts[t['font']]['file']: fonts[t['font']]
                                                             for t in texts}.values())
     boxes = "".join(
-        f"<div class='t' id='t{i}' style='left:{t['x']}px; top:{t['y']}px; width:{t['w']}px; height:{t['h']}px; "
+        f"<div class='t' id='t{i}' data-max-font-size='{t.get('max_font_size', t['h'])}' "
+        f"style='left:{t['x']}px; top:{t['y']}px; width:{t['w']}px; height:{t['h']}px; "
         f"font-family:\"{fonts[t['font']]['file']}\"; font-weight:{fonts[t['font']]['weight']}; color:{t['color']}'>"
         f"{html.escape(t['text'])}</div>" for i, t in enumerate(texts))
     return (f"<html><head><style>{faces} html, body {{ margin: 0; background: transparent; width: {size[0]}px; "

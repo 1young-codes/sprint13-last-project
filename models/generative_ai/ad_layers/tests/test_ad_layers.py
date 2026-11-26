@@ -1,12 +1,13 @@
 """그래픽 카드와 모델 없이 도는 확인: 제품 놓기, 그림자 분리, 글자 자리 찾기, 문구 다듬기, 합치기."""
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from models.generative_ai.ad_layers.copywriter import clean_copy
-from models.generative_ai.ad_layers.layers import (compose, find_text_boxes, load_settings, place_product,
-                                                   product_canvas_mask, shadow_layer, shadow_region, template_boxes,
-                                                   to_float)
+from models.generative_ai.ad_layers.layers import (compose, contact_shadow, find_text_boxes, load_settings,
+                                                   place_product, product_canvas_mask, template_boxes)
+from models.generative_ai.ad_layers import make_ad
+from models.generative_ai.photo_retouch import product_mask
 
 SETTINGS = load_settings()
 SIZE = (256, 256)
@@ -29,27 +30,18 @@ def test_product_fits_canvas_and_keeps_colors():
     assert product.getpixel((product.width // 2, product.height // 2)) == (200, 30, 30, 255)
 
 
-def test_shadow_layer_keeps_shadow_and_light_but_not_new_objects_or_grain():
-    rng = np.random.default_rng(0)
-    empty = np.full((*SIZE[::-1], 3), [0.8, 0.7, 0.6], np.float32)
-    scene = empty + rng.normal(0, 0.05, empty.shape).astype(np.float32)  # 다시 채운 바닥의 잔무늬 차이
-    scene[200:240, 40:220] *= 0.5                                         # 그림자
-    scene[20:60, 40:220] = scene[20:60, 40:220] + 0.15                    # 빛
-    scene[70:100, 20:50] = [0.8, 0.1, 0.1]                                # 모델이 더 그린 빨간 물건
-    on_product = np.zeros(SIZE[::-1], np.float32)
-    on_product[100:180, 100:160] = 1
-    rule = SETTINGS["shadow"] | {"blur": 0.04}  # 작은 테스트 그림이라 흐림 폭을 실제 1024px 정도의 화소 수로 맞춤
-    layer = shadow_layer(scene, empty, shadow_region(on_product, 1.0, 0.5), on_product, rule)
-    rebuilt = Image.fromarray((empty * 255).round().astype(np.uint8)).convert("RGBA")
-    rebuilt.alpha_composite(layer)
-    lum = np.array([0.299, 0.587, 0.114], np.float32)
-    restored, expected = to_float(rebuilt) @ lum, scene @ lum
-    assert abs(restored[210:230, 80:180].mean() - expected[210:230, 80:180].mean()) < 0.03   # 그림자 그대로
-    assert abs(restored[30:50, 80:180].mean() - expected[30:50, 80:180].mean()) < 0.03       # 빛 그대로
-    alpha = np.asarray(layer)[..., 3]
-    assert alpha[75:95, 25:45].max() == 0          # 빨간 물건은 그림자로 담지 않음
-    assert alpha[120:160, 60:90].max() == 0        # 잔무늬만 다른 곳도 담지 않음
-    assert alpha[on_product > 0.5].max() == 0      # 제품 자리에는 그림자를 두지 않음
+def test_contact_shadow_darkens_only_near_the_footprint():
+    product = Image.new("RGBA", (100, 80), (200, 30, 30, 255))
+    shadow, dx, dy = contact_shadow(product, overhead=False)
+    canvas = Image.new("RGBA", SIZE, "white")
+    canvas.alpha_composite(shadow, (50 + dx, 60 + dy))
+    assert canvas.getpixel((100, 90)) == (255, 255, 255, 255)
+    at_base = canvas.getpixel((100, 140))
+    assert at_base[0] == at_base[1] == at_base[2] < 255
+    assert at_base[0] < canvas.getpixel((100, 144))[0] < 255
+    assert canvas.getpixel((100, 155)) == (255, 255, 255, 255)
+    overhead, _, overhead_dy = contact_shadow(product, overhead=True)
+    assert overhead.height > shadow.height and overhead_dy < dy
 
 
 def test_text_boxes_found_outside_product_with_color():
@@ -76,6 +68,18 @@ def test_no_text_in_draft_means_no_boxes_and_template_picks_readable_color():
     boxes = template_boxes(base, SETTINGS["template"])
     assert len(boxes) == len(SETTINGS["template"]) and boxes[0]["color"] == "#1a1a1a"
     assert template_boxes(base * 0.1, SETTINGS["template"])[0]["color"] == "#ffffff"
+
+
+def test_text_boxes_reject_tiny_and_wrapping_changes():
+    base = np.full((*SIZE[::-1], 3), 0.9, np.float32)
+    draft = base.copy()
+    on_product = np.zeros(SIZE[::-1], np.float32)
+    on_product[100:180, 100:160] = 1
+    draft[79:90, 78:181] = 0.1
+    draft[89:123, 78:87] = 0.1
+    draft[89:123, 172:181] = 0.1
+    draft[220:224, 30:80] = 0.1
+    assert find_text_boxes(draft, base, on_product, SETTINGS["text_boxes"]) == []
 
 
 def test_clean_copy_keeps_known_roles_once_and_uses_real_price():
@@ -109,3 +113,43 @@ def test_product_canvas_mask_matches_placement():
     on_product = product_canvas_mask(product, x, y, SIZE)
     assert on_product[y + product.height // 2, x + product.width // 2] == 1
     assert on_product.sum() == np.asarray(product.getchannel("A"), np.float32).sum() / 255
+
+
+def test_make_ad_keeps_background_and_draft_separate_and_falls_back_for_missing_price(tmp_path, monkeypatch):
+    photo, mask = make_product()
+    monkeypatch.setattr(product_mask, "product_mask", lambda model, pixels: mask)
+
+    class Model:
+        def use_lora(self, file, strength):
+            assert file is None and strength == 0
+
+        def edit(self, image, prompt, seed, steps):
+            if "blank canvas" in prompt:
+                assert image.getextrema() == ((128, 128),) * 3
+                assert "directly above" in prompt
+                return Image.new("RGB", image.size, "#cfcfcf")
+            assert image.getpixel((512, 700)) == (200, 30, 30)
+            draft = image.copy()
+            draw = ImageDraw.Draw(draft)
+            draw.rectangle((200, 65, 730, 150), fill="black")
+            draw.rectangle((280, 200, 600, 238), fill="black")
+            return draft
+
+    class Interpreter:
+        def ask(self, purpose, images, prompt):
+            if purpose == "ad_scene":
+                return '{"scene": "An empty stone countertop", "view": "overhead"}'
+            return '{"items": [{"box": 1, "role": "title", "text": "딸기 케이크"}]}'
+
+    def render(texts, size, folder):
+        for line in texts:
+            Image.new("RGBA", (line["w"], line["h"])).save(folder / line["file"])
+
+    monkeypatch.setattr(make_ad, "render_texts", render)
+    fields = {"product_name": "딸기 케이크", "unit": "1조각", "price_krw": 6500}
+    layout = make_ad.make_ad(photo, fields, "minimal", "", {"generation": Model(), "mask": None, "ai": Interpreter()}, tmp_path)
+    assert layout["view"] == "overhead" and layout["text_source"] == "template"
+    assert [(line["role"], line["text"]) for line in layout["texts"]] == [("title", "딸기 케이크"), ("price", "6,500원")]
+    with Image.open(tmp_path / "background.png") as background, Image.open(tmp_path / "draft.png") as draft:
+        assert background.getextrema() == ((207, 207),) * 3
+        assert draft.getpixel((200, 65)) == (0, 0, 0)

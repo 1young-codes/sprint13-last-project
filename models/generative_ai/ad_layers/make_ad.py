@@ -2,13 +2,12 @@
 
 1. 제품을 잘라 캔버스에 놓기 (BiRefNet 마스크)               → product.png
 2. 언어모델이 사장님 한 줄을 긴 장면 설명으로 풀기
-3. 생성 모델이 제품 둘레 장면을 그리기 (글자 없이)
-4. 제품과 그 둘레를 지우고 빈 배경으로 채우기                → background.png
-5. 장면과 빈 배경의 밝기 차이로 그림자·반사 분리              → shadow.png
-6. 합친 그림 위에 생성 모델이 가짜 글자 초안을 그리고, 바뀐 자리에서 글자 줄 위치·크기·색을 읽음 (초안은 확인용으로만 남김)
-7. 언어모델이 글자 자리마다 역할과 문구 초안을 씀 (가격은 입력값 그대로)
-8. 고정 폰트로 글자 줄마다 그림                                → text_*.png
-9. 합치기                                                       → ad.png, layout.json
+3. 생성 모델이 제품 없는 배경을 그리기                       → background.png
+4. 제품 마스크에서 바닥에 닿는 그림자를 만들기               → shadow.png
+5. 합친 그림 위에 생성 모델이 가짜 글자 초안을 그리고, 바뀐 자리에서 글자 줄 위치·크기·색을 읽음
+6. 언어모델이 글자 자리마다 역할과 문구 초안을 씀 (가격은 입력값 그대로)
+7. 고정 폰트로 글자 줄마다 그림                              → text_*.png
+8. 합치기                                                    → ad.png, layout.json
 
     python -m models.generative_ai.ad_layers.make_ad 사진.png --name "딸기 생크림 케이크" --unit "1조각" --price 6500 \
         --usage "오후 커피와 함께" --mood all --idea "햇살 드는 카페 테이블"
@@ -19,12 +18,11 @@ import argparse
 import time
 from pathlib import Path
 
-import numpy as np
 from PIL import Image
 
 from .copywriter import scene_description, write_copy
-from .layers import (PROJECT_ROOT, compose, find_text_boxes, load_layout, load_settings, place_product,
-                     product_canvas_mask, save_layout, shadow_layer, shadow_region, template_boxes, to_float)
+from .layers import (PROJECT_ROOT, compose, contact_shadow, find_text_boxes, load_layout, load_settings,
+                     place_product, product_canvas_mask, save_layout, template_boxes, to_float)
 from .text_render import render_texts
 
 
@@ -41,7 +39,6 @@ def load_models() -> dict:
 def make_ad(photo: Image.Image, fields: dict, mood_key: str, idea: str, models: dict, folder: Path,
             seed: int | None = None, steps: int | None = None) -> dict:
     """folder에 레이어 파일과 layout.json, 합친 ad.png를 저장하고 layout을 돌려줍니다."""
-    from ..camera_angle_presets.fill_empty_area import fill_empty_area
     from ..photo_retouch.product_mask import product_mask
 
     settings = load_settings()
@@ -67,94 +64,87 @@ def make_ad(photo: Image.Image, fields: dict, mood_key: str, idea: str, models: 
     start.paste(product, (x, y), product)
     lap("product")
 
-    # 2~3. 장면
-    scene_text = scene_description(ai, to_float(start), fields["product_name"], idea, mood)
-    scene = model.edit(start, generation["scene_prompt"].format(scene=scene_text), seed, steps).resize(size)
-    scene.paste(product, (x, y), product)  # 제품은 원본 화소 그대로
-    scene.save(folder / "scene.png")
-    lap("scene")
-
-    # 4. 빈 배경: 제품과 둘레를 표시색으로 칠해 채웁니다 (둘레 밖 화소는 장면 그대로)
-    shadow_rule = settings["shadow"]
-    region = shadow_region(on_product, shadow_rule["reach"], settings["product"]["mask_threshold"])
-    region_mask = Image.fromarray((region * 255).astype(np.uint8))
-    marked = Image.composite(Image.new("RGB", size, "#00ff00"), scene, region_mask)
-    background = fill_empty_area(model, marked, region_mask, generation["empty_scene"].format(scene=scene_text),
-                                 seed, steps)
+    # 배경 모델에는 제품 사진 대신 빈 캔버스를 전달합니다.
+    scene_text, view = scene_description(ai, to_float(start), fields["product_name"], idea, mood)
+    view_prompt = generation[f"{view}_view"]
+    prompt = generation["background_prompt"].format(scene=scene_text, view=view_prompt)
+    model.use_lora(None, 0)
+    blank = Image.new("RGB", size, settings["canvas"]["background_color"])
+    background = model.edit(blank, prompt, seed, steps).resize(size, Image.Resampling.LANCZOS)
     background.save(folder / "background.png")
     lap("background")
 
-    # 5. 그림자·반사
-    layout = {"size": list(size), "mood": mood_key, "seed": seed, "fields": fields, "scene_prompt": scene_text,
+    layout = {"size": list(size), "mood": mood_key, "seed": seed, "fields": fields, "scene_prompt": scene_text, "view": view,
               "background": {"file": "background.png"},
               "product": {"file": "product.png", "x": x, "y": y}, "texts": []}
-    layout["shadow"] = save_shadow(folder, layout, scene, background)
+    layout["shadow"] = save_shadow(folder, product, view)
     base = compose(layout, folder)
     base.save(folder / "base.png")
     lap("shadow")
 
-    # 6. 글자 초안 (초안과 base의 차이로 글자 자리를 찾습니다). 모델이 글자를 안 그리기도 해서 몇 번 다시 그립니다
+    # 글자 자리나 크기가 부족하면 씨앗값을 바꿔 다시 그립니다.
     rule = settings["text_boxes"]
+    base_pixels = to_float(base)
     for attempt in range(rule["draft_tries"]):
         draft = model.edit(base, generation["draft_prompt"].format(style=mood["style"]), seed + attempt,
                            steps).resize(size)
-        draft.save(folder / "draft.png")
-        if find_text_boxes(to_float(draft), to_float(base), on_product, rule):
+        draft_pixels = to_float(draft)
+        boxes = find_text_boxes(draft_pixels, base_pixels, on_product, rule)
+        if len(boxes) >= 2 and any(box["h"] >= rule["min_title_height"] * size[1] for box in boxes):
             break
+    draft.save(folder / "draft.png")
     layout["draft_tries"] = attempt + 1
     lap("draft")
 
-    # 7~9. 글자 자리, 문구, 글자 레이어, 합치기
-    write_texts(folder, layout, ai)
+    write_texts(folder, layout, ai, draft_pixels, base_pixels, boxes)
     lap("text")
     layout["seconds"] = timings
     save_layout(layout, folder)
     return layout
 
 
-def save_shadow(folder: Path, layout: dict, scene: Image.Image, background: Image.Image) -> dict:
-    """그림자·반사 레이어를 저장합니다. 제품 위치 기준 상대 좌표라 제품을 옮기면 같이 옮겨집니다."""
-    settings = load_settings()
-    product, x, y = Image.open(folder / layout["product"]["file"]), layout["product"]["x"], layout["product"]["y"]
-    on_product = product_canvas_mask(product, x, y, scene.size)
-    region = shadow_region(on_product, settings["shadow"]["reach"], settings["product"]["mask_threshold"])
-    shadow = shadow_layer(to_float(scene), to_float(background), region, on_product, settings["shadow"])
-    box = shadow.getbbox() or (x, y, x + 1, y + 1)
-    shadow.crop(box).save(folder / "shadow.png")
-    return {"file": "shadow.png", "dx": box[0] - x, "dy": box[1] - y}
+def save_shadow(folder: Path, product: Image.Image, view: str) -> dict:
+    """그림자를 제품 기준 상대 좌표로 저장합니다."""
+    shadow, dx, dy = contact_shadow(product, view == "overhead")
+    shadow.save(folder / "shadow.png")
+    return {"file": "shadow.png", "dx": dx, "dy": dy}
 
 
-def write_texts(folder: Path, layout: dict, ai) -> None:
-    """draft.png와 base.png로 글자 자리를 찾고, 문구를 쓰고, 글자 레이어를 그려 ad.png로 합칩니다."""
+def write_texts(folder: Path, layout: dict, ai, draft, base, boxes: list[dict]) -> None:
+    """초안에서 읽은 자리에 문구를 쓰고, 제목과 가격이 들어가지 않으면 기본 배치로 바꿉니다."""
     settings = load_settings()
     mood = settings["moods"][layout["mood"]]
-    product = Image.open(folder / layout["product"]["file"])
-    on_product = product_canvas_mask(product, layout["product"]["x"], layout["product"]["y"], tuple(layout["size"]))
-    draft, base = to_float(Image.open(folder / "draft.png")), to_float(Image.open(folder / "base.png"))
-    boxes = find_text_boxes(draft, base, on_product, settings["text_boxes"])
-    layout["text_source"] = "draft" if boxes else "template"
-    boxes = boxes or template_boxes(base, settings["template"])
-    copy = write_copy(ai, draft, boxes, layout["fields"], mood, template=layout["text_source"] == "template")
-    if layout["text_source"] == "draft" and all(line["role"] == "skip" for line in copy):
-        # 찾은 자리가 모두 글자가 아니었던 경우 (언어모델이 전부 건너뜀): 기본 배치 틀로 다시 씁니다
+    min_title = settings["text_boxes"]["min_title_height"] * layout["size"][1]
+    copy = write_copy(ai, draft, boxes, layout["fields"], mood) if len(boxes) >= 2 else []
+    roles = {line["role"] for box, line in zip(boxes, copy) if line["role"] != "title" or box["h"] >= min_title}
+    if {"title", "price"} <= roles:
+        layout["text_source"] = "draft"
+    else:
         layout["text_source"] = "template"
         boxes = template_boxes(base, settings["template"])
-        copy = write_copy(ai, draft, boxes, layout["fields"], mood, template=True)
-    for old in folder.glob("text_*.png"):
-        old.unlink()
-    layout["texts"] = [box | line | {"font": mood["fonts"][line["role"]], "file": f"text_{i}_{line['role']}.png"}
+        copy = write_copy(ai, base, boxes, layout["fields"], mood, template=True)
+    limits = settings["text_boxes"]["font_limits"]
+    layout["texts"] = [box | line | {"font": mood["fonts"][line["role"]], "file": f"text_{i}_{line['role']}.png",
+                                     "max_font_size": round(limits[line["role"]] * layout["size"][1])}
                        for i, (box, line) in enumerate(zip(boxes, copy), start=1) if line["role"] != "skip"]
     render_texts(layout["texts"], tuple(layout["size"]), folder)
     compose(layout, folder).save(folder / "ad.png")
+    used = {line["file"] for line in layout["texts"]}
+    for old in folder.glob("text_*.png"):
+        if old.name not in used:
+            old.unlink()
 
 
 def relayout(folder: Path, ai) -> None:
-    """생성 모델 없이 그림자와 글자를 처음부터 다시 계산합니다 (설정값을 바꿔 볼 때).
-    저장된 scene.png, background.png, base.png, draft.png를 그대로 씁니다."""
+    """저장된 배경과 초안으로 그림자와 글자를 다시 계산합니다."""
     layout = load_layout(folder)
-    layout["shadow"] = save_shadow(folder, layout, Image.open(folder / "scene.png").convert("RGB"),
-                                   Image.open(folder / "background.png").convert("RGB"))
-    write_texts(folder, layout, ai)
+    product_info = layout["product"]
+    with Image.open(folder / product_info["file"]) as product:
+        on_product = product_canvas_mask(product, product_info["x"], product_info["y"], tuple(layout["size"]))
+        layout["shadow"] = save_shadow(folder, product, layout.get("view", "angled"))
+    draft, base = to_float(Image.open(folder / "draft.png")), to_float(Image.open(folder / "base.png"))
+    boxes = find_text_boxes(draft, base, on_product, load_settings()["text_boxes"])
+    write_texts(folder, layout, ai, draft, base, boxes)
     save_layout(layout, folder)
 
 

@@ -15,7 +15,7 @@ from functools import cache
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageChops, ImageFilter
 from scipy import ndimage
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -57,17 +57,25 @@ def product_canvas_mask(product: Image.Image, x: int, y: int, size: tuple[int, i
     return np.asarray(canvas, np.float32) / 255
 
 
-def shadow_region(mask: np.ndarray, reach: float, threshold: float) -> np.ndarray:
-    """제품과 그 주변(제품 크기 × reach): 빈 배경을 만들 때 지우고, 그림자를 찾는 곳입니다."""
-    solid = mask > threshold
-    rows, cols = solid.nonzero()
-    grow = max(1, round(reach * max(np.ptp(rows) + 1, np.ptp(cols) + 1)))
-    return grown(solid, grow)
+def contact_shadow(product: Image.Image, overhead: bool) -> tuple[Image.Image, int, int]:
+    """제품 마스크를 바닥에 투영해 제품 위치 기준의 부드러운 접지 그림자를 만듭니다."""
+    width, height = product.size
+    unit = max(width, height)
+    pad = max(1, round(unit * 0.12))
+    depth = height if overhead else max(1, round(height * 0.12))
+    footprint = product.getchannel("A").resize((width, depth), Image.Resampling.LANCZOS)
+    alpha = Image.new("L", (width + 2 * pad, depth + 2 * pad))
+    alpha.paste(footprint, (pad, pad))
+    tight = alpha.filter(ImageFilter.GaussianBlur(max(1, unit * 0.008))).point(lambda v: round(v * 0.38))
+    soft = alpha.filter(ImageFilter.GaussianBlur(max(1, unit * 0.025))).point(lambda v: round(v * 0.20))
+    shadow = Image.new("RGBA", alpha.size)
+    shadow.putalpha(ImageChops.screen(tight, soft))
+    return shadow, -pad + round(unit * 0.012), height - depth - pad + round(unit * 0.012)
 
 
 def grown(solid: np.ndarray, distance: int) -> np.ndarray:
     """solid를 distance 화소만큼 넓힙니다 (넓히기를 여러 번 반복하는 것보다 훨씬 빠름)."""
-    return ndimage.distance_transform_edt(~solid) <= distance
+    return ndimage.distance_transform_edt(~solid) <= distance if solid.any() else solid
 
 
 def blurred(values: np.ndarray, radius: int) -> np.ndarray:
@@ -76,35 +84,6 @@ def blurred(values: np.ndarray, radius: int) -> np.ndarray:
     for _ in range(3):  # 상자 평균 세 번 ≈ 가우시안 흐림
         values = box_blur(values, radius)
     return values
-
-
-def shadow_layer(scene: np.ndarray, empty: np.ndarray, region: np.ndarray, product_mask: np.ndarray,
-                 rule: dict) -> Image.Image:
-    """제품이 있는 장면과 빈 배경의 밝기 차이로 그림자(검정)와 반사·빛(흰색) 레이어를 만듭니다.
-    빈 배경 위에 이 레이어를 얹으면 장면의 밝기가 돌아옵니다: 검정은 bg·(1-a), 흰색은 bg + (1-bg)·a.
-
-    둘 다 흐린 뒤 비교합니다. 빈 배경을 새로 채우면 나무 결 같은 잔무늬가 달라지는데, 그건 그림자가 아닙니다.
-    색이 달라진 곳도 뺍니다. 그림자와 빛은 세 색을 거의 같은 비율로 바꾸지만, 생성 모델이 제품 옆에
-    더 그린 물건(예: 딸기 하나 더)은 색이 다릅니다. 그런 물건을 밝기만 남기면 검은 덩어리가 됩니다."""
-    radius = max(1, round(rule["blur"] * scene.shape[1] / 3))
-    scene, empty = blurred(scene, radius), blurred(empty, radius)
-    weights = np.array([0.299, 0.587, 0.114], np.float32)
-    lit, bare = scene @ weights, empty @ weights
-    darker = np.clip((bare - lit) / np.maximum(bare, 1e-3), 0, 1)
-    brighter = np.clip((lit - bare) / np.maximum(1 - bare, 1e-3), 0, 1)
-    ratio = (scene + 1e-3) / (empty + 1e-3)
-    tinted = (ratio.max(axis=2) - ratio.min(axis=2)) / ratio.mean(axis=2) >= rule["max_tint"]
-    neutral = ~grown(tinted, 3 * radius)  # 흐림 때문에 물건 가장자리는 색이 옅어지므로 그만큼 더 뺍니다
-    # 다시 채운 둘레는 전체 밝기도 장면과 조금 다릅니다. 둘레 끝에서 뚝 끊기면 경계선이 보이므로 끝으로 갈수록 옅게 합니다
-    fade = np.clip(ndimage.distance_transform_edt(region) / max(1.0, rule["fade"] * scene.shape[1]), 0, 1)
-    # 제품 바로 둘레가 밝아진 것은 대개 생성 모델이 제품을 조금 더 크게 그린 흔적입니다 (흰 테두리로 보임). 그림자만 남깁니다
-    near_product = grown(product_mask > 0.5, max(1, round(rule["light_margin"] * scene.shape[1])))
-    brighter[near_product] = 0
-    alpha = np.where(lit < bare, darker, brighter) * fade * neutral * (1 - product_mask)
-    alpha[alpha < rule["min_alpha"]] = 0
-    color = np.where(lit < bare, 0, 255).astype(np.uint8)
-    rgba = np.dstack([color, color, color, (alpha * 255).round().astype(np.uint8)])
-    return Image.fromarray(rgba, "RGBA")
 
 
 def find_text_boxes(draft: np.ndarray, base: np.ndarray, product_mask: np.ndarray, rule: dict) -> list[dict]:
@@ -118,7 +97,7 @@ def find_text_boxes(draft: np.ndarray, base: np.ndarray, product_mask: np.ndarra
     radius = max(1, round(rule["drift_blur"] * width / 3))
     drift = blurred(change * calm[..., None], radius) / np.maximum(blurred(calm, radius), 1e-3)[..., None]
     difference = np.abs(change - drift).max(axis=2)
-    keep_out = grown(product_mask > 0.5, max(1, round(rule["product_margin"] * width)))
+    keep_out = grown(product_mask > 0.1, max(1, round(rule["product_margin"] * width)))
     changed = (difference > rule["diff_threshold"]) & ~keep_out
     reach = np.ones((max(1, round(rule["merge_y"] * height)) * 2 + 1, max(1, round(rule["merge_x"] * width)) * 2 + 1), bool)
     labels, _ = ndimage.label(ndimage.binary_dilation(changed, structure=reach))
@@ -130,6 +109,9 @@ def find_text_boxes(draft: np.ndarray, base: np.ndarray, product_mask: np.ndarra
         rows, cols = inside.nonzero()
         y0, x0 = area[0].start + rows.min(), area[1].start + cols.min()
         y1, x1 = area[0].start + rows.max() + 1, area[1].start + cols.max() + 1
+        if (y1 - y0 < rule["min_height"] * height or x1 - x0 < rule["min_width"] * width
+                or keep_out[y0:y1, x0:x1].any()):
+            continue
         if y1 - y0 > rule["max_height"] * height or (x1 - x0) * (y1 - y0) > rule["max_box_area"] * width * height:
             continue  # 글자 한 줄로 보기엔 너무 큰 영역: 바닥 무늬나 물건이 통째로 바뀐 곳
         edge = rule["border"] * width
@@ -151,7 +133,8 @@ def template_boxes(base: np.ndarray, rule: list[dict]) -> list[dict]:
     for slot in rule:
         x, y, w, h = (round(v * size) for v, size in zip(slot["box"], (width, height, width, height)))
         light = base[y:y + h, x:x + w].mean() > 0.55
-        boxes.append({"x": x, "y": y, "w": w, "h": h, "color": "#1a1a1a" if light else "#ffffff"})
+        boxes.append({"x": x, "y": y, "w": w, "h": h, "role": slot["role"],
+                      "color": "#1a1a1a" if light else "#ffffff"})
     return boxes
 
 

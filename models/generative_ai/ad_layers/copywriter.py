@@ -16,17 +16,18 @@ SCENE_REQUEST = """You write prompts for an image generation model that builds a
 Product: {product}
 Mood: {mood}
 Owner's idea (Korean, may be empty): {idea}
-The first image is the product. Describe in English, in 4 to 6 sentences, the scene that surrounds the product:
-the surface it stands on, the background, props, light direction and color, and camera feel.
-Leave clear empty space for advertising text. Do not describe the product itself in detail.
-Never mention text, letters, signs, labels or logos.
-Answer as JSON: {{"scene": "..."}}"""
+The first image shows the product and where it will be composited. Describe in English the empty setting alone:
+the continuous surface, background, light direction, and any peripheral decor suggested by the owner's idea.
+Keep the center and upper third free of objects and leave a continuous surface beneath the product's intended position.
+Match the photographed viewpoint and lighting. Classify the view as overhead if the camera looks straight down,
+otherwise use angled. Never describe or name the product, food, signs, letters or logos in the scene.
+Answer as JSON: {{"scene": "...", "view": "overhead or angled"}}"""
 
-COPY_REQUEST = """이 이미지(가로 {width}, 세로 {height} 화소)는 광고 초안입니다. 이미지 생성 모델이 빈 자리에 가짜 글자를 그렸고,
-그림이 달라진 자리를 찾아 아래 상자로 적었습니다. 상자마다 왼쪽 위 좌표, 가로·세로 화소, 들어가는 한글 글자 수 어림값이 있습니다.
+COPY_REQUEST = """이 이미지(가로 {width}, 세로 {height} 화소)의 광고 문구를 아래 상자에 배치합니다.
+상자마다 왼쪽 위 좌표, 가로·세로 화소, 들어가는 한글 글자 수 어림값이 있습니다.
 {boxes}
 {check}
-그림 속 글자는 뜻이 없는 가짜 글자입니다. 자리와 크기만 참고하고, 그 글자를 읽거나 따라 쓰지 마세요.
+그림 속에 글자가 있으면 자리와 크기만 참고하고, 그 글자를 읽거나 따라 쓰지 마세요.
 문구는 반드시 아래 상품 정보만으로 새로 쓰세요.
 
 상품 정보
@@ -43,12 +44,13 @@ price가 아닌 상자에는 그 자리 글자 수 어림값을 넘지 않는 �
 JSON으로 답하세요: {{"items": [{{"box": 1, "role": "title", "text": "..."}}]}}"""
 
 
-def scene_description(ai, product: np.ndarray, product_name: str, idea: str, mood: dict) -> str:
+def scene_description(ai, product: np.ndarray, product_name: str, idea: str, mood: dict) -> tuple[str, str]:
     text = SCENE_REQUEST.format(product=product_name, mood=mood["style"], idea=idea or mood["idea"])
-    scene = parse_json(ai.ask("ad_scene", [product], text)).get("scene")
+    answer = parse_json(ai.ask("ad_scene", [product], text))
+    scene = answer.get("scene")
     if not isinstance(scene, str) or not scene.strip():
         raise RuntimeError("언어모델이 장면 설명을 돌려주지 않았습니다")
-    return scene.strip()
+    return scene.strip(), "overhead" if answer.get("view") == "overhead" else "angled"
 
 
 def fit_chars(box: dict) -> int:
@@ -74,16 +76,24 @@ def clean_copy(raw: dict, count: int, price_text: str) -> list[dict]:
 
 
 CHECK_DRAFT = "이 상자들 중 일부는 글자가 아니라 바닥 무늬나 빛이 바뀐 자리일 수 있습니다. 그 자리에 글자가 보이지 않으면 skip으로 두세요."
-CHECK_TEMPLATE = "이 상자들은 정해 둔 배치 틀이라 그림 속 글자 위치와 다를 수 있습니다. skip 없이 모든 상자에 문구를 쓰세요."
+CHECK_TEMPLATE = "이 상자들은 기본 배치 틀입니다. 상자마다 지정된 역할을 쓰고, 쓸 내용이 없는 부제는 건너뛰세요."
 
 
 def write_copy(ai, draft: np.ndarray, boxes: list[dict], fields: dict, mood: dict, template: bool = False) -> list[dict]:
-    listing = "\n".join(f"- 상자 {i}: 왼쪽 위 ({b['x']}, {b['y']}), 가로 {b['w']}, 세로 {b['h']}, 약 {fit_chars(b)}자"
-                        for i, b in enumerate(boxes, start=1))
+    listing = "\n".join(
+        f"- 상자 {i}: 왼쪽 위 ({box['x']}, {box['y']}), 가로 {box['w']}, 세로 {box['h']}, 약 {fit_chars(box)}자"
+        + (f". 지정 역할 {box['role']}" if template else "") for i, box in enumerate(boxes, start=1))
     height, width = draft.shape[:2]
     text = COPY_REQUEST.format(width=width, height=height, boxes=listing,
                                check=CHECK_TEMPLATE if template else CHECK_DRAFT, product=json.dumps(fields["product_name"], ensure_ascii=False),
                                unit=json.dumps(fields["unit"], ensure_ascii=False),
                                usage=json.dumps(fields.get("usage_example", ""), ensure_ascii=False),
                                notes=json.dumps(fields.get("notes", ""), ensure_ascii=False), mood=mood["label"])
-    return clean_copy(parse_json(ai.ask("ad_copy", [draft], text)), len(boxes), f"{fields['price_krw']:,}원")
+    price = f"{fields['price_krw']:,}원"
+    copy = clean_copy(parse_json(ai.ask("ad_copy", [draft], text)), len(boxes), price)
+    if not template:
+        return copy
+    by_role = {line["role"]: line for line in copy if line["role"] != "skip"}
+    by_role.setdefault("title", {"role": "title", "text": fields["product_name"]})
+    by_role["price"] = {"role": "price", "text": price}
+    return [by_role.get(box["role"], {"role": "skip", "text": ""}) for box in boxes]
