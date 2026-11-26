@@ -25,10 +25,20 @@ def fake_angle(photo, angle):
     return photo.rotate(10)
 
 
+def fake_captions(**fields):
+    return {"product_caption": f"{fields['product_name']} 소개", "usage_caption": f"{fields['usage_example']} 활용"}
+
+
+def fake_hashtags(product_name, usage_example, product_caption="", usage_caption=""):
+    return {"product_photo": ["#참도미"], "usage_example": ["#도미회"]}
+
+
 @pytest.fixture(scope="module")
 def client(tmp_path_factory):
+    # 실제 OpenAI·Gemini를 부르지 않게 가짜로 바꾼다
     api.OUTPUT_DIR = tmp_path_factory.mktemp("jobs")
     api.make_angle = fake_angle
+    api.generate_product_captions, api.generate_hashtags = fake_captions, fake_hashtags
     with TestClient(api.create_app()) as c:
         yield c
 
@@ -70,7 +80,37 @@ def test_job_keeps_order_and_one_angle_failure(client):
 
 def test_no_angles_gives_empty_list(client):
     body = wait_done(client, post(client).json()["job_id"])
-    assert body["product_photo"]["angle_images"] == [] and body["product_photo"]["hashtags"] == []
+    assert body["product_photo"]["angle_images"] == []
+
+
+def test_captions_and_hashtags_go_to_each_post(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(api, "generate_hashtags", lambda *a: calls.append(a) or fake_hashtags(*a))
+    body = wait_done(client, post(client).json()["job_id"])
+    photo, usage = body["product_photo"], body["usage_example"]
+    assert (photo["caption"], photo["hashtags"], photo["error"]) == ("참도미 소개", ["#참도미"], None)
+    assert (usage["caption"], usage["hashtags"], usage["error"]) == ("회, 구이 활용", ["#도미회"], None)
+    assert calls == [("참도미", "회, 구이", "참도미 소개", "회, 구이 활용")]  # 한 번만 부른다
+
+
+def test_caption_failure_keeps_photos(client, monkeypatch):
+    def broken(**fields):
+        raise ValueError("가짜 실패")
+
+    monkeypatch.setattr(api, "generate_product_captions", broken)
+    monkeypatch.setattr(api, "generate_hashtags", lambda *a: pytest.fail("문구가 없으면 해시태그를 부르지 않는다"))
+    body = wait_done(client, post(client, angles=["low_angle"]).json()["job_id"])
+    photo, usage = body["product_photo"], body["usage_example"]
+    assert body["status"] == "ready" and photo["image_url"] and photo["angle_images"][0]["image_url"]
+    assert (photo["caption"], photo["hashtags"], photo["error"]) == ("", [], api.CAPTION_FAILED)
+    assert (usage["caption"], usage["hashtags"], usage["error"]) == ("", [], api.CAPTION_FAILED)
+
+
+def test_empty_hashtags_is_not_an_error(client, monkeypatch):
+    monkeypatch.setattr(api, "generate_hashtags", lambda *a: {"product_photo": [], "usage_example": []})
+    body = wait_done(client, post(client).json()["job_id"])
+    assert body["product_photo"]["hashtags"] == [] and body["product_photo"]["error"] is None
+    assert body["usage_example"]["caption"] == "회, 구이 활용"
 
 
 @pytest.mark.parametrize("data, photo, angles, detail", [

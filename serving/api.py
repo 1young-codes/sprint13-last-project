@@ -22,9 +22,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image, ImageOps
 
-from collect_demo import PLACEHOLDER_PRODUCT, PLACEHOLDER_USAGE
-
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from models.generative_ai.llm.hashtags import generate_hashtags  # noqa: E402
+from models.generative_ai.llm.product_captions import generate_product_captions  # noqa: E402
+
 PRESETS_FILE = ROOT / "models/generative_ai/camera_angle_presets/angle_presets.toml"
 OUTPUT_DIR = Path(os.environ.get("API_OUTPUT_DIR", "/data/outputs/jobs"))
 MAX_BYTES = 10 * 1024 * 1024
@@ -32,6 +34,7 @@ MAX_SIDE = 1024  # 원본 크기 그대로면 VM 메모리를 넘을 수 있다
 FORMATS = {"JPEG", "PNG", "WEBP"}
 ANGLE_FAILED = "이 각도는 만들지 못했습니다."
 JOB_FAILED = "게시글을 만들지 못했습니다. 다시 시도해 주세요."
+CAPTION_FAILED = "문구를 만들지 못했습니다. 다시 시도해 주세요."
 
 log = logging.getLogger("api")
 
@@ -62,7 +65,6 @@ make_angle = no_angle_model  # 서버를 켤 때 모델을 불러 바꾼다. 테
 
 def load_angle_model():
     """민기님 PR #13 방식: 모델은 한 번만 불러 두고, 각도마다 함수만 부른다."""
-    sys.path.insert(0, str(ROOT))
     from models.generative_ai.camera_angle_presets.change_camera_angle import change_camera_angle, load_models
 
     started = time.perf_counter()
@@ -77,15 +79,21 @@ def load_angle_model():
     return angle
 
 
-def make_captions(fields: dict) -> dict:
-    # ponytail: 임시 문구. 문구 생성 함수(generate_product_captions) 연결은 별도 티켓.
-    name = fields["product_name"]
-    return {"product_caption": PLACEHOLDER_PRODUCT.format(name=name),
-            "usage_caption": PLACEHOLDER_USAGE.format(name=name)}
-
-
-def make_hashtags(fields: dict, caption: str) -> list[str]:
-    return []  # 해시태그 함수 연결은 별도 티켓. 빈 목록이면 화면이 해시태그 줄을 숨긴다.
+def make_texts(job_id: str, fields: dict) -> tuple[dict, dict, str | None]:
+    """문구 두 편과 해시태그를 만든다. 문구가 실패하면 빈 문구와 이유를 돌려주고, 사진 결과는 그대로 둔다."""
+    started = time.perf_counter()
+    try:
+        captions = generate_product_captions(**fields)
+    except Exception:
+        log.exception("%s 문구 실패", job_id)
+        return {"product_caption": "", "usage_caption": ""}, {"product_photo": [], "usage_example": []}, CAPTION_FAILED
+    log.info("%s 문구 %.1f초", job_id, time.perf_counter() - started)
+    started = time.perf_counter()
+    # 해시태그 함수는 실패해도 예외 없이 빈 목록을 돌려준다. 빈 목록이면 화면이 해시태그 줄을 숨긴다.
+    tags = generate_hashtags(fields["product_name"], fields["usage_example"],
+                             captions["product_caption"], captions["usage_caption"])
+    log.info("%s 해시태그 %.1f초", job_id, time.perf_counter() - started)
+    return captions, tags, None
 
 
 def file_url(job_id: str, name: str) -> str:
@@ -113,12 +121,11 @@ def run_job(job_id: str) -> None:
         with lock:
             post["angle_images"].append(item)
 
-    captions = make_captions(job["fields"])
-    usage = {"image_url": None, "caption": captions["usage_caption"], "error": None,
-             "hashtags": make_hashtags(job["fields"], captions["usage_caption"])}
-    hashtags = make_hashtags(job["fields"], captions["product_caption"])
+    captions, tags, error = make_texts(job_id, job["fields"])
+    usage = {"image_url": None, "caption": captions["usage_caption"], "error": error,
+             "hashtags": tags["usage_example"]}
     with lock:
-        post["caption"], post["hashtags"] = captions["product_caption"], hashtags
+        post["caption"], post["hashtags"], post["error"] = captions["product_caption"], tags["product_photo"], error
         job["usage_example"], job["status"] = usage, "ready"
 
 
@@ -251,6 +258,9 @@ if __name__ == "__main__":
     p.add_argument("--port", type=int, default=8003)
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    for key in ("OPENAI_API_KEY", "GEMINI_API_KEY"):
+        if not os.environ.get(key):
+            log.warning("%s가 없습니다. README의 켜기 순서대로 키 파일을 불러와야 문구와 해시태그가 나옵니다.", key)
     if not args.no_models:
         # 요청을 받기 전에 불러온다. 실패하면 여기서 멈춰서, 모든 각도가 조용히 실패하는 서버가 뜨지 않는다.
         make_angle = load_angle_model()
