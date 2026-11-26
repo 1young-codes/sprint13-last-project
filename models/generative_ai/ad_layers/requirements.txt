@@ -1,0 +1,4 @@
+# 보정 단계 패키지(BiRefNet, OpenAI, scipy) 위에 글자 레이어를 그리는 브라우저를 더합니다.
+# 설치 뒤 한 번: playwright install --with-deps chromium
+-r ../photo_retouch/requirements.txt
+playwright

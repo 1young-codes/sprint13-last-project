@@ -1,0 +1,78 @@
+# 레이어 광고 만들기 설정입니다. 경로는 프로젝트 루트 기준입니다.
+
+[paths]
+output_dir = "outputs/ad_layers"
+font_dir = "data/fonts"                   # 폰트를 처음 쓸 때 여기로 내려받습니다
+
+[canvas]
+width = 1024
+height = 1024
+background_color = "#808080"              # 장면 생성 전 제품 뒤에 까는 중립 회색
+
+[product]
+max_share = 0.55                          # 제품이 캔버스 가로·세로에서 차지할 최대 비율
+center_x = 0.5                            # 제품 가운데의 가로 위치 (캔버스 대비)
+bottom_y = 0.85                           # 제품 바닥의 세로 위치 (캔버스 대비)
+mask_threshold = 0.5                      # 이보다 진한 마스크를 제품으로 봅니다
+
+[shadow]
+# 제품을 지운 빈 배경을 만들 때 제품 주변을 이만큼 넓혀 지웁니다 (제품 크기 대비). 그림자·반사가 이 안에 있어야 분리됩니다.
+reach = 0.35
+min_alpha = 0.03                          # 이보다 옅은 차이는 생성 잡음으로 보고 버립니다
+
+[text_boxes]
+# 초안과 원래 그림의 차이가 이보다 큰 화소를 모델이 그린 글자로 봅니다 (0~1, 색 채널 최대 차이)
+# ponytail: 고정 문턱값. 생성 모델이 그림 전체 색을 많이 바꾸면 VM 결과를 보고 올리거나 저주파 보정을 넣습니다.
+diff_threshold = 0.2
+merge_x = 0.03                            # 글자들을 한 줄로 묶는 가로 간격 (캔버스 가로 대비)
+merge_y = 0.006                           # 같은 줄로 묶는 세로 간격 (캔버스 세로 대비)
+min_area = 0.002                          # 이보다 작은 묶음은 버립니다 (캔버스 넓이 대비)
+max_boxes = 4
+product_margin = 0.02                     # 제품 둘레 이 폭 안의 변화는 글자로 보지 않습니다 (캔버스 가로 대비)
+
+[generation]
+seed = 0
+steps = 25
+scene_prompt = "Place this product into the following scene as a professional advertising photo. Keep the product exactly the same: shape, colors, label and size. Match the lighting and add a natural contact shadow. No text, letters, logos, signs or watermarks anywhere. {scene}"
+empty_scene = "Nothing stands in the green area. Only the empty surface and background continue there, with no object and no shadow. {scene}"
+draft_prompt = "Add Korean advertising text to this image: one large headline, one short subheadline, a price, and a short call to action. Put the text in empty space and never cover the product. Keep everything else unchanged. Style: {style}"
+
+# 분위기 3종. idea는 사장님 한 줄이 없을 때 쓰는 기본 장면, style은 초안 글자 느낌, fonts는 역할별 고정 폰트입니다.
+[moods.minimal]
+label = "미니멀 스튜디오"
+idea = "단색 배경의 깔끔한 스튜디오, 부드러운 조명"
+style = "clean minimal studio advertisement, modern sans-serif type, lots of empty space"
+fonts = { title = "noto_sans_kr_black", subtitle = "noto_sans_kr", price = "noto_sans_kr_black", cta = "noto_sans_kr" }
+
+[moods.lifestyle]
+label = "생활 연출"
+idea = "제품을 실제로 쓰는 자연스러운 생활 공간"
+style = "warm lifestyle magazine advertisement, elegant serif headline"
+fonts = { title = "noto_serif_kr", subtitle = "noto_sans_kr", price = "noto_sans_kr_black", cta = "noto_sans_kr" }
+
+[moods.sale]
+label = "계절·행사 세일"
+idea = "계절 행사 분위기의 밝고 활기찬 세일 장면"
+style = "bold seasonal sale advertisement, big heavy headline, eye-catching price"
+fonts = { title = "black_han_sans", subtitle = "noto_sans_kr", price = "black_han_sans", cta = "noto_sans_kr_black" }
+
+# 고정 폰트. 모두 SIL 오픈 폰트 라이선스라 상업 광고에 쓸 수 있습니다.
+[fonts.noto_sans_kr]
+url = "https://github.com/google/fonts/raw/main/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf"
+file = "NotoSansKR.ttf"
+weight = 500
+
+[fonts.noto_sans_kr_black]
+url = "https://github.com/google/fonts/raw/main/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf"
+file = "NotoSansKR.ttf"
+weight = 900
+
+[fonts.noto_serif_kr]
+url = "https://github.com/google/fonts/raw/main/ofl/notoserifkr/NotoSerifKR%5Bwght%5D.ttf"
+file = "NotoSerifKR.ttf"
+weight = 700
+
+[fonts.black_han_sans]
+url = "https://github.com/google/fonts/raw/main/ofl/blackhansans/BlackHanSans-Regular.ttf"
+file = "BlackHanSans-Regular.ttf"
+weight = 400
