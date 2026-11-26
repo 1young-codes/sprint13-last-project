@@ -237,7 +237,7 @@ function ResultStep({ job, excluded, onToggle, onBack, onPublish }) {
 
       {job.status === 'failed' && (
         <div className="card status error" role="alert">
-          게시글을 만들지 못했습니다. {job.message}
+          {job.message || '게시글을 만들지 못했습니다. 다시 시도해 주세요.'}
         </div>
       )}
 

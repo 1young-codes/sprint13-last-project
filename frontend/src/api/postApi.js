@@ -14,6 +14,7 @@ export const USE_SAMPLE = API_URL === ''
 
 // 문서: 상태는 2초마다 묻는다. 예시 결과는 빨리 보려고 짧게 묻는다.
 export const POLL_MS = USE_SAMPLE ? 500 : 2000
+const POLL_RETRIES = 3 // 상태를 묻다가 연결이 끊기면 다시 물어보는 횟수
 
 const CONNECTION_ERROR = '서버에 연결하지 못했습니다. 잠시 뒤 다시 시도해 주세요.'
 
@@ -74,11 +75,16 @@ export async function createPostJob({ photo, productName, unit, priceKrw, usageE
 export async function getPostJob(jobId) {
   if (USE_SAMPLE) return getSampleJob(jobId)
 
+  // 연결이 잠깐 끊겨도 서버에서는 작업이 계속 돌고 있으므로, 몇 번 더 물어본 뒤에 실패로 본다.
   let response
-  try {
-    response = await fetch(`${API_URL}/jobs/${encodeURIComponent(jobId)}`)
-  } catch {
-    return { status: 'failed', message: CONNECTION_ERROR }
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      response = await fetch(`${API_URL}/jobs/${encodeURIComponent(jobId)}`)
+      if (response.status < 500 || attempt >= POLL_RETRIES) break
+    } catch {
+      if (attempt >= POLL_RETRIES) return { status: 'failed', message: CONNECTION_ERROR }
+    }
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS))
   }
   if (response.status === 404) {
     return { status: 'failed', message: '작업을 찾을 수 없습니다. 서버가 다시 켜졌을 수 있습니다.' }

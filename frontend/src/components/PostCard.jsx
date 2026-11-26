@@ -77,7 +77,7 @@ export default function PostCard({ kind, storeName, result, pendingAngles = [], 
         )}
 
         {result.error ? (
-          <p className="error">이 게시글을 만들지 못했습니다. {result.error}</p>
+          <p className="error">{result.error}</p>
         ) : (
           <div className="post-text">
             {result.caption ? <p>{result.caption}</p> : <p className="hint">문구를 만드는 중입니다…</p>}
@@ -113,5 +113,6 @@ function SlideView({ slide, empty, dimmed }) {
   }
   if (slide.error) return <span className="slide-wait">{slide.label}: {slide.error}</span>
   if (!slide.url) return <span>{empty}</span>
-  return <img src={slide.url} alt={slide.label} className={dimmed ? 'dimmed' : undefined} />
+  // key: 사진을 넘길 때 새 사진이 받아지기 전까지 이전 사진이 남아 보이지 않게 한다
+  return <img key={slide.url} src={slide.url} alt={slide.label} className={dimmed ? 'dimmed' : undefined} />
 }

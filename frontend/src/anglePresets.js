@@ -22,7 +22,7 @@ export const ANGLE_LABELS = Object.fromEntries(ANGLE_PRESETS.map((preset) => [pr
 export const SECONDS_PER_ANGLE = 40
 
 // 각도 없이 대표 사진, 문구, 해시태그까지 걸리는 대략적인 시간(초)
-export const BASE_SECONDS = 20
+export const BASE_SECONDS = 30
 
 // 고른 각도 수로 예상 시간을 "약 N분"으로 알려준다.
 export function estimateMinutes(angleCount) {
