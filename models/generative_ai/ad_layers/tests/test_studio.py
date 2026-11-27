@@ -82,7 +82,8 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft, monkey
                     updated["boxes"]["price"] = [10, 47, 45, 10]
                 return json.dumps(updated)
             if step == "studio_format_reading":
-                assert len(images) == 3 and data["copy"]["price"] == "18,000원"
+                assert len(images) == 4 and data["copy"]["price"] == "18,000원"
+                assert all(crop < poster for crop, poster in zip(images[3].shape[:2], images[2].shape[:2]))
                 if stages.count(step) == 1:
                     return '{"ready":false,"observation":"판매 정보가 떨어져 보입니다"}'
                 return '{"ready":true,"observation":"판매 정보가 제목과 연결됩니다"}'
@@ -640,6 +641,19 @@ def test_format_margin_checks_rendered_ink_in_proportion_to_the_short_side():
     studio_formats.check_type_margin((1080, 1920), {"headline": [3, 2, 50, 17]})
     with pytest.raises(ValueError, match="headline 글자가 포스터 위쪽 가장자리에.*11픽셀"):
         studio_formats.check_type_margin((864, 1080), {"headline": [10, 1, 50, 17]})
+
+
+def test_small_format_margin_repair_moves_the_entire_copy_without_changing_type():
+    design = {"boxes": {"headline": [10, 0, 80, 15], "product_name": [10, 16, 80, 5], "price": [10, 22, 80, 4]},
+              "styles": {"headline": {"lines": [{"box": [10, 0, 80, 7], "size": 5},
+                                                {"box": [10, 8, 80, 7], "size": 6}]},
+                         "price": {"size": 3}}}
+    ink = {"headline": [12, 1, 60, 14], "product_name": [12, 16, 38, 20], "price": [12, 22, 20, 25]}
+    moved = studio_formats.move_copy_inside(design, ink, (1024, 1024))
+    assert moved["boxes"]["headline"] == [10, 2, 80, 15]
+    assert moved["boxes"]["price"] == [10, 24, 80, 4]
+    assert moved["styles"]["headline"]["lines"][1] == {"box": [10, 10, 80, 7], "size": 6}
+    assert moved["styles"]["price"] == design["styles"]["price"]
 
 
 def test_format_options_use_measured_sizes_and_keep_clear_of_the_product(monkeypatch):

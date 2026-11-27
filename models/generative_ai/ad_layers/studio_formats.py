@@ -91,6 +91,11 @@ intentional detail crop when it serves the campaign. Check the exact copy,
 contrast, title line grouping, and how a viewer reaches the product and price. Check what draws the first
 glance. The price may lead when focus is price. Otherwise it should read clearly without taking attention
 from the intended focus. Quiet margins around the whole composition are allowed.
+The fourth image is the actual area surrounding the product name and price. Look there before approving.
+Reject a strong product edge, highlight, shadow, or texture interrupting the quiet space immediately
+around those words. A recognizable letter can still look attached to a rim or reflection. Inspect the
+actual pixels even if the outline in product_bounds misses the visible detail. Suggest one clear placement
+change when this area fails. Treat this as a type repair unless the photograph has no usable text area.
 A large empty band between the title and subject, with no visible photographic cue
 across it, breaks the reading path. A pair of title lines needs to read as one phrase before the viewer reaches
 the product. Also use outer_margins to inspect the actual space outside the product and all the lettering.
@@ -379,6 +384,46 @@ def check_type_margin(size, ink):
                              f"글자 묶음을 안쪽으로 {shift}픽셀 이상 옮겨 주세요")
 
 
+def offer_detail(poster, ink):
+    width, height = poster.size
+    context = min(poster.size) // 12
+    left, top, right, bottom = zip(ink["product_name"], ink["price"], strict=True)
+    return poster.crop((max(0, round(min(left) * width / 100) - context),
+                        max(0, round(min(top) * height / 100) - context),
+                        min(width, round(max(right) * width / 100) + context),
+                        min(height, round(max(bottom) * height / 100) + context)))
+
+
+def move_copy_inside(design, ink, size):
+    if design.get("accent"):
+        return None
+    offsets = []
+    for axis, length in enumerate(size):
+        gap = ceil(100 * min(size) / (40 * length))
+        first = min(bounds[axis] for bounds in ink.values())
+        last = max(bounds[axis + 2] for bounds in ink.values())
+        minimum, maximum = gap - first, 100 - gap - last
+        if minimum > maximum:
+            return None
+        offsets.append(max(minimum, min(0, maximum)))
+    dx, dy = offsets
+    if max(abs(dx), abs(dy)) > 3 or not any(offsets):
+        return None
+
+    def translated(box):
+        x, y, width, height = box
+        return [x + dx, y + dy, width, height]
+
+    boxes = {role: translated(box) for role, box in design["boxes"].items()}
+    if any(x < 0 or y < 0 or x + width > 100 or y + height > 100 for x, y, width, height in boxes.values()):
+        return None
+    styles = design["styles"]
+    if lines := styles["headline"].get("lines"):
+        styles = styles | {"headline": styles["headline"] | {
+            "lines": [line | {"box": translated(line["box"])} for line in lines]}}
+    return design | {"boxes": boxes, "styles": styles}
+
+
 def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
     layout = load_layout(source)
     size = FORMATS[format_name]
@@ -472,6 +517,16 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
     output.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=output.parent) as temporary:
         stage = Path(temporary)
+
+        def render_copy(design):
+            candidate = design_layers(design, copy, size, fonts, stage)
+            check_text_overlap(foreground, candidate, stage)
+            tighten_text_groups(foreground, candidate, stage)
+            ink = rendered_text_bounds(candidate, stage)
+            if not {"product_name", "price"} <= ink.keys():
+                raise ValueError("상품명과 가격의 글자가 화면에 보여야 합니다")
+            return candidate, ink
+
         for _ in range(2):
             answer = ask_stage(ai, "studio_reframe", REFRAME, inputs | {"preferred_first_lines": first_lines}, images)
             if placements and "layout_error" not in inputs and answer.get("placement") is None:
@@ -483,11 +538,16 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                 revised = design | {"artwork_box": [0, 0, 100, 100], "boxes": proposed.get("boxes"),
                                     "styles": styles, "accent": proposed.get("accent")}
                 revised.pop("subject_box", None)
-                candidate = design_layers(revised, copy, size, fonts, stage)
-                check_text_overlap(foreground, candidate, stage)
-                tighten_text_groups(foreground, candidate, stage)
-                ink = rendered_text_bounds(candidate, stage)
-                check_type_margin(size, ink)
+                candidate, ink = render_copy(revised)
+                try:
+                    check_type_margin(size, ink)
+                except ValueError:
+                    shifted = move_copy_inside(revised, ink, size) if intent else None
+                    if shifted is None:
+                        raise
+                    candidate, ink = render_copy(shifted)
+                    check_type_margin(size, ink)
+                    revised = shifted
             except ValueError as error:
                 inputs["layout_error"] = str(error)
                 inputs["previous_layout"] = answer
@@ -500,7 +560,7 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                                {"copy": copy, "focus": design["focus"], "product_bounds": bounds, "rendered_ink": ink,
                                 "outer_margins": outer_margins(bounds, ink.values()),
                                 **({"intent": intent} if intent else {})},
-                               [reference, to_float(phone), to_float(poster)])
+                               [reference, to_float(phone), to_float(poster), to_float(offer_detail(poster, ink))])
             reading = required_text(review, "observation", "게시 규격 검토")
             if type(review.get("ready")) is not bool:
                 raise ValueError("게시 규격의 글자와 상품 배치 판정을 확인하지 못했습니다")
