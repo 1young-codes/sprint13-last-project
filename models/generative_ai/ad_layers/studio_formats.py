@@ -18,9 +18,10 @@ FORMATS = {"1:1": (1024, 1024), "4:5": (864, 1080), "9:16": (1080, 1920), "16:9"
 REFRAME = """Reframe the approved poster's exact typography for a new aspect ratio. The first image is the
 approved poster and the second is the actual photo in the new frame. Keep the new photo unchanged. Use its
 quiet space and the product bounds to place the exact headline, product name and price. Keep the approved
-campaign's colors and hierarchy. Make each text size appropriate for the new width. If copy needs two lines,
-use break_after at a natural Korean phrase boundary and keep quantities and their counters together. Return only a JSON object
-with boxes, styles and accent (an optional overlay, or null). Repair any reported overlap or fit error."""
+campaign's colors and hierarchy. Pick fonts from the supplied list. Use an integer from 2 to 20 for size,
+as a percentage of the new canvas width. Group the product name and price while letting the headline lead.
+If copy needs two lines, use break_after at a natural Korean phrase boundary and keep quantities and their counters together.
+Return only a JSON object with boxes, styles and accent (an optional overlay, or null). Repair any reported overlap or fit error."""
 
 
 def extend_edges(photo, size):
@@ -38,25 +39,45 @@ def extend_edges(photo, size):
     dissolve = Image.fromarray((255 * np.clip(distance / (radius * 2), 0, 1)).astype(np.uint8))
     frame = Image.composite(frame.filter(ImageFilter.GaussianBlur(radius)), frame, dissolve)
     frame.paste(contained, (left, top))
-    return frame
+    return frame, (left, top, left + contained.width, top + contained.height)
 
 
-def frame_photo(photo, mask, size):
+def frame_photo(photo, mask, size, expand=None):
     width, height = photo.size
     target_width, target_height = size
     ratio = target_width / target_height
     crop_width, crop_height = min(width, round(height * ratio)), min(height, round(width / ratio))
     left, top, right, bottom = mask.getbbox()
-    if right - left <= crop_width and bottom - top <= crop_height:
-        x = min(left, width - crop_width, max(0, right - crop_width, (width - crop_width) // 2))
-        y = min(top, height - crop_height, max(0, bottom - crop_height, (height - crop_height) // 2))
-        bounds = (x, y, x + crop_width, y + crop_height)
-        return (photo.crop(bounds).resize(size, Image.Resampling.LANCZOS),
-                mask.crop(bounds).resize(size, Image.Resampling.NEAREST))
-    return extend_edges(photo, size), ImageOps.pad(mask, size, Image.Resampling.NEAREST, color=0)
+    fits = right - left <= crop_width and bottom - top <= crop_height
+    if not fits:
+        padding = round(min(width, height) * 0.04)
+        crop_width = min(width, max(crop_width, right - left + 2 * padding))
+        crop_height = min(height, max(crop_height, bottom - top + 2 * padding))
+    x = min(left, width - crop_width, max(0, right - crop_width, (width - crop_width) // 2))
+    y = min(top, height - crop_height, max(0, bottom - crop_height, (height - crop_height) // 2))
+    bounds = (x, y, x + crop_width, y + crop_height)
+    photo, mask = photo.crop(bounds), mask.crop(bounds)
+    if fits:
+        return photo.resize(size, Image.Resampling.LANCZOS), mask.resize(size, Image.Resampling.NEAREST)
+    frame, placed = extend_edges(photo, size)
+    framed_mask = Image.new("L", size)
+    left, top, right, bottom = placed
+    framed_mask.paste(mask.resize((right - left, bottom - top), Image.Resampling.NEAREST), (left, top))
+    if expand is not None:
+        margin = Image.new("L", size, 255)
+        margin.paste(0, placed)
+        frame = Image.composite(expand(frame, np.asarray(margin) != 0), frame, margin)
+    return frame, framed_mask
 
 
-def adapt_format(source, output, format_name, ai):
+def fill_margin(frame, margin):
+    from ..photo_retouch.adjustments import to_image
+    from ..photo_retouch.cleanup import inpaint, load_inpaint_model
+
+    return to_image(inpaint(load_inpaint_model(), to_float(frame), margin, 1280))
+
+
+def adapt_format(source, output, format_name, ai, expand=None):
     layout = load_layout(source)
     size = FORMATS[format_name]
     threshold_mask = foreground_mask(source, layout)
@@ -66,7 +87,7 @@ def adapt_format(source, output, format_name, ai):
     with Image.open(source / layout["artwork"]["file"]) as original:
         photo = original.convert("RGB")
     design = layout["design"]
-    framing, framing_mask = frame_photo(photo, mask, size)
+    framing, framing_mask = frame_photo(photo, mask, size, expand)
     with Image.open(source / "ad.png") as poster:
         images = [to_float(poster), to_float(framing)]
     copy = {item["role"]: item["text"] for item in layout["texts"]}

@@ -12,7 +12,7 @@ from .creative_brief import ask_stage, required_text
 from .layers import load_layout, load_settings, to_float
 from .scene_ad import make_scene_ad
 from .studio_edits import edit_version, foreground_mask
-from .studio_formats import FORMATS, adapt_format
+from .studio_formats import FORMATS, adapt_format, fill_margin
 from .studio_guides import START_GUIDES, find_actions
 
 
@@ -170,8 +170,8 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
                 try:
                     if not (base / "foreground.png").is_file():
                         raise ValueError("크기 변경에 사용할 제품 영역이 없습니다")
-                    adapt_format(base, variant, name, ai)
-                except ValueError as error:
+                    adapt_format(base, variant, name, ai, fill_margin if generation is not None else None)
+                except (ValueError, FileNotFoundError) as error:
                     record("format_failed", format=name, observation=str(error))
                     continue
                 variants[name] = variant / "ad.png"

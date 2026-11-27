@@ -113,14 +113,27 @@ def test_crops_around_subject_and_pads_when_crop_would_cut_it():
     photo = Image.new("RGB", (100, 100), "blue")
     mask = Image.new("L", photo.size)
     mask.paste(255, (72, 25, 93, 76))
-    cropped, visible = studio_formats.frame_photo(photo, mask, (50, 100))
+    cropped, visible = studio_formats.frame_photo(
+        photo, mask, (50, 100), lambda *_: pytest.fail("자를 수 있으면 배경을 생성할 필요가 없습니다"))
     assert cropped.getpixel((0, 0)) == (0, 0, 255)
     assert visible.getbbox() == (29, 25, 50, 76)
 
     mask.paste(255, (7, 25, 93, 76))
     padded, visible = studio_formats.frame_photo(photo, mask, (50, 100))
     assert padded.getpixel((0, 0)) == (0, 0, 255)
-    assert visible.getbbox() == (3, 37, 46, 63)
+    assert visible.getbbox() == (2, 36, 48, 63)
+
+    def expand(frame, margin):
+        assert frame.size == (50, 100)
+        assert margin[:23].all() and margin[76:].all() and not margin[23:76].any()
+        return Image.new("RGB", frame.size, "green")
+
+    expanded, protected = studio_formats.frame_photo(photo, mask, (50, 100), expand)
+    assert expanded.getpixel((0, 0)) == (0, 128, 0)
+    assert expanded.getpixel((25, 50)) == (0, 0, 255)
+    assert protected.tobytes() == visible.tobytes()
+    known = (0, 23, 50, 76)
+    assert expanded.crop(known).tobytes() == padded.crop(known).tobytes()
 
 
 def test_import_rejects_a_draft_with_modified_price(tmp_path, draft):
