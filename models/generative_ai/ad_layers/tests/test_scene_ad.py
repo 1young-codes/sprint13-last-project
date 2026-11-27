@@ -16,6 +16,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     reference = Image.new("RGB", (70, 60), "white")
     fields = {"product_name": "수분 세럼", "price_krw": 32000}
     correction = "Show the cap held visibly by a hand."
+    actual_light = "Grazing light from the left defines the small drop under the cap."
     expect_correction = False
 
     def mask(model, pixels):
@@ -57,7 +58,8 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             if step == "ad_art_direction":
                 assert len(images) == 2 and "부드러운 아침" in prompt
                 return json.dumps({"theme": "studio", "angle": "level", "shot_scale": "whole",
-                                   "evidence": "앰버색 병", "photo_device": "Show the amber edge in side light."})
+                                   "lighting": actual_light if expect_correction else "transmitted", "evidence": "앰버색 병",
+                                   "photo_device": "Show the amber edge in side light."})
             if step == "ad_cycle_critique":
                 assert len(images) == 4 and images[0][20, 15, 2] == 1
                 assert "병의 하단이 잘렸습니다" in prompt
@@ -66,6 +68,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
                 assert data["design"]["artwork_box"] == [0, 0, 50, 100]
                 assert "vertical layers" in data["angle_guide"] and data["art_direction_plan"]["angle"] == "level"
+                assert (actual_light if expect_correction else "diffused light behind") in data["lighting_guide"]
                 assert len(images) == 2 and images[1].shape == (1024, 1024, 3) and "previous_art_direction" not in data
                 if expect_correction:
                     assert data["requested_scene_change"] == correction

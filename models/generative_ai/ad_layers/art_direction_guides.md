@@ -13,6 +13,8 @@
 
 화면에 얼마나 크게 담을지도 별도로 결정합니다. 전체 샷은 개수와 모양을 전달합니다. 가까운 샷은 비교할 만한 층이나 질감을 크게 보여 줍니다. 디테일 중심 크롭은 상품이 여전히 식별되고, 자르는 이유를 광고 문구에서 설명할 수 있을 때 씁니다. 사용 장면의 손, 도구, 받침, 액체의 이동은 각각 물리적으로 맞아야 합니다. [니콘 촬영 가이드](https://www.nikon.se/sv_SE/learn-and-explore/magazine/tips-and-tricks/how-to-photograph-restaurant-food) · [어도비 제품 사진 가이드](https://www.adobe.com/creativecloud/photography/type/product-photography.html) · [어도비 여백 사진 가이드](https://www.adobe.com/creativecloud/photography/discover/negative-space-photography.html)
 
+조명은 어디에 빛을 둘지와 사진에서 무엇이 달라질지를 함께 정합니다. 투명한 용기 안의 층은 확산한 빛을 뒤에서 통과시켜 밝히고, 어두운 면을 곁에 남겨 윤곽과 내용물을 구분합니다. 불투명한 음식이나 거친 재질은 옆에서 비스듬히 빛을 보내 돌출부에 하이라이트와 짧은 그림자를 만듭니다. 광택이 중요한 포장에는 반사판으로 밝은 띠를 만들고 검은 가림판으로 라벨의 눈부심을 줄입니다. 생활 장면에선 창이나 스탠드 위치와 그림자 방향을 맞춰 상품이 실제로 그 자리에 놓여 보이게 합니다. [니콘 음식 조명 가이드](https://www.nikonusa.com/learn-and-explore/c/tips-and-techniques/create-your-light-food-photography-at-home) · [프로포토 유리잔 조명](https://www.profoto.com/int/en/still-photography/tips-tricks/how-to-create-highlights-on-a-cocktail-glass) · [브론컬러 병 촬영 사례](https://broncolor.swiss/news/still-moving-media-shoot-difficult-shaped-glass-bottles)
+
 ## 광고 목적에 맞는 레이아웃과 글자
 
 | 테마 | 구도 | 타이포그래피 | 피할 실패 |

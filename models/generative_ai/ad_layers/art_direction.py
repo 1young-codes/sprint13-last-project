@@ -47,15 +47,29 @@ SHOT_SCALES = {
     "detail": "Use a deliberate detail crop only when the advertised feature is recognizable without missing edges or labels.",
 }
 
+LIGHTING = {
+    "transmitted": "For visible layers or particles in a translucent subject, put diffused light behind the relevant "
+                   "part, let it pass through the material, and keep a darker adjacent area for separation. "
+                   "Preserve the real colors and readable detail at the edges.",
+    "grazing": "For a textured surface or layered opaque ingredients, light across the visible relief from one "
+               "side. Show the highlight and neighboring shadow on the specific detail. Add gentle fill if needed.",
+    "reflected": "For a shiny surface or package, shape the reflections with a broad white surface and dark flags. "
+                 "Place the bright edge away from details or labels that would otherwise be lost in glare.",
+    "motivated": "For a scene where use or context carries the message, place a plausible light source for that setting. "
+                 "Describe what it highlights and where the cast shadow falls so the object feels present.",
+}
+
 CHOOSE = """Act as the art director for one Korean ad. The first image is the actual product. Later images
-are composition references only. Pick one theme, one angle, and one shot_scale from the offered guides.
+are composition references only. Pick one theme, angle, shot_scale and lighting method from the offered guides.
 Choose by what the camera must reveal, not by category. If the product is shown in use, make the gesture
 physically possible. Do not invent product claims, packaging, dates, or offers. For a requested correction,
 choose options that preserve unaffected parts of the approved composition.
-Return a JSON object with theme, angle, shot_scale, evidence (a specific visible feature in Korean),
+Return a JSON object with theme, angle, shot_scale, lighting, evidence (a specific visible feature in Korean),
 and photo_device (one English instruction describing a physical way to reveal the evidence through
-framing, light, material or gesture). The device should give the photo a meaningful relationship
-to the exact headline. Evidence must be visible in the actual product image. A light, action or prop
+framing, light, material or gesture). Use one exact key from lighting_options for lighting. In photo_device,
+describe the light's direction, the part affected, and the visible difference to look for in the finished picture.
+The device should give the photo a meaningful relationship to the exact headline. Evidence must be visible
+in the actual product image. A light, action or prop
 that does not yet exist belongs only in photo_device. Include no lettering or graphics in photo_device."""
 
 
@@ -63,9 +77,9 @@ def plan_art_direction(ai, fields, brief, idea, images, revision=None):
     answer = ask_stage(ai, "ad_art_direction", CHOOSE,
                        {"product_facts": fields, "brief": brief, "idea": idea, "revision": revision,
                         "themes": {key: guide["when"] for key, guide in THEMES.items()},
-                        "angles": ANGLES, "shot_scales": SHOT_SCALES}, images)
+                        "angles": ANGLES, "shot_scales": SHOT_SCALES, "lighting_options": LIGHTING}, images)
     plan = {key: required_text(answer, key, "광고 연출")
-            for key in ("theme", "angle", "shot_scale", "evidence", "photo_device")}
+            for key in ("theme", "angle", "shot_scale", "lighting", "evidence", "photo_device")}
     for key, options in (("theme", THEMES), ("angle", ANGLES), ("shot_scale", SHOT_SCALES)):
         if plan[key] not in options:
             raise ValueError(f"광고 연출의 {key} 항목은 가이드에 있는 선택지여야 합니다")

@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 from PIL import Image, ImageDraw, ImageOps
 
-from .art_direction import ANGLES, SHOT_SCALES, THEMES, plan_art_direction
+from .art_direction import ANGLES, LIGHTING, SHOT_SCALES, THEMES, plan_art_direction
 from .creative_brief import LAYOUT_ROLES, TEXT_ROLES, ask_stage, plan_copy, required_text, validate_boxes
 from .layers import compose, cutout_product, load_layout, load_settings, save_layout, to_float
 from .text_render import minimum_font_size, render_texts
@@ -104,7 +104,8 @@ PHOTO_DIRECTION = """Write the English instruction that the image model will rec
 The image is the source product. Make the design concept and any revision hypothesis visibly happen in the photograph.
 Use the approved artwork box and copy positions to describe the subject and quiet space relative to the artwork.
 Describe the camera framing, the exact visible effect, and how its light, material or gesture leads towards the
-planned type. Keep the product prominent and recognizable, with its visible details, packaging and labels.
+planned type. Translate the selected lighting into visible highlights and shadows on named parts of the product.
+Keep the product prominent and recognizable, with its visible details, packaging and labels.
 When there is a product demonstration, describe exactly what supports each object and the physical relationship
 of the moving parts. Use surroundings and props only where they serve this particular image or the owner's
 request. Follow the agreed crop. State only what the generated photograph should show. Include no ad text,
@@ -539,7 +540,9 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         if not proposal:
             direction_input = {"message": brief["message"], "idea": idea, "design": answer}
             angle, scale = ANGLES[art_plan["angle"]], SHOT_SCALES[art_plan["shot_scale"]]
-            direction_input.update(art_direction_plan=art_plan, angle_guide=angle, framing_guide=scale)
+            lighting = art_plan["lighting"]
+            direction_input.update(art_direction_plan=art_plan, angle_guide=angle, framing_guide=scale,
+                                   lighting_guide=LIGHTING.get(lighting, lighting))
             if composition_reason:
                 direction_input["approved_composition"] = composition_reason
             if revision_info:
