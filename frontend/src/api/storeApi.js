@@ -4,8 +4,9 @@
 
 const STORAGE_KEY = 'store-sns.store'
 export const MAX_STORE_NAME = 30 // 인스타그램 이름 칸 길이 제한
+export const MAX_STORE_BIO = 150 // 인스타그램 소개 칸 길이 제한
 
-const EMPTY_STORE = { name: '' }
+const EMPTY_STORE = { name: '', bio: '' }
 
 export function loadStore() {
   try {
@@ -18,7 +19,11 @@ export function loadStore() {
 
 // 앞뒤 빈칸을 지우고 저장한다. 저장한 값을 돌려준다.
 export function saveStore(store) {
-  const cleaned = { ...store, name: store.name.trim().slice(0, MAX_STORE_NAME) }
+  const cleaned = {
+    ...store,
+    name: store.name.trim().slice(0, MAX_STORE_NAME),
+    bio: (store.bio ?? '').trim().slice(0, MAX_STORE_BIO),
+  }
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned))
   } catch {
