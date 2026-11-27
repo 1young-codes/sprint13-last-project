@@ -748,7 +748,8 @@ def test_format_options_use_measured_sizes_and_keep_clear_of_the_product(monkeyp
             assert not mask[y:y+h, x:x+w].any()
 
 
-def test_requested_format_repair_can_use_custom_layout_when_measured_options_exist(tmp_path, draft, monkeypatch):
+@pytest.mark.parametrize("move", [False, True])
+def test_requested_format_repair_can_use_custom_layout_when_measured_options_exist(tmp_path, draft, monkeypatch, move):
     folder, _ = draft
     monkeypatch.setattr(studio_formats, "format_measurements", lambda *_: None)
     monkeypatch.setattr(studio_formats, "position_options", lambda *_: {"measured": {}})
@@ -762,12 +763,25 @@ def test_requested_format_repair_can_use_custom_layout_when_measured_options_exi
                 revised = data["approved_design"]
                 revised["boxes"]["headline"] = [10, 20, 45, 10]
                 return json.dumps(revised)
+            if step == "studio_format_copy_position":
+                current, *options = data["position_order"]
+                assert current == "current" and len(images) == len(options) + 1
+                assert all(np.any(images[0] != preview) for preview in images[1:])
+                return json.dumps({"position": options[0] if move else current, "observation": "실제 배치를 비교했습니다"})
             assert step == "studio_format_reading"
             return '{"finding":"ready","headline_touches_product":false,"observation":"상품 옆에 제목이 보입니다"}'
 
     output = tmp_path / "reframed"
     studio_formats.adapt_format(folder, output, "thumbnail", Agent(), intent=intent)
-    assert load_layout(output)["design"]["boxes"]["headline"] == [10, 20, 45, 10]
+    selected = load_layout(output)
+    boxes = selected["design"]["boxes"]
+    assert boxes["headline"][2:] == [45, 10]
+    assert [boxes["price"][axis] - boxes["headline"][axis] for axis in (0, 1)] == [0, 30]
+    if move:
+        assert boxes["headline"][:2] != [10, 20]
+        assert selected["copy_position_review"] == "실제 배치를 비교했습니다"
+    else:
+        assert boxes["headline"][:2] == [10, 20]
 
 
 def test_format_price_stays_secondary_except_when_the_price_is_the_focus(monkeypatch):

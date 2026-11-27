@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
+from scipy.ndimage import distance_transform_edt
 
 from .creative_brief import TEXT_ROLES, ask_stage, required_text, validate_boxes
 from .format_layout import (format_measurements, format_type_hierarchy, measured_styles, outer_margins, position_options,
@@ -147,6 +148,16 @@ conflict and keeps a clear reading path between the headline, product and offer.
 the entire offer, including adjacent reflections and container edges. Avoid fixing one side by running the words
 into a different edge. Judge the whole poster as well as the nearest photographic detail. Return JSON with
 position (one key from position_order, or null if none is better) and observation (a concrete Korean sentence)."""
+
+COPY_POSITION = """These are actual posters using the same photo, words and lettering. Only the position of
+the complete copy group changes. The first poster is current. The others follow position_order. Compare at
+poster size. Name the visible subject detail that should receive the viewer's eye after reading the copy.
+Prefer a change only when the words and that detail form a clearer reading path. For motion or a visible
+effect, look at the actual point of contact or effect, not merely the outline of the largest object.
+Leave quiet breathing room around the words and avoid placing them next to hard rims, highlights or shadows.
+Honor the requested side, alignment and hierarchy. Keep current if the movement only fills empty space,
+breaks an existing alignment or introduces a new conflict. Return position (a key from position_order) and
+observation (one Korean sentence naming the visible relationship that justifies the choice)."""
 
 NATIVE_REVIEW = """Review a poster newly photographed for one publishing ratio. Image 1 is the original product
 photograph, image 2 is the approved poster, image 3 is the attempted resize when present, and the last
@@ -501,7 +512,10 @@ def move_copy_inside(design, ink, size):
     dx, dy = offsets
     if max(abs(dx), abs(dy)) > 3 or not any(offsets):
         return None
+    return translate_copy(design, dx, dy)
 
+
+def translate_copy(design, dx, dy):
     def translated(box):
         x, y, width, height = box
         return [x + dx, y + dy, width, height]
@@ -514,6 +528,67 @@ def move_copy_inside(design, ink, size):
         styles = styles | {"headline": styles["headline"] | {
             "lines": [line | {"box": translated(line["box"])} for line in lines]}}
     return design | {"boxes": boxes, "styles": styles}
+
+
+def copy_position_options(design, layout, ink, foreground, stage):
+    if design.get("accent") or any(text.get("depth") == "behind_subject" or
+                                   any(line.get("depth") == "behind_subject" for line in text.get("lines", ()))
+                                   for text in layout["texts"]):
+        return {}
+    size = layout["size"]
+    short_edge = min(size)
+    keepout = distance_transform_edt(~foreground) < short_edge / 80
+    choices = {}
+    rooms = []
+    for axis, side in enumerate(size):
+        first = min(bounds[axis] for bounds in ink.values())
+        last = max(bounds[axis + 2] for bounds in ink.values())
+        margin = ceil(100 * short_edge / (40 * side))
+        rooms.append((max(0, first - margin), max(0, 100 - margin - last)))
+
+    def reposition(layer, box):
+        x, y, _, _ = pixel_box(box, size)
+        return layer | {"x": x, "y": y}
+
+    def translated_candidate(offset):
+        revised = translate_copy(design, *offset)
+        if revised is None:
+            return None
+        texts = []
+        for text in layout["texts"]:
+            role = text["role"]
+            moved = reposition(text, revised["boxes"][role])
+            if "lines" in text:
+                rows = revised["styles"][role]["lines"]
+                moved["lines"] = [reposition(line, row["box"])
+                                  for line, row in zip(text["lines"], rows, strict=True)]
+            texts.append(moved)
+        candidate = layout | {"texts": texts}
+        try:
+            check_text_overlap(keepout, candidate, stage)
+            revised_ink = rendered_text_bounds(candidate, stage)
+            check_type_margin(size, revised_ink)
+        except ValueError:
+            return None
+        return revised, candidate, revised_ink
+
+    for axis, side in enumerate(size):
+        cross_axis = 1 - axis
+        nudge = round(5 * short_edge / size[cross_axis])
+        left, right = (min(room, nudge) for room in rooms[cross_axis])
+        sidesteps = dict.fromkeys((0, -left, right))
+        for direction, room in zip((-1, 1), rooms[axis], strict=True):
+            for distance in sorted({min(room, round(ratio * short_edge / side)) for ratio in (12, 20, 30)}):
+                if distance * side < 6 * short_edge:
+                    continue
+                offset = [0, 0]
+                offset[axis] = distance * direction
+                for step in sidesteps:
+                    offset[cross_axis] = step
+                    if result := translated_candidate(offset):
+                        choices[f"position_{len(choices) + 1}"] = result
+                        break
+    return choices
 
 
 def move_offer(design, offset):
@@ -708,6 +783,7 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
         stage = Path(temporary)
         offer_repair = False
         tried_offers = set()
+        copy_position_review = None
 
         def render_copy(design):
             candidate = design_layers(design, copy, size, fonts, stage)
@@ -762,6 +838,20 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                     continue
                 framing.save(stage / candidate["artwork"]["file"])
                 framing_mask.save(stage / "foreground.png")
+                copy_position_review = None
+                if not attempt and (photo_cue or intent):
+                    options = copy_position_options(revised, candidate, ink, foreground, stage)
+                    if options:
+                        previews = [compose(candidate, stage), *(compose(item[1], stage) for item in options.values())]
+                        choice = ask_stage(ai, "studio_format_copy_position", COPY_POSITION,
+                                           {"position_order": ["current", *options], "photo_cue": photo_cue,
+                                            "intent": intent, "copy": copy},
+                                           [to_float(ImageOps.contain(preview, (640, 640), Image.Resampling.LANCZOS))
+                                            for preview in previews])
+                        position = choice.get("position")
+                        if isinstance(position, str) and position in options:
+                            revised, candidate, ink = options[position]
+                            copy_position_review = required_text(choice, "observation", "문구 위치 비교")
                 tried_offers = {tuple(revised["boxes"][role][axis]
                                       for role in ("product_name", "price") for axis in (0, 1))}
             poster = compose(candidate, stage)
@@ -794,7 +884,9 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
             poster.save(stage / "ad.png")
             candidate.update(fields=layout["fields"], brief=layout["brief"], design=revised,
                              scene_prompt=layout["scene_prompt"], format=format_name, final_review_reason=reading)
-            if not offer_repair and answer.get("placement") is not None:
+            if copy_position_review:
+                candidate["copy_position_review"] = copy_position_review
+            elif not offer_repair and answer.get("placement") is not None:
                 candidate["text_placement"] = answer["placement"]
             if "art_direction_plan" in layout:
                 candidate["art_direction_plan"] = layout["art_direction_plan"]
