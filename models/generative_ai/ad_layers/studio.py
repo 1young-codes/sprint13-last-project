@@ -65,6 +65,8 @@ name and price. Identify how the text groups relate by their visible edges, alig
 element in the photograph. Use rendered_text_bounds (left, top, right, bottom percentages) to distinguish where
 the ink really is from where its invisible box ends. An intentional offset can lead the eye. Flag an arbitrary
 offset that leaves the headline and offer floating as unrelated groups even when the artwork is effective.
+Name the first focal point in the preview. If a high-contrast graphic housing secondary information steals the
+first glance from the advertised feature, flag the hierarchy. An offer can lead when the campaign is about it.
 Return JSON with reference_observation (one concrete Korean detail from a reference), scene and layout. Both
 scene and layout are objects with ready (boolean) and observation (one concrete Korean sentence). State the
 visible evidence for each decision separately. A strong photograph alone is insufficient to approve the layout."""
@@ -80,7 +82,8 @@ left the same photo-and-copy disconnect, choose a different composition action o
 when available. Do not repeat an earlier edit that left the same issue.
 When the photo works but a hard edge or empty strip separates it from the headline, use edit_composition.
 Also use edit_composition when the headline and offer need to move together to repair their relationship to
-the photo. Use edit_text for local fixes to individual blocks. Check design.boxes for placement limits:
+the photo, or when a colored panel competes with the subject. Use edit_text for local fixes to individual blocks.
+Check design.boxes for placement limits:
 the visible ink can occupy only part of a box, and text boxes cannot overlap.
 Use the rendered text and foreground bounds to judge the visible gap after moving the headline. Both use left,
 top, right, bottom percentages of the poster. Keep the supporting copy at a deliberate distance from the headline.

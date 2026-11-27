@@ -71,6 +71,10 @@ common center axis, a relationship to a particular part of the product, or a del
 with a legible large headline. Use the treatment justified by this product and message.
 When the structure is weak, move or resize the actual subject_box and the copy together. Avoid only changing
 font size or color. Keep the full recognizable product, exact copy, and one clear group for supporting details.
+Read the thumbnail from the first focal point to the offer. Check whether any solid accent makes supporting
+information the first focal point. Let that happen when the offer is the approved message. Otherwise soften
+or remove the accent and use alignment, spacing or weight to keep the offer together. Use rendered_text_bounds
+to check the actual ink edges before the photograph is generated.
 If present, follow the requested visual correction. Return JSON with reason (Korean) and revision (null when
 the structure works, or an object containing the design fields that need to change)."""
 
@@ -78,6 +82,7 @@ BLOCKING_COMPARE = """Compare the two rendered drafts in the first two images. T
 and copy and neither has final lighting. Any later images are composition references. Judge the visible
 relationship between the headline and product, the way their sizes balance, and the placement of the
 smaller information. Look at the actual space and ink, even if the proposal described a different effect.
+Compare which element gets the first glance and whether any graphic distracts from the advertised detail.
 Keep the original when the revision would merely trade one generic arrangement for another.
 Return JSON with choice (original or revision) and a concrete Korean reason."""
 
@@ -113,8 +118,11 @@ Match the lettering to the visual mood and keep any confirmed line breaks. Use t
 When the photograph clearly supports one specific phrase, consider highlighting it with a color sampled visually
 from the relevant feature. Put {phrase, color} only at revision.styles.headline.emphasis. The revision.accent
 field is only for a graphic shape using shape, layer, box and color, or null to remove the graphic.
-Use a single treatment and keep the accent legible against the actual background.
+Copy whole space-separated words exactly, including attached Korean particles or punctuation. Omit the emphasis
+if there is no suitable phrase. Use a single treatment and keep the accent legible against the actual background.
 If the same bright color on supporting information competes with the headline, reduce its emphasis.
+If a solid graphic panel is the strongest element by color contrast and the offer is secondary, soften or
+remove the panel. Use a common alignment and gap for the supporting text instead of relying on a shared box.
 If a hard photo boundary runs behind the words and splits their background for no clear reason, set edge to
 blend so only the photo's outer surroundings fade into the canvas. Keep framed when a distinct image panel
 improves the composition. This affects the surroundings, leaving the subject intact.
@@ -149,6 +157,13 @@ graphics, coordinates or layout markup. Return JSON with one string, 'scene'."""
 
 def is_color(value):
     return isinstance(value, str) and re.fullmatch(r"#[0-9A-Fa-f]{6}", value) is not None
+
+
+def valid_headline_emphasis(emphasis, text):
+    phrase = emphasis.get("phrase") if isinstance(emphasis, dict) else None
+    return (isinstance(phrase, str) and bool(phrase) and phrase.strip() == phrase and phrase != text
+            and text.count(phrase) == 1 and re.search(r"(?<!\S)" + re.escape(phrase) + r"(?!\S)", text) is not None
+            and is_color(emphasis.get("color")))
 
 
 def pixel_box(box, size):
@@ -192,13 +207,9 @@ def layout_texts(answer, copy, canvas_size, fonts):
             layer["break_after"] = break_after
         emphasis = style.get("emphasis")
         if emphasis is not None:
-            phrase = emphasis.get("phrase") if isinstance(emphasis, dict) else None
-            if (role != "headline" or not isinstance(phrase, str) or not phrase or phrase.strip() != phrase
-                    or text.count(phrase) != 1
-                    or re.search(r"(?<!\S)" + re.escape(phrase) + r"(?!\S)", text) is None
-                    or phrase == text or not is_color(emphasis.get("color"))):
+            if role != "headline" or not valid_headline_emphasis(emphasis, text):
                 raise ValueError("강조는 제목에 한 번 나오는 일부 어절과 올바른 색을 지정해야 합니다")
-            layer["emphasis"] = {"phrase": phrase, "color": emphasis["color"]}
+            layer["emphasis"] = {key: emphasis[key] for key in ("phrase", "color")}
         texts.append(layer)
     return texts
 
@@ -348,7 +359,7 @@ def composition_preview(product, design, layout, folder):
 def review_composition_plan(ai, product, design, layout, folder, inputs, images):
     first, foreground = composition_preview(product, design, layout, folder)
     photo_input = [to_float(first), *images]
-    review_input = inputs | {"design": design}
+    review_input = inputs | {"design": design, "rendered_text_bounds": rendered_text_bounds(layout, folder)}
     task = BLOCKING + "\n" + DESIGN_SCHEMA
     if "source_framing" in inputs:
         task += "\nKeep the chosen source_framing. Adjust placement, scale and type around that photographed view."
@@ -501,6 +512,16 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
             revision = {key: value for key, value in revision.items() if key != "accent"}
             revision["styles"] = styles | {"headline": {"emphasis": accent} | styles["headline"]}
         revised = answer | {key: revision[key] for key in editable if key in revision}
+        styles = revised["styles"]
+        headline = styles.get("headline") if isinstance(styles, dict) else None
+        if isinstance(headline, dict) and (emphasis := headline.get("emphasis")) is not None:
+            if not valid_headline_emphasis(emphasis, design_input["copy"]["headline"]):
+                headline = headline.copy()
+                headline.pop("emphasis")
+                original = answer["styles"]["headline"]
+                if "emphasis" in original:
+                    headline["emphasis"] = original["emphasis"]
+                revised["styles"] = styles | {"headline": headline}
         if keep_wrap and isinstance(revised["styles"], dict):
             styles = {}
             for role, style in revised["styles"].items():

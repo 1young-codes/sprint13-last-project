@@ -96,7 +96,9 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 return '{"scene":"Amber reflections"}'
             if step == "ad_composition":
                 assert len(images) == 3 and images[0].shape == (1024, 1024, 3)
-                assert "부드러운 아침" in prompt
+                data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
+                assert data["copy"]["headline"] == "부드러운 아침"
+                assert set(data["rendered_text_bounds"]) == {"headline", "product_name", "price"}
                 return ('{"reason":"병 위치를 옮깁니다",'
                         '"revision":{"subject_box":[15,20,70,50],"crop":"preserve","source_crop":null}}')
             if step == "ad_composition_compare":

@@ -305,13 +305,16 @@ def test_composition_review_can_fix_a_valid_layout(draft):
         def ask(self, step, images, request, *, model):
             assert step == "ad_final_layout" and len(images) == 2
             boxes = design["boxes"] | {"product_name": [10, 37, 45, 7], "price": [10, 45, 45, 7]}
-            return json.dumps({"reason": "판매 정보를 묶었습니다", "revision": {"boxes": boxes}})
+            styles = design["styles"] | {"headline": design["styles"]["headline"] | {
+                "emphasis": {"phrase": "겨", "color": "#ff0000"}}}
+            return json.dumps({"reason": "판매 정보를 묶었습니다", "revision": {"boxes": boxes, "styles": styles}})
 
     with Image.open(folder / "scene.png") as source:
         revised, _, why = scene_ad.review_finished(Agent(), design, layout, source.copy(), foreground, folder,
                                                    {"copy": copy, "fonts": ["noto_sans_kr"]}, [],
                                                    assess_composition=True)
     assert why == "판매 정보를 묶었습니다" and revised["boxes"]["price"] == [10, 45, 45, 7]
+    assert revised["styles"] == design["styles"]
     assert (folder / "scene.png").read_bytes() == original_photo
 
 
