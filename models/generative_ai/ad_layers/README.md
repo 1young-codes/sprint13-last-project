@@ -91,6 +91,8 @@ GPU 파이썬 환경의 `PYTHONPATH`에 MOSS 편집 코드의 저장소 루트�
 
 실행기가 입력한 상품명과 가격을 반영합니다. 배치 영역이 겹치거나 캔버스를 벗어나는 등 검사를 통과하지 못하면 레이아웃 담당에게 한 번 더 요청합니다. 단계별 결과와 생성 지시는 GPU 없이 JSON으로 저장하며, 같은 지시를 모델 비교에 사용할 수 있습니다.
 
+이미지 모델에는 장면, 글자 스타일, 상대적인 배치 위치를 문장으로 전달합니다. 이미지에 들어갈 문구는 제목, 상품명, 가격 세 항목을 따옴표로 표시합니다. 기획 메시지와 배치 좌표는 단계별 결과에 저장합니다.
+
 ```bash
 python -m models.generative_ai.ad_layers.creative_brief photos/items.json photos comparison/briefs.json
 python -m models.generative_ai.ad_layers.compare_reference_ads flux comparison/briefs.json photos comparison/flux-brief weights

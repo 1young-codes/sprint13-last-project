@@ -102,17 +102,29 @@ def brainstorm(ai, photo, fields, idea, price):
     return plan | {"scene": scene, "headline": headline} | placement
 
 
+def describe_position(box):
+    left, top, width, height = box
+    center_x, center_y = left + width / 2, top + height / 2
+    side = "left" if center_x < 40 else "right" if center_x > 60 else "center"
+    if center_y < 40:
+        return f"upper {side}"
+    if center_y > 60:
+        return f"lower {side}"
+    return "center" if side == "center" else f"{side} side"
+
+
 def compile_prompt(brief, title, price):
-    copy = json.dumps({"headline": brief["headline"], "product_name": title, "price": price}, ensure_ascii=False)
+    boxes = brief["boxes"]
     return (
-        "Create a finished Korean advertisement using the product in the reference photo. "
-        "Keep the product recognizable. Execute this campaign direction:\n"
-        f"Message: {brief['message']}\nScene: {brief['scene']}\n"
-        "Layout boxes as [left, top, width, height], in percentages of the canvas: "
-        f"{json.dumps(brief['boxes'])}\n"
-        f"Reading order: {', '.join(brief['reading_order'])}\nTypography: {brief['typography']}\n"
-        f"The complete advertising copy is given here. Render all three strings verbatim: {copy}. "
-        "Do not add advertising copy or logos. Keep the text inside the poster and clearly legible."
+        "Design a finished Korean advertisement featuring the product in the reference photo. "
+        f"Keep the product recognizable. {brief['scene']}\n"
+        f"Place the product prominently in the {describe_position(boxes['product'])} of the poster. "
+        f"{brief['typography']}\n"
+        "Typeset only the three quoted strings exactly as written. "
+        f"Set the headline “{brief['headline']}” in the {describe_position(boxes['headline'])}. "
+        f"Set the product name “{title}” in the {describe_position(boxes['product_name'])}. "
+        f"Set the price “{price}” in the {describe_position(boxes['price'])}. "
+        "Keep the lettering legible and inside the poster. Leave the rest of the poster free of lettering."
     )
 
 

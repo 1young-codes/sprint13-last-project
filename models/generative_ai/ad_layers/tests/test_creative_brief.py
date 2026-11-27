@@ -46,11 +46,15 @@ def test_briefs_flow_from_distinct_product_inputs_to_generation(tmp_path, monkey
                 return json.dumps({"headline": headline})
             assert data["scene"] == scene and data["message"] == plan["message"]
             assert data["copy"] == {"headline": headline, "product_name": title, "price": price}
+            boxes = {
+                "product": [0, 20, 45, 60], "headline": [50, 15, 45, 25],
+                "product_name": [50, 60, 30, 15], "price": [80, 60, 15, 15],
+            }
+            if image_index == 1:
+                boxes = {role: [100 - left - width, top, width, height]
+                         for role, (left, top, width, height) in boxes.items()}
             return json.dumps({
-                "boxes": {
-                    "product": [0, 20, 45, 60], "headline": [50, 15, 45, 25],
-                    "product_name": [50, 60, 30, 15], "price": [80, 60, 15, 15],
-                },
+                "boxes": boxes,
                 "reading_order": ["product", "headline", "product_name", "price"],
                 "typography": "clear",
             })
@@ -58,9 +62,13 @@ def test_briefs_flow_from_distinct_product_inputs_to_generation(tmp_path, monkey
     plan = creative_brief.prepare_ads(Interpreter(), items, tmp_path)
     assert calls == list(stages) * len(items)
     expected = [ad["prompt"] for ad in plan["ads"]]
-    assert "첫 문구" in expected[0] and "7,900원" in expected[0]
-    assert "둘째 문구" in expected[1] and "25,000원" in expected[1]
-    assert all('"headline": [50, 15, 45, 25]' in prompt for prompt in expected)
+    assert "“첫 문구” in the upper right" in expected[0]
+    assert "“둘째 문구” in the upper left" in expected[1]
+    for ad in plan["ads"]:
+        prompt, brief = ad["prompt"], ad["brief"]
+        assert all(f"“{copy}”" in prompt for copy in (brief["headline"], ad["title"], ad["price"]))
+        assert all(text in prompt for text in (brief["scene"], brief["typography"]))
+        assert all(text not in prompt for text in (brief["message"], brief["evidence"], "product_name", "[", "{"))
     instructions = tmp_path / "plan.json"
     instructions.write_text(json.dumps(plan), encoding="utf-8")
     output = tmp_path / "ads"
