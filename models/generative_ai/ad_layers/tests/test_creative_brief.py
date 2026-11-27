@@ -21,6 +21,7 @@ def test_briefs_flow_from_distinct_product_inputs_to_generation(tmp_path, monkey
             data = json.loads(text.split("Product information JSON follows:\n", 1)[1])
             first = data["product_name"] == items[0]["fields"]["product_name"]
             assert images[0][0, 0].argmax() == (0 if first else 1)
+            assert data["price"] == ("7,900원" if first else "25,000원")
             return json.dumps({
                 "message": "test message", "headline": "첫 문구" if first else "둘째 문구",
                 "scene": "side light" if first else "window light",
