@@ -12,6 +12,7 @@ from pathlib import Path
 from .layers import PROJECT_ROOT, load_settings
 
 FONT_HOST = "http://fonts.local/"  # 브라우저가 이 주소로 폰트를 요청하면 내려받아 둔 파일로 답합니다
+LINE_HEIGHT = 1.15
 
 FIT_SCRIPT = """() => {
   const failed = [];
@@ -32,6 +33,10 @@ FIT_SCRIPT = """() => {
   }
   return failed;
 }"""
+
+
+def minimum_font_size(canvas_width: int) -> int:
+    return max(6, round(canvas_width * 0.02))
 
 
 def font_file(name: str) -> Path:
@@ -73,7 +78,7 @@ def page_html(texts: list[dict], size: tuple[int, int]) -> str:
             f"<span>{copy}</span></div>")
     return (f"<html><head><style>{faces} html, body {{ margin: 0; background: transparent; width: {size[0]}px; "
             f"height: {size[1]}px; }} .t {{ position: absolute; display: flex; align-items: center; "
-            f"line-height: 1.15; overflow: hidden; }} .t span {{ max-width: 100%; word-break: keep-all; }}"
+            f"line-height: {LINE_HEIGHT}; overflow: hidden; }} .t span {{ max-width: 100%; word-break: keep-all; }}"
             f".t[data-max-lines='2'] span {{ text-wrap: balance; }}"
             f"</style></head><body>{''.join(boxes)}</body></html>")
 

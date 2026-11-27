@@ -61,7 +61,11 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft):
             if step == "studio_reframe":
                 assert data["size"] == [600, 600]
                 assert data["approved_design"]["boxes"]["headline"] == [20, 20, 45, 10]
-                return json.dumps(data["approved_design"])
+                assert data["preferred_first_lines"] == {"headline": "포근한 겨울"}
+                assert data["min_box_height_percent"] == {"one_line": 3, "two_lines": 5}
+                updated = data["approved_design"]
+                updated["styles"]["headline"]["break_after"] = 1
+                return json.dumps(updated)
             if "edit_text" in data["actions"]:
                 assert set(data["actions"]) == {"edit_text", "hold"}
                 return json.dumps({"action": "edit_text", "arguments": {"changes": {"headline": {
@@ -78,6 +82,7 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft):
     assert (output / "final" / "text_price.png").read_bytes() == (folder / "text_price.png").read_bytes()
     assert next(layer["text"] for layer in load_layout(output / "final")["texts"] if layer["role"] == "price") == "18,000원"
     assert load_layout(output / "final")["design"]["styles"]["headline"]["break_after"] == 2
+    assert load_layout(output / "formats/thumbnail")["design"]["styles"]["headline"]["break_after"] == 2
     assert (output / "versions/v01/ad.png").read_bytes() == (folder / "ad.png").read_bytes()
     with Image.open(result["formats"]["thumbnail"]) as poster:
         assert poster.size == (600, 600)
@@ -134,6 +139,22 @@ def test_crops_around_subject_and_pads_when_crop_would_cut_it():
     assert protected.tobytes() == visible.tobytes()
     known = (0, 23, 50, 76)
     assert expanded.crop(known).tobytes() == padded.crop(known).tobytes()
+
+
+def test_format_delegates_new_breaks_to_copy_review():
+    styles = {"headline": {"max_lines": 2, "break_after": 1}, "product_name": {"max_lines": 2}}
+    layers = [{"role": "headline", "text": "따뜻한 빛으로 저녁을 감싸요"},
+              {"role": "product_name", "text": "세라믹 향초"}]
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            assert step == "studio_copy_break" and not images
+            return '{"headline":"따뜻한 빛으로","product_name":null}'
+
+    first_lines = {}
+    updated = studio_formats.format_styles(Agent(), styles, layers, first_lines)
+    assert updated == {"headline": {"max_lines": 2, "break_after": 2}, "product_name": {"max_lines": 1}}
+    assert studio_formats.format_styles(None, styles, layers, first_lines) == updated
 
 
 def test_import_rejects_a_draft_with_modified_price(tmp_path, draft):

@@ -1,5 +1,6 @@
 """채택한 광고의 사진을 보호하면서 게시 규격마다 글자를 다시 배치합니다."""
 
+from math import ceil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -8,8 +9,9 @@ from PIL import Image, ImageFilter, ImageOps
 
 from .creative_brief import ask_stage
 from .layers import compose, load_layout, load_settings, save_layout, to_float
-from .scene_ad import DESIGN_SCHEMA, check_text_overlap, design_layers
-from .studio_edits import foreground_mask
+from .scene_ad import check_text_overlap, design_layers
+from .studio_edits import foreground_mask, line_break_after
+from .text_render import LINE_HEIGHT, minimum_font_size
 
 
 FORMATS = {"1:1": (1024, 1024), "4:5": (864, 1080), "9:16": (1080, 1920), "16:9": (1280, 720),
@@ -20,8 +22,19 @@ approved poster and the second is the actual photo in the new frame. Keep the ne
 quiet space and the product bounds to place the exact headline, product name and price. Keep the approved
 campaign's colors and hierarchy. Pick fonts from the supplied list. Use an integer from 2 to 20 for size,
 as a percentage of the new canvas width. Group the product name and price while letting the headline lead.
-If copy needs two lines, use break_after at a natural Korean phrase boundary and keep quantities and their counters together.
-Return only a JSON object with boxes, styles and accent (an optional overlay, or null). Repair any reported overlap or fit error."""
+Return a JSON object with boxes and styles keyed by headline, product_name and price. Each box is
+[left, top, width, height] in whole percentages of the poster. Keep them inside the poster and off one another.
+Each style has font, align (left, center, or right), color (#RRGGBB), size, and max_lines (1 or 2,
+always 1 for price). Each box must be at least min_box_height_percent for its line count and needs more height
+for larger lettering. Allow enough width for any preferred_first_lines. An optional accent is null or an object
+with shape (rectangle or ellipse), box, color, and layer (overlay). Use the previous_layout and layout_error
+to repair failed boxes while keeping the parts that fit."""
+
+COPY_BREAK = """검토할 광고 문구를 두 줄에 놓을 때 자연스러운 첫 줄을 고릅니다.
+문구를 그대로 읽고 문장의 절이나 호흡이 끝나는 곳에서 나눕니다. 상품을 설명하는 수량과 단위, 이름처럼
+같이 읽어야 하는 묶음을 유지합니다. 첫 줄의 끝에 낱말을 외따로 남기지 마세요.
+문구를 고쳐 쓰지 마세요. 입력에 있는 각 역할을 키로 두고, 원래 문구에서 그대로 떼어낸 첫 줄 또는
+자연스러운 줄바꿈이 없다는 뜻의 null을 값으로 하는 JSON 객체를 반환하세요."""
 
 
 def extend_edges(photo, size):
@@ -77,6 +90,38 @@ def fill_margin(frame, margin):
     return to_image(inpaint(load_inpaint_model(), to_float(frame), margin, 1280))
 
 
+def format_styles(ai, styles, layers, first_lines):
+    if not isinstance(styles, dict):
+        return styles
+    requested = {
+        layer["role"]: layer["text"] for layer in layers
+        if layer["role"] != "price" and layer["role"] not in first_lines
+        and isinstance(styles.get(layer["role"]), dict) and styles[layer["role"]].get("max_lines") == 2
+    }
+    if requested:
+        answer = ask_stage(ai, "studio_copy_break", COPY_BREAK, requested)
+        if answer.keys() != requested.keys():
+            raise ValueError("문구마다 두 줄로 나눌 위치를 골라야 합니다")
+        for role, first_line in answer.items():
+            if first_line is not None:
+                line_break_after(requested[role], first_line)
+        first_lines.update(answer)
+    revised = styles.copy()
+    for layer in layers:
+        role = layer["role"]
+        if role not in first_lines or not isinstance(styles.get(role), dict):
+            continue
+        style = styles[role].copy()
+        style.pop("break_after", None)
+        if style.get("max_lines") == 2:
+            if first_lines[role] is None:
+                style["max_lines"] = 1
+            else:
+                style["break_after"] = line_break_after(layer["text"], first_lines[role])
+        revised[role] = style
+    return revised
+
+
 def adapt_format(source, output, format_name, ai, expand=None):
     layout = load_layout(source)
     size = FORMATS[format_name]
@@ -94,19 +139,26 @@ def adapt_format(source, output, format_name, ai, expand=None):
     fonts = load_settings()["fonts"]
     bounds = [round(100 * point / side) for point, side in zip(framing_mask.getbbox(), (*size, *size), strict=True)]
     inputs = {"size": size, "copy": copy, "fonts": list(fonts), "approved_design": design, "product_bounds": bounds}
+    line_height = minimum_font_size(size[0]) * LINE_HEIGHT
+    inputs["min_box_height_percent"] = {"one_line": ceil(100 * line_height / size[1]),
+                                        "two_lines": ceil(200 * line_height / size[1])}
+    first_lines = {layer["role"]: " ".join(layer["text"].split()[:layer["break_after"]])
+                   for layer in layout["texts"] if layer.get("break_after") is not None}
     output.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=output.parent) as temporary:
         stage = Path(temporary)
         for _ in range(2):
-            answer = ask_stage(ai, "studio_reframe", REFRAME + "\n" + DESIGN_SCHEMA, inputs, images)
-            revised = design | {"artwork_box": [0, 0, 100, 100], "boxes": answer.get("boxes"),
-                                "styles": answer.get("styles"), "accent": answer.get("accent")}
-            revised.pop("subject_box", None)
+            answer = ask_stage(ai, "studio_reframe", REFRAME, inputs | {"preferred_first_lines": first_lines}, images)
             try:
+                styles = format_styles(ai, answer.get("styles"), layout["texts"], first_lines)
+                revised = design | {"artwork_box": [0, 0, 100, 100], "boxes": answer.get("boxes"),
+                                    "styles": styles, "accent": answer.get("accent")}
+                revised.pop("subject_box", None)
                 candidate = design_layers(revised, copy, size, fonts, stage)
                 check_text_overlap(np.asarray(framing_mask) > 128, candidate, stage)
             except ValueError as error:
                 inputs["layout_error"] = str(error)
+                inputs["previous_layout"] = answer
                 continue
             framing.save(stage / candidate["artwork"]["file"])
             framing_mask.save(stage / "foreground.png")

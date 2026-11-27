@@ -21,6 +21,15 @@ def foreground_mask(folder, layout):
         return np.asarray(mask.convert("L")) > 128
 
 
+def line_break_after(text, first_line):
+    if not isinstance(first_line, str):
+        raise ValueError("첫 줄에 배치할 실제 문구를 입력하세요")
+    words, prefix = text.split(), first_line.split()
+    if not prefix or len(prefix) >= len(words) or words[:len(prefix)] != prefix:
+        raise ValueError("첫 줄은 기존 문구의 앞부분과 같아야 합니다")
+    return len(prefix)
+
+
 def change_text(stage, layout, changes):
     if not isinstance(changes, dict) or not changes or set(changes) - set(TEXT_ROLES):
         raise ValueError("제목, 상품명, 가격에서 고칠 글자 레이어를 지정하세요")
@@ -37,12 +46,7 @@ def change_text(stage, layout, changes):
         if "first_line" in change or style["max_lines"] == 1:
             style.pop("break_after", None)
         if (first_line := change.get("first_line")) is not None:
-            if not isinstance(first_line, str):
-                raise ValueError("첫 줄에 배치할 실제 문구를 입력하세요")
-            words, prefix = copy[role].split(), first_line.split()
-            if not prefix or len(prefix) >= len(words) or words[:len(prefix)] != prefix:
-                raise ValueError("첫 줄은 기존 문구의 앞부분과 같아야 합니다")
-            style.update(max_lines=2, break_after=len(prefix))
+            style.update(max_lines=2, break_after=line_break_after(copy[role], first_line))
         styles[role] = style
     revised = design | {"boxes": boxes, "styles": styles}
     texts = layout_texts(revised, copy, layout["size"], load_settings()["fonts"])

@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageOps
 
 from .creative_brief import LAYOUT_ROLES, TEXT_ROLES, ask_stage, plan_copy, required_text, validate_boxes
 from .layers import compose, cutout_product, load_layout, load_settings, save_layout, to_float
-from .text_render import render_texts
+from .text_render import minimum_font_size, render_texts
 
 
 DESIGN = """Art-direct one complete Korean campaign poster before any artwork is generated. The first image
@@ -111,7 +111,7 @@ def layout_texts(answer, copy, canvas_size, fonts):
             raise ValueError(f"{role} 글자 스타일 값이 올바르지 않습니다")
         layer = {"role": role, "text": text, "font": font, "align": align, "color": color,
                  "x": x, "y": y, "w": w, "h": h, "file": f"text_{role}.png", "max_lines": max_lines,
-                 "max_font_size": round(size * width / 100), "min_font_size": max(6, round(width * 0.02))}
+                 "max_font_size": round(size * width / 100), "min_font_size": minimum_font_size(width)}
         if break_after is not None:
             if max_lines != 2 or type(break_after) is not int or not 0 < break_after < len(text.split()):
                 raise ValueError(f"{role} 줄바꿈 위치가 올바르지 않습니다")
