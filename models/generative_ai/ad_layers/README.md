@@ -103,7 +103,7 @@ python -m models.generative_ai.ad_layers.scene_ad photos/items.json photos outpu
 
 채택 직전에 원본 상품 사진, 생성한 사진, 완성 광고를 대조합니다. 원본을 확대해 같은 자리에 놓아도 메시지가 그대로 전달된다면 시안을 보류합니다. 특징을 먼저 보이게 하는 접사, 조명, 사용 장면이나 사진과 글자가 맞물리는 표현이 실제로 보이는지 확인합니다. 휴대폰 크기로 글자 배치도 따로 봅니다. 참고 포스터를 주면 함께 비교합니다. 판단 근거는 `events.jsonl`의 `campaign_check`에 남습니다.
 
-보류된 시안을 `--draft`로 다시 열면, 포스터 이미지가 그대로일 때 앞서 확인한 문제부터 수정합니다. 이미지가 달라졌으면 새로 검토합니다.
+보류된 시안을 `--draft`로 다시 열면, 이미지와 검토 기준이 같을 때 앞서 확인한 문제부터 수정합니다. 이미지나 검토 기준이 달라지면 새로 봅니다.
 
 ```bash
 python -m models.generative_ai.ad_layers.studio 사진.png 상품.json outputs/studio \

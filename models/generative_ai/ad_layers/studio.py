@@ -111,6 +111,7 @@ Keep the exact wording. Return JSON with action, arguments (an object with only 
 and reason (Korean, briefly saying what will visibly change)."""
 
 FINDINGS = {"ready", "typography", "layout", "distraction", "product", "scene"}
+REVIEW_RULES = sha256((LOOK + CAMPAIGN_CHECK + json.dumps(TREATMENTS, sort_keys=True)).encode()).hexdigest()
 
 
 def read_image(path):
@@ -155,6 +156,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         if (isinstance(saved_review, dict) and isinstance(saved_review.get("finding"), str)
                 and saved_review["finding"] in FINDINGS and saved_review["finding"] != "ready"
                 and isinstance(saved_review.get("observation"), str) and saved_review["observation"].strip()
+                and saved_review.get("rules_hash") == REVIEW_RULES
                 and saved_review.get("image_hash") == sha256((draft / "ad.png").read_bytes()).hexdigest()):
             pending_review = saved_review
     output.mkdir(parents=True, exist_ok=False)
@@ -332,7 +334,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
     image = versions / current / "ad.png"
     if finding != "ready":
         saved = load_layout(image.parent)
-        saved["pending_review"] = {"finding": finding, "observation": observation,
+        saved["pending_review"] = {"finding": finding, "observation": observation, "rules_hash": REVIEW_RULES,
                                    "image_hash": sha256(image.read_bytes()).hexdigest()}
         save_layout(saved, image.parent)
     record("needs_review", version=current, image=image.relative_to(output).as_posix(), observation=observation)

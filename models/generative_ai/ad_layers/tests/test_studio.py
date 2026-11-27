@@ -213,6 +213,16 @@ def test_campaign_comparison_can_block_selection(tmp_path, draft, finding, obser
                                 draft=held, edit_limit=0)
     assert resumed["status"] == "needs_review" and not (tmp_path / "resumed/final").exists()
 
+    earlier_layout = load_layout(held)
+    earlier_layout["pending_review"].pop("rules_hash")
+    save_layout(earlier_layout, held)
+    after_rule_change = tmp_path / "review-after-rule-change"
+    studio.run_studio(Image.new("RGB", (100, 100)), fields, "", after_rule_change, Agent(), draft=held,
+                      references=references, edit_limit=0)
+    events = (after_rule_change / "events.jsonl").read_text(encoding="utf-8")
+    assert "campaign_check" in events and "resume_review" not in events
+
+    held = after_rule_change / "versions/v01"
     with Image.open(held / "ad.png") as poster:
         changed = poster.copy()
     changed.putpixel((0, 0), (255, 0, 0))
