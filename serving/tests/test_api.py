@@ -144,3 +144,24 @@ def test_unknown_job_and_file(client):
 def test_cors_for_screen_dev_server(client):
     r = client.options("/presets", headers={"Origin": "http://localhost:8504", "Access-Control-Request-Method": "GET"})
     assert r.headers["access-control-allow-origin"] == "http://localhost:8504"
+
+
+def main_photo_color(client, body):
+    main = client.get(body["product_photo"]["image_url"])
+    return Image.open(io.BytesIO(main.content)).convert("RGB").getpixel((0, 0))
+
+
+def test_retouched_photo_replaces_main_image(client, monkeypatch):
+    # 보정 함수가 돌려준 사진이 대표 사진이 된다 (파란색으로 표시)
+    monkeypatch.setattr(api, "retouch_photo", lambda photo: Image.new("RGB", (800, 600), (0, 0, 255)))
+    body = wait_done(client, post(client).json()["job_id"])
+    assert body["status"] == "ready" and main_photo_color(client, body) == (0, 0, 255)
+
+
+def test_retouch_failure_keeps_original_photo(client, monkeypatch):
+    def broken(photo):
+        raise RuntimeError("가짜 보정 실패")
+
+    monkeypatch.setattr(api, "retouch_photo", broken)
+    body = wait_done(client, post(client).json()["job_id"])
+    assert body["status"] == "ready" and main_photo_color(client, body) == (200, 80, 60)  # 원본 색

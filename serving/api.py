@@ -61,6 +61,21 @@ def no_angle_model(photo: Image.Image, angle: str) -> Image.Image:
 
 
 make_angle = no_angle_model  # 서버를 켤 때 모델을 불러 바꾼다. 테스트는 가짜로 바꾼다.
+retouch_photo = None  # 서버를 켤 때 보정 모델을 불러 채운다. None이면 보정 없이 원본을 쓴다.
+
+
+def load_retouch_model():
+    """보정 모델은 한 번만 불러 두고, 사진마다 함수만 부른다. 업스케일은 빼고 1024 사진에 건다(11/27 회의 결정)."""
+    from models.generative_ai.photo_retouch.retouch import load_models, retouch
+
+    started = time.perf_counter()
+    models = load_models()
+    log.info("보정 모델 불러오기 %.1f초", time.perf_counter() - started)
+
+    def run(photo):
+        return retouch(photo, models)["image"]
+
+    return run
 
 
 def load_angle_model():
@@ -105,7 +120,13 @@ def run_job(job_id: str) -> None:
     folder = OUTPUT_DIR / job_id
     photo = Image.open(folder / "input.png")
     post = job["product_photo"]
-    photo.save(folder / "product_photo.png")  # ponytail: 보정 전 원본. 보정(PR #9) 연결은 별도 티켓.
+    shown = photo  # 대표 사진만 보정한다. 각도 사진은 보정 전 원본으로 만든다.
+    if retouch_photo is not None:
+        try:
+            shown = retouch_photo(photo)
+        except Exception:
+            log.exception("%s 보정 실패, 원본을 씁니다", job_id)
+    shown.save(folder / "product_photo.png")
     post["image_url"] = file_url(job_id, "product_photo.png")
 
     for angle in job["angles"]:
@@ -264,4 +285,9 @@ if __name__ == "__main__":
     if not args.no_models:
         # 요청을 받기 전에 불러온다. 실패하면 여기서 멈춰서, 모든 각도가 조용히 실패하는 서버가 뜨지 않는다.
         make_angle = load_angle_model()
+        try:
+            retouch_photo = load_retouch_model()
+        except Exception:
+            # 보정은 없어도 되는 기능이라 실패해도 서버는 켠다. 대표 사진은 원본으로 나간다(단비님 리뷰 반영).
+            log.exception("보정 모델을 불러오지 못했습니다. 보정 없이 켭니다.")
     uvicorn.run(create_app(), host="127.0.0.1", port=args.port)
