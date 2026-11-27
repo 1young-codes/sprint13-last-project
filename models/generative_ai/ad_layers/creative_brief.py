@@ -11,7 +11,9 @@ from ..photo_retouch.interpret import Interpreter, parse_json
 from .layers import to_float
 
 MODEL = "gpt-6-luna"
-LAYOUT_ROLES = ("product", "headline", "product_name", "price")
+TEXT_ROLES = ("headline", "product_name", "price")
+LAYOUT_ROLES = ("product", *TEXT_ROLES)
+COPY_SPACES = ("top", "bottom", "left", "right")
 MAX_HEADLINE_LENGTH = 24
 
 PLANNING = """You handle the ad strategy. Decide on one message for this product.
@@ -24,6 +26,13 @@ Use the photo to identify the product features to retain and emphasize. Choose t
 lighting direction, palette and product detail that makes the agreed message visible. Change the background
 when it serves that message. Describe the intended scene, leaving placement decisions to the layout stage.
 Return only JSON with one English string, "scene". Do not write ad copy."""
+
+SCENE_DIRECTION = """You direct the artwork for one Korean ad. Use the photo, the agreed message and the seller's idea.
+Choose one visual idea that expresses the message through the product, lighting, color and scale. Say what
+deserves attention first. Keep the product recognizable, including existing labels, packaging and identifying details.
+Choose a quiet strip wide enough for ad lettering, with even lighting and no props or product details inside it.
+Return JSON with "scene" (English, describing the concept, photography, palette and framing without ad copy),
+"focus" (one of product, headline, product_name, price) and "copy_space" (one of top, bottom, left, right)."""
 
 COPY = f"""You write the headline. Express the agreed message as one short, natural Korean campaign line
 of at most {MAX_HEADLINE_LENGTH} characters including spaces. Give one memorable phrase or a short sentence.
@@ -57,10 +66,9 @@ def required_text(answer, key, step):
     return value.strip()
 
 
-def layout_boxes(answer):
-    boxes = answer.get("boxes")
-    if not isinstance(boxes, dict) or boxes.keys() != set(LAYOUT_ROLES):
-        raise ValueError("레이아웃에 제품, 제목, 상품명, 가격 위치가 모두 필요합니다")
+def validate_boxes(boxes, roles):
+    if not isinstance(boxes, dict) or boxes.keys() != set(roles):
+        raise ValueError("레이아웃에 지정된 항목의 위치가 모두 필요합니다")
     for role, coordinates in boxes.items():
         if (not isinstance(coordinates, list) or len(coordinates) != 4
                 or any(type(value) is not int for value in coordinates)):
@@ -71,35 +79,48 @@ def layout_boxes(answer):
     for (first, (x, y, width, height)), (second, (left, top, w, h)) in combinations(boxes.items(), 2):
         if max(x, left) < min(x + width, left + w) and max(y, top) < min(y + height, top + h):
             raise ValueError(f"레이아웃의 {first}, {second} 영역이 겹쳤습니다")
+    return boxes
+
+
+def layout_boxes(answer):
+    boxes = validate_boxes(answer.get("boxes"), LAYOUT_ROLES)
     order = answer.get("reading_order")
     if not isinstance(order, list) or len(order) != len(LAYOUT_ROLES) or any(order.count(role) != 1 for role in LAYOUT_ROLES):
         raise ValueError("레이아웃의 읽는 순서에 제품, 제목, 상품명, 가격이 각각 한 번씩 필요합니다")
     return {"boxes": boxes, "reading_order": order, "typography": required_text(answer, "typography", "레이아웃")}
 
 
-def brainstorm(ai, photo, fields, idea, price):
+def plan_copy(ai, photo, fields, idea, *, scene_first=False):
     inputs = {key: fields[key] for key in ("product_name", "unit", "usage_example", "notes") if key in fields}
     photo_inputs = [to_float(photo)]
     strategy = ask_stage(ai, "ad_plan", PLANNING, inputs | {"owner_idea": idea}, photo_inputs)
     plan = {key: required_text(strategy, key, "기획") for key in ("message", "evidence")}
 
-    direction = ask_stage(ai, "ad_direction", DIRECTION, inputs | {"idea": idea, "plan": plan}, photo_inputs)
+    direction = ask_stage(ai, "ad_direction", SCENE_DIRECTION if scene_first else DIRECTION,
+                          inputs | {"idea": idea, "plan": plan}, photo_inputs)
     scene = required_text(direction, "scene", "연출")
+    if scene_first:
+        if direction.get("focus") not in LAYOUT_ROLES or direction.get("copy_space") not in COPY_SPACES:
+            raise ValueError("연출 단계에서 강조할 항목과 글자 여백 방향이 필요합니다")
+        plan |= {"focus": direction["focus"], "copy_space": direction["copy_space"]}
 
     writing = ask_stage(ai, "ad_headline", COPY, inputs | {"plan": plan, "scene": scene})
     headline = " ".join(required_text(writing, "headline", "문구").split())
     if len(headline) > MAX_HEADLINE_LENGTH:
         raise ValueError(f"문구 단계에서 제목이 {MAX_HEADLINE_LENGTH}자를 넘겼습니다")
+    return plan | {"scene": scene, "headline": headline}
 
-    copy = {"headline": headline, "product_name": fields["product_name"], "price": price}
-    layout_input = {"scene": scene, "message": plan["message"], "copy": copy}
+def brainstorm(ai, photo, fields, idea, price):
+    plan = plan_copy(ai, photo, fields, idea)
+    copy = {"headline": plan["headline"], "product_name": fields["product_name"], "price": price}
+    layout_input = {"scene": plan["scene"], "message": plan["message"], "copy": copy}
     layout = ask_stage(ai, "ad_layout", LAYOUT, layout_input)
     try:
         placement = layout_boxes(layout)
     except ValueError as error:
         retry_input = layout_input | {"rejected_boxes": layout.get("boxes"), "layout_error": str(error)}
         placement = layout_boxes(ask_stage(ai, "ad_layout", LAYOUT, retry_input))
-    return plan | {"scene": scene, "headline": headline} | placement
+    return plan | placement
 
 
 def describe_position(box):

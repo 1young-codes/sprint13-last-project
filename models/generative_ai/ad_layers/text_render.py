@@ -13,17 +13,23 @@ from .layers import PROJECT_ROOT, load_settings
 FONT_HOST = "http://fonts.local/"  # 브라우저가 이 주소로 폰트를 요청하면 내려받아 둔 파일로 답합니다
 
 FIT_SCRIPT = """() => {
+  const failed = [];
   for (const el of document.querySelectorAll('.t')) {
     const w = el.clientWidth, h = el.clientHeight;
+    const minSize = Number(el.dataset.minFontSize || 6);
     const text = document.createRange();
-    text.selectNodeContents(el);
+    text.selectNodeContents(el.firstElementChild);
+    const fits = () => text.getBoundingClientRect().width <= w && el.scrollHeight <= h &&
+      text.getClientRects().length <= Number(el.dataset.maxLines);
     let size = Math.min(Math.floor(h * 0.9), Number(el.dataset.maxFontSize));
     el.style.fontSize = size + 'px';
-    while ((text.getBoundingClientRect().width > w || el.scrollHeight > h) && size > 6) {
+    while (!fits() && size > minSize) {
       size -= 1;
       el.style.fontSize = size + 'px';
     }
+    if (el.dataset.minFontSize && (size < minSize || !fits())) failed.push(el.id);
   }
+  return failed;
 }"""
 
 
@@ -43,15 +49,23 @@ def page_html(texts: list[dict], size: tuple[int, int]) -> str:
     faces = "".join(f"@font-face {{ font-family: '{font['file']}'; src: url('{FONT_HOST}{font['file']}'); "
                     f"font-weight: 100 900; }}" for font in {fonts[t['font']]['file']: fonts[t['font']]
                                                             for t in texts}.values())
-    boxes = "".join(
-        f"<div class='t' id='t{i}' data-max-font-size='{t.get('max_font_size', t['h'])}' "
-        f"style='left:{t['x']}px; top:{t['y']}px; width:{t['w']}px; height:{t['h']}px; "
-        f"font-family:\"{fonts[t['font']]['file']}\"; font-weight:{fonts[t['font']]['weight']}; color:{t['color']}'>"
-        f"{html.escape(t['text'])}</div>" for i, t in enumerate(texts))
+    boxes = []
+    for i, t in enumerate(texts):
+        align = t.get("align", "center")
+        justify = {"left": "flex-start", "center": "center", "right": "flex-end"}[align]
+        max_lines = t.get("max_lines", 1)
+        flow = "nowrap" if max_lines == 1 else "normal"
+        boxes.append(
+            f"<div class='t' id='t{i}' data-max-font-size='{t.get('max_font_size', t['h'])}' "
+            f"data-min-font-size='{t.get('min_font_size', '')}' data-max-lines='{max_lines}' "
+            f"style='left:{t['x']}px; top:{t['y']}px; width:{t['w']}px; height:{t['h']}px; "
+            f"font-family:\"{fonts[t['font']]['file']}\"; font-weight:{fonts[t['font']]['weight']}; color:{t['color']}; "
+            f"justify-content:{justify}; text-align:{align}; white-space:{flow}'>"
+            f"<span>{html.escape(t['text'])}</span></div>")
     return (f"<html><head><style>{faces} html, body {{ margin: 0; background: transparent; width: {size[0]}px; "
             f"height: {size[1]}px; }} .t {{ position: absolute; display: flex; align-items: center; "
-            f"justify-content: center; white-space: nowrap; line-height: 1.15; overflow: hidden; }}</style></head>"
-            f"<body>{boxes}</body></html>")
+            f"line-height: 1.15; overflow: hidden; }} .t span {{ max-width: 100%; word-break: keep-all; }}"
+            f"</style></head><body>{''.join(boxes)}</body></html>")
 
 
 def render_texts(texts: list[dict], size: tuple[int, int], folder: Path) -> None:
@@ -69,7 +83,10 @@ def render_texts(texts: list[dict], size: tuple[int, int], folder: Path) -> None
             headers={"Access-Control-Allow-Origin": "*", "Content-Type": "font/ttf"}))
         page.set_content(page_html(texts, size))
         page.evaluate("document.fonts.ready.then(() => true)")
-        page.evaluate(FIT_SCRIPT)
+        failed = page.evaluate(FIT_SCRIPT)
+        if failed:
+            roles = ", ".join(texts[int(element[1:])]["role"] for element in failed)
+            raise ValueError(f"글자 크기와 줄 수를 유지할 공간이 부족합니다 ({roles})")
         for i, text in enumerate(texts):
             (folder / text["file"]).write_bytes(page.locator(f"#t{i}").screenshot(omit_background=True))
         browser.close()
