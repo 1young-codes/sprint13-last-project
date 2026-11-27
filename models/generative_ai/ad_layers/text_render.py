@@ -5,6 +5,7 @@
 """
 
 import html
+import re
 import urllib.request
 from pathlib import Path
 
@@ -20,7 +21,7 @@ FIT_SCRIPT = """() => {
     const text = document.createRange();
     text.selectNodeContents(el.firstElementChild);
     const fits = () => text.getBoundingClientRect().width <= w && el.scrollHeight <= h &&
-      text.getClientRects().length <= Number(el.dataset.maxLines);
+      Array.from(text.getClientRects()).filter(rect => rect.width > 0).length <= Number(el.dataset.maxLines);
     let size = Math.min(Math.floor(h * 0.9), Number(el.dataset.maxFontSize));
     el.style.fontSize = size + 'px';
     while (!fits() && size > minSize) {
@@ -54,14 +55,22 @@ def page_html(texts: list[dict], size: tuple[int, int]) -> str:
         align = t.get("align", "center")
         justify = {"left": "flex-start", "center": "center", "right": "flex-end"}[align]
         max_lines = t.get("max_lines", 1)
+        break_after = t.get("break_after")
         flow = "nowrap" if max_lines == 1 else "normal"
+        copy = html.escape(t["text"])
+        if max_lines == 2 and type(break_after) is int:
+            words = list(re.finditer(r"\S+", t["text"]))
+            if 0 < break_after < len(words):
+                end, start = words[break_after - 1].end(), words[break_after].start()
+                copy = html.escape(t["text"][:end]) + "<br>" + html.escape(t["text"][start:])
+                flow = "nowrap"
         boxes.append(
             f"<div class='t' id='t{i}' data-max-font-size='{t.get('max_font_size', t['h'])}' "
             f"data-min-font-size='{t.get('min_font_size', '')}' data-max-lines='{max_lines}' "
             f"style='left:{t['x']}px; top:{t['y']}px; width:{t['w']}px; height:{t['h']}px; "
             f"font-family:\"{fonts[t['font']]['file']}\"; font-weight:{fonts[t['font']]['weight']}; color:{t['color']}; "
             f"justify-content:{justify}; text-align:{align}; white-space:{flow}'>"
-            f"<span>{html.escape(t['text'])}</span></div>")
+            f"<span>{copy}</span></div>")
     return (f"<html><head><style>{faces} html, body {{ margin: 0; background: transparent; width: {size[0]}px; "
             f"height: {size[1]}px; }} .t {{ position: absolute; display: flex; align-items: center; "
             f"line-height: 1.15; overflow: hidden; }} .t span {{ max-width: 100%; word-break: keep-all; }}"
