@@ -1,8 +1,8 @@
 """Qwen-Image 2.1 이미지 편집 모델을 INT8 가중치로 불러와 실행합니다 (그래픽 카드 필요, ComfyUI 없이 diffusers만 사용).
 
 ai-generation 프로젝트의 backend/studio/engine/qwen21.py와 qwen21_vae.py를 옮겼습니다.
-원래 코드는 10GB 그래픽 카드용으로 블록 단위 오프로드를 썼지만, 여기서는 L4(24GB)에 맞춰
-생성 모델(약 6.8GB)과 VAE는 그래픽 카드에 올려 두고, 문장 인코더(약 8.8GB)만 쓸 때 올렸다가 내립니다.
+기본 실행은 L4(24GB)에 맞춰 생성 모델(약 6.8GB)과 VAE를 그래픽 카드에 둡니다.
+저메모리 실행에서는 문장 인코더와 생성 모델에서 계산할 부분만 그래픽 카드에 올립니다.
 
 샘플링 설정은 원본 예제 작업 흐름과 같습니다: Euler, simple 시그마(shift 0.69), CFG 1, 참고 해상도 0.
 """
@@ -144,7 +144,7 @@ def load_vae(folder: Path):
     return vae.eval().requires_grad_(False).to(DEVICE)
 
 
-def load_transformer(folder: Path):
+def load_transformer(folder: Path, device: str = DEVICE):
     from accelerate import init_empty_weights
     from diffusers import QwenImage21Transformer2DModel
 
@@ -157,7 +157,7 @@ def load_transformer(folder: Path):
     path = model_file("qwen_transformer")
     header = read_safetensors_header(path)
     names = {key: key for key in header if key != ".comfy_attention.config"}
-    load_weights_into_empty_model(model, path, check_names(model, header, names), DEVICE)
+    load_weights_into_empty_model(model, path, check_names(model, header, names), device)
     return model.eval().requires_grad_(False)
 
 
@@ -198,19 +198,20 @@ def load_text_encoder(folder: Path):
 class QwenImageModel:
     """한 번 불러와 여러 번 씁니다. edit()은 이미지 한 장, edit_with_reference()는 참고 이미지와 함께 편집합니다."""
 
-    def __init__(self, ratios_file: Path | None = None):
+    def __init__(self, ratios_file: Path | None = None, *, low_vram: bool = False):
         """ratios_file: MagCache 크기 비율 파일 (qwen_image_caching/mag_cache.py 참고). 없으면 모든 단계를 계산합니다."""
         from diffusers import FlowMatchEulerDiscreteScheduler, QwenImage21Pipeline
         from transformers import Qwen3VLProcessor
 
         folder = model_folder("qwen_configs")  # 파일이 없으면 여기서 받는 방법을 알려 주는 오류가 납니다
         self.text_encoder = load_text_encoder(folder)
+        self.low_vram = low_vram
         # 원본 예제의 simple 시그마를 그대로 넘기므로 diffusers가 한 번 더 이동시키지 않게 합니다
         scheduler = FlowMatchEulerDiscreteScheduler(shift=1, use_dynamic_shifting=False, shift_terminal=None)
         self.pipe = QwenImage21Pipeline(scheduler=scheduler, vae=load_vae(folder), text_encoder=None,
                                         processor=Qwen3VLProcessor.from_pretrained(folder / "processor",
                                                                                    local_files_only=True),
-                                        transformer=load_transformer(folder))
+                                        transformer=load_transformer(folder, "cpu" if low_vram else DEVICE))
         self.current_lora = None
         register_qwen21_blocks()
         self.ratios = load_ratios(ratios_file)
@@ -218,13 +219,24 @@ class QwenImageModel:
         self.calibration: dict[str, list[list[float]]] | None = None
         encode_prompt = self.pipe.encode_prompt
 
+        if low_vram:
+            from accelerate import cpu_offload
+            from diffusers.hooks import apply_group_offloading
+
+            # 인코더의 원본 가중치는 파일 매핑으로 유지하고 생성 모델은 블록 단위로 옮깁니다.
+            cpu_offload(self.text_encoder, torch.device(DEVICE))
+            apply_group_offloading(self.pipe.transformer, onload_device=torch.device(DEVICE),
+                                   offload_type="block_level", num_blocks_per_group=1,
+                                   use_stream=True, record_stream=True, low_cpu_mem_usage=True)
+
         def encode_on_gpu(*args, **kwargs):
-            self.pipe.text_encoder = self.text_encoder.to(DEVICE)
+            self.pipe.text_encoder = self.text_encoder if low_vram else self.text_encoder.to(DEVICE)
             try:
                 return encode_prompt(*args, **kwargs)
             finally:
                 self.pipe.text_encoder = None
-                self.text_encoder.to("cpu")
+                if not low_vram:
+                    self.text_encoder.to("cpu")
                 gc.collect()
                 torch.cuda.empty_cache()
 
@@ -253,7 +265,7 @@ class QwenImageModel:
     def reuse_condition_cache(self) -> bool:
         """글자와 참고 이미지 부분은 단계마다 같으므로 첫 단계에서 계산해 두고 재사용합니다 (결과는 같음).
         크기 비율을 잴 때는 늘 켭니다: 둘째 단계부터 결과 토큰만 비교해야 비율이 맞습니다."""
-        return self.calibration is not None or cache_settings()["reuse_condition_cache"]
+        return self.calibration is not None or (not self.low_vram and cache_settings()["reuse_condition_cache"])
 
     @torch.inference_mode()
     def edit(self, image: Image.Image, prompt: str, seed: int, steps: int) -> Image.Image:

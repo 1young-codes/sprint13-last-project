@@ -252,13 +252,14 @@ def main():
     parser.add_argument("--references", nargs="+", type=Path, default=[], metavar="PHOTO", help="포스터 구도 참고 이미지")
     parser.add_argument("--preview", action="store_true", help="원본 사진으로 구도 시안 만들기")
     parser.add_argument("--designs", type=Path, help="상품별로 저장된 구도 시안을 그대로 사용하기")
+    parser.add_argument("--low-vram", action="store_true", help="가중치를 나눠 올려 그래픽 메모리를 절약하기")
     args = parser.parse_args()
     items = json.loads(args.items.read_text(encoding="utf-8"))
     references = []
     for path in args.references:
         with Image.open(path) as source:
             references.append(ImageOps.exif_transpose(source).convert("RGB"))
-    models = {"ai": Interpreter()} if args.preview else load_models()
+    models = {"ai": Interpreter()} if args.preview else load_models(low_vram=args.low_vram)
     for index, item in enumerate(items, 1):
         reference = Path(item["file"])
         folder = args.output / f"{index:02d}_{reference.stem}"

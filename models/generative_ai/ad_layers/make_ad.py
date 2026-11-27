@@ -25,14 +25,14 @@ from .layers import (PROJECT_ROOT, compose, contact_shadow, load_layout, load_se
 from .text_render import render_texts
 
 
-def load_models() -> dict:
+def load_models(*, low_vram: bool = False) -> dict:
     """한 번만 부릅니다: 생성 모델(Qwen-Image-2.1), 제품 마스크(BiRefNet), 언어모델(OpenAI)."""
     from ..fast_image_generation.qwen_image_model import QwenImageModel
     from ..photo_retouch.interpret import Interpreter
     from ..photo_retouch.product_mask import load_mask_model
 
     # ponytail: MagCache 비율 없이 모든 단계를 계산합니다. 속도가 필요하면 광고 사진으로 비율을 재서 넘깁니다.
-    return {"generation": QwenImageModel(), "mask": load_mask_model(), "ai": Interpreter()}
+    return {"generation": QwenImageModel(low_vram=low_vram), "mask": load_mask_model(), "ai": Interpreter()}
 
 
 def make_ad(photo: Image.Image, fields: dict, mood_key: str, idea: str, models: dict, folder: Path,

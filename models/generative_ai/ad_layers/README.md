@@ -70,6 +70,20 @@ python -m models.generative_ai.ad_layers.make_ad --recompose outputs/scene_ads/0
 
 입력 목록은 아래 모델 비교의 상품 목록 형식과 같습니다. 결과에는 색면이 있는 `background.png`, 정해진 영역에 놓이는 `scene.png`, 제목·상품명·가격 레이어, `layout.json`, 합친 `ad.png`가 저장됩니다. `layout.json`에서 문구와 위치를 수정한 뒤 글자 레이어를 다시 그릴 수 있습니다. 제품을 장면에서 분리해 이동할 때는 위의 `make_ad` 실행 경로를 사용합니다.
 
+### 로컬에서 구도 반복 검토하기
+
+WSL 2에서 `HF_HOME`을 SSD에 있는 리눅스 파일시스템 경로로 지정합니다. 모델을 받은 뒤, 저장된 시안을 다시 생성할 때 `--low-vram`을 붙이면 필요한 가중치 블록만 그래픽 카드로 옮깁니다.
+
+```bash
+export HF_HOME="$HOME/.local/share/ad-layers/hf_cache"
+python -m models.generative_ai.fast_image_generation.model_files
+python -m models.generative_ai.photo_retouch.download_models product_mask
+python -m models.generative_ai.ad_layers.scene_ad photos/items.json photos outputs/local_ads \
+    --designs outputs/poster_previews --low-vram
+```
+
+도커로 실행할 때는 `docker build --target ad-layers -t sprint13-ad-layers .`로 브라우저까지 설치한 이미지를 만듭니다. 컨테이너에 `--gpus all`을 주고, SSD의 캐시를 `/data/models/hf_cache`에 연결해 같은 가중치를 사용합니다.
+
 ## 아직 하지 않은 것
 
 - 다른 크기(4:5, 9:16, 쇼핑몰 썸네일, 16:9)로 바꾸기. 지금은 정사각형 1024×1024 한 가지입니다.
