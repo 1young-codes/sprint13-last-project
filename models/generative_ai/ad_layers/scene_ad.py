@@ -48,7 +48,7 @@ Keep text boxes
 inside the canvas, off one another, and large enough for the supplied copy. Text may overlap the artwork box
 only where you plan quiet background. Group related text by alignment and use sufficient contrast.
 For each style return "font" (one of the supplied fonts), "align" (left, center, right), "color" (#RRGGBB),
-"size" (intended font size as an integer percentage of canvas width), and "max_lines" (1 or 2 for the
+"size" (intended font size as a percentage of canvas width), and "max_lines" (1 or 2 for the
 headline or product_name, 1 for price). If two lines are intentional, set "break_after" to the number of
 space-separated words on the first line. Keep Korean phrases, quantities and product names intact at the
 break. For the headline only, optionally set "depth" to "behind_subject" when the contour of the foreground
@@ -85,8 +85,12 @@ the product rather than letting all the type drift into a distant corner.
 When the approved image and headline still feel like separate columns, consider whether one larger headline
 can share the subject's axis or tuck behind a small part of its outline. Use depth only when it adds that relation.
 Match the lettering to the visual mood and keep any confirmed line breaks. Use the supplied wording exactly.
-Return JSON with a concrete Korean reason and revision (null or an object with boxes, styles or accent per
-the design schema). Fix any reported validation error. Use null when the composition already works."""
+Return one JSON object with exactly two keys: reason (a concrete Korean sentence) and revision. A revision
+contains only boxes, styles, or accent in the same form as the supplied design. Each of boxes and styles,
+if changed, must include headline, product_name and price. Boxes are [left, top, width, height] in whole
+percentages. Their rectangles must not intersect. The end of one stacked box must be at or before the next
+box's top. Use depth only for the value behind_subject and omit it to put type in front. Fix any reported
+layout_error using the actual photograph. Return revision: null only when the layout works and layout_error is null."""
 
 CRITIQUE = """The first image is the previous finished ad, the second is the source product, and the rest are
 design references. Identify the most consequential visible weakness of the ad that changing the photograph
@@ -135,14 +139,14 @@ def layout_texts(answer, copy, canvas_size, fonts):
         size, max_lines, break_after = (style.get(key) for key in ("size", "max_lines", "break_after"))
         if (font not in tuple(fonts) or align not in ("left", "center", "right")
                 or not is_color(color)
-                or type(size) is not int or not 2 <= size <= 20
+                or type(size) not in (int, float) or not 2 <= size <= 20
                 or type(max_lines) is not int or not 1 <= max_lines <= (1 if role == "price" else 2)):
             raise ValueError(f"{role} 글자 스타일 값이 올바르지 않습니다")
         layer = {"role": role, "text": text, "font": font, "align": align, "color": color,
                  "x": x, "y": y, "w": w, "h": h, "file": f"text_{role}.png", "max_lines": max_lines,
                  "max_font_size": round(size * width / 100), "min_font_size": minimum_font_size(width)}
         depth = style.get("depth")
-        if depth is not None:
+        if depth not in (None, "front"):
             if role != "headline" or depth != "behind_subject":
                 raise ValueError("제품 뒤에 걸 수 있는 글자는 제목뿐입니다")
             layer["depth"] = depth
@@ -348,24 +352,29 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
          artwork["y"] + rows.max() + 1), (*size, *size), strict=True)]
     inputs = design_input | {"design": answer, "product_bounds_left_top_right_bottom": placement,
                              "layout_error": original_error}
-    if assess_composition:
-        ink_bounds = {}
-        for text in layout["texts"]:
-            with Image.open(folder / text["file"]) as image:
-                bounds = image.getchannel("A").getbbox()
-            if bounds:
-                ink_bounds[text["role"]] = [
-                    round(100 * (edge + offset) / side)
-                    for edge, offset, side in zip(bounds, (text["x"], text["y"]) * 2, size * 2, strict=True)
-                ]
-        inputs["rendered_text_bounds"] = ink_bounds
+    ink_bounds = {}
+    for text in layout["texts"]:
+        with Image.open(folder / text["file"]) as image:
+            bounds = image.getchannel("A").getbbox()
+        if bounds:
+            ink_bounds[text["role"]] = [
+                round(100 * (edge + offset) / side)
+                for edge, offset, side in zip(bounds, (text["x"], text["y"]) * 2, size * 2, strict=True)
+            ]
+    inputs["rendered_text_bounds"] = ink_bounds
+    editable = ("boxes", "styles", "accent")
     for _ in range(2):
-        review = ask_stage(ai, "ad_final_layout", FINAL_REVIEW + "\n" + DESIGN_SCHEMA, inputs,
+        review = ask_stage(ai, "ad_final_layout", FINAL_REVIEW, inputs,
                            [to_float(first), to_float(scene), *references])
         revision = review.get("revision")
+        if "revision" not in review:
+            revision = {key: review[key] for key in editable if key in review} or None
         if not isinstance(revision, dict):
-            break
-        revised = answer | {key: revision[key] for key in ("boxes", "styles", "accent") if key in revision}
+            if original_error is None:
+                break
+            inputs["layout_error"] = f"{original_error}. 제출한 배치 수정이 빠졌습니다."
+            continue
+        revised = answer | {key: revision[key] for key in editable if key in revision}
         if keep_wrap and isinstance(revised["styles"], dict):
             styles = {}
             for role, style in revised["styles"].items():
@@ -376,7 +385,10 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                 styles[role] = style
             revised["styles"] = styles
         if revised == answer:
-            break
+            if original_error is None:
+                break
+            inputs["layout_error"] = f"{original_error}. 이전과 같은 배치입니다."
+            continue
         with TemporaryDirectory(dir=folder) as staging:
             candidate = Path(staging)
             try:

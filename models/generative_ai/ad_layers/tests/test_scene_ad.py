@@ -82,8 +82,17 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 return '{"choice":"original","reason":"기존 위치에서 제목이 더 자연스럽게 읽힙니다"}'
             if step == "ad_final_layout":
                 assert len(images) == 3 and images[1][0, 0, 2] == 1
-                assert "product_name 글자 레이어가 실제 제품을 가립니다" in prompt
+                data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
+                assert "product_name 글자 레이어가 실제 제품을 가립니다" in data["layout_error"]
+                assert set(data["rendered_text_bounds"]) == {"headline", "product_name", "price"}
                 boxes = {"headline": [55, 10, 40, 30], "product_name": [55, 45, 40, 15], "price": [55, 65, 40, 15]}
+                if expect_correction:
+                    if calls.count(step) == 1:
+                        return '{"revision":null}'
+                    assert "배치 수정이 빠졌습니다" in data["layout_error"]
+                    revised = data["design"] | {"boxes": boxes, "accent": None, "artwork_box": [0, 0, 100, 100]}
+                    revised["styles"]["headline"].update(size=6.3, depth="front")
+                    return json.dumps(revised)
                 return json.dumps({"reason": "상품명을 제품 옆으로 이동", "revision": {"boxes": boxes, "accent": None}})
             assert step == "ad_layout" and images[0][0, 0, 2] == 0
             assert len(images) == (3 if expect_correction else 2)
@@ -166,6 +175,10 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     assert targeted["revision"]["requested_scene_change"] == correction
     assert correction not in targeted["design"]["art_direction"] and correction in targeted["scene_prompt"]
     assert targeted["brief"]["headline"] == layout["brief"]["headline"]
+    assert calls.count("ad_final_layout") == 2 and calls.count("qwen") == 1
+    assert targeted["artwork"] == layout["artwork"]
+    headline = next(text for text in targeted["texts"] if text["role"] == "headline")
+    assert headline["max_font_size"] == 65 and "depth" not in headline
 
 
 def test_type_can_extend_over_photo_but_not_over_product(tmp_path):
