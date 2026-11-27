@@ -34,7 +34,18 @@ Check which placement gives the headline and supporting copy one useful quiet ar
 and keeps the scene anchored. Avoid distributing space into two large unused strips. Prefer extending
 an already simple part of the scene over extending furniture, hard edges, or important props.
 Keep every visible product and retain the campaign's visual focus. Return JSON with position from
-position_order and reason as one concrete Korean sentence about the intended composition."""
+position_order and reason as one concrete Korean sentence about the intended composition. When photo_cue is
+provided, keep the complete physical action and the part of any hand or support making contact visible.
+In a same-size repair, prefer a framing that makes the actual product more prominent and leaves coherent
+space for the headline and offer near the advertised feature."""
+
+CUE_CROP = """The first image is the actual photograph and the second is its current poster. Identify the
+smallest rectangle containing all visible parts of the merchandise and the complete physical action in
+photo_cue. Include the contact and support that make the action believable, such as fingers where they grip.
+Exclude empty background or an incidental limb beyond its supporting contact. Preserve the actual product's
+silhouette, label, and parts that already appear in the photograph. Return JSON with protected_box as
+[left, top, width, height] in whole percentages of the first image, or null if there is no removable perimeter,
+and observation as one Korean sentence naming what must remain visible."""
 
 MARGIN_CHECK = """Review the newly filled margins of a reframed product photo. The first image is the actual
 filled photograph; the second shows the same photograph with only stretched preview margins. photo_bounds
@@ -106,7 +117,8 @@ the product. Also use outer_margins to inspect the actual space outside the prod
 An offer stranded apart from the headline and advertised detail is a layout defect even when every word is
 legible by itself. Give the specific gap or missing visual connection in the observation.
 If intent describes a same-size repair, check that the photographed feature is more legible and the
-unused region visibly shrank in the second image.
+unused region visibly shrank in the second image. Verify any requested relative position of the product and
+copy in the rendered result. Report layout if the wording missed its requested position and the photo can stay.
 If photo_cue is provided, find that physical relationship or effect in the reframed photo. Use photo when
 the crop has removed it and a new composition is required to show it again.
 Read the long axis from edge to edge. An enlarged stretch of featureless wall, floor or surface has no
@@ -265,23 +277,43 @@ def fit_crop(photo, mask, box, size, keep_clearance, check_margin):
     return filled, visible
 
 
-def frame_photo(photo, mask, size, expand=None, choose_position=None, check_margin=None, *, keep_clearance=False):
+def frame_photo(photo, mask, size, expand=None, choose_position=None, check_margin=None, *, keep_clearance=False,
+                protected_box=None):
     width, height = photo.size
     target_width, target_height = size
     ratio = target_width / target_height
     crop_width, crop_height = min(width, round(height * ratio)), min(height, round(width / ratio))
-    left, top, right, bottom = mask.getbbox()
+    left, top, right, bottom = protected_box or mask.getbbox()
     padding = round(min(width, height) * 0.04)
     left, top = max(0, left - padding), max(0, top - padding)
     right, bottom = min(width, right + padding), min(height, bottom + padding)
     fits = right - left <= crop_width and bottom - top <= crop_height
     if not fits:
+        if protected_box is not None:
+            return frame_photo(photo, mask, size, expand, choose_position, check_margin, keep_clearance=keep_clearance)
         crop_width = max(crop_width, right - left)
         crop_height = max(crop_height, bottom - top)
     x = min(left, width - crop_width, max(0, right - crop_width, (width - crop_width) // 2))
     y = min(top, height - crop_height, max(0, bottom - crop_height, (height - crop_height) // 2))
     bounds = (x, y, x + crop_width, y + crop_height)
     if fits:
+        if protected_box is not None and choose_position is not None:
+            min_x, max_x = max(0, right - crop_width), min(left, width - crop_width)
+            min_y, max_y = max(0, bottom - crop_height), min(top, height - crop_height)
+            if max(max_x - min_x, max_y - min_y) >= min(width, height) * 0.06:
+                origins = {"start": (min_x, min_y), "center": (x, y), "end": (max_x, max_y)}
+                seen = set()
+                choices = {}
+                for name, (px, py) in origins.items():
+                    if (px, py) not in seen:
+                        crop = (px, py, px + crop_width, py + crop_height)
+                        choices[name] = fit_crop(photo, mask, crop, size, False, check_margin)
+                        seen.add((px, py))
+                selected = choose_position({name: pair[0] for name, pair in choices.items()},
+                                           {name: pair[1] for name, pair in choices.items()})
+                if not isinstance(selected, str) or selected not in choices:
+                    raise ValueError("촬영 연출을 유지할 사진 위치를 고르지 못했습니다")
+                return choices[selected]
         return fit_crop(photo, mask, bounds, size, keep_clearance, check_margin)
     photo, mask = photo.crop(bounds), mask.crop(bounds)
     contained = ImageOps.contain(photo, size, Image.Resampling.LANCZOS)
@@ -572,6 +604,21 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
     copy = {item["role"]: item["text"] for item in layout["texts"]}
     position_info = {}
     dimensions = format_measurements(layout, size)
+    photo_cue = layout.get("photo_cue")
+    protected_box = None
+    needs_crop = photo.width * size[1] != photo.height * size[0]
+    if needs_crop and photo_cue and design["crop"] == "intentional":
+        plan = ask_stage(ai, "studio_format_cue_crop", CUE_CROP,
+                         {"photo_cue": photo_cue, "intent": intent, "size": size}, [to_float(photo), reference])
+        bounds = round_box_edges(plan.get("protected_box"))
+        try:
+            bounds = validate_boxes({"photo": bounds}, ("photo",))["photo"]
+        except ValueError:
+            pass
+        else:
+            x, y, width, height = pixel_box(bounds, photo.size)
+            if mask.crop((x, y, x + width, y + height)).getbbox():
+                protected_box = (x, y, x + width, y + height)
 
     def available(mask):
         bounds = [round(100 * edge / length) for edge, length in zip(mask.getbbox(), size * 2, strict=True)]
@@ -591,6 +638,7 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
             pictures.append(to_float(ImageOps.contain(frame, (540, 540), Image.Resampling.LANCZOS)))
         answer = ask_stage(ai, "studio_format_position", POSITION,
                            {"size": size, "copy": copy, "position_order": list(previews), "placement_notes": notes,
+                            **({"photo_cue": photo_cue} if photo_cue else {}),
                             **({"intent": intent} if intent else {})},
                            [reference, *pictures])
         position_info.update(position=answer.get("position"), reason=required_text(answer, "reason", "사진 배치"))
@@ -629,7 +677,7 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
         return side
 
     framing, framing_mask = frame_photo(photo, mask, size, expand, choose_position, check_margin,
-                                        keep_clearance=design["crop"] == "preserve")
+                                        keep_clearance=design["crop"] == "preserve", protected_box=protected_box)
     foreground = np.asarray(framing_mask) > 128
     tint = Image.blend(framing, Image.new("RGB", size, "#d84458"), 0.6)
     protected = Image.composite(tint, framing, framing_mask)

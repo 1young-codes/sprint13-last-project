@@ -616,6 +616,23 @@ def test_crops_around_subject_and_pads_when_crop_would_cut_it():
     assert expanded.crop(known).tobytes() == padded.crop(known).tobytes()
 
 
+def test_cue_crop_compares_positions_but_keeps_the_visible_cue_protected():
+    photo = Image.new("RGB", (160, 100), "blue")
+    mask = Image.new("L", photo.size)
+    mask.paste(255, (55, 25, 90, 85))
+    mask.paste(255, (130, 0, 160, 25))
+
+    def choose(previews, masks):
+        assert set(previews) == {"start", "center", "end"}
+        assert masks["start"].getbbox() == (55, 25, 90, 85)
+        assert masks["end"].getbbox()[1] == 0
+        return "start"
+
+    _, visible = studio_formats.frame_photo(photo, mask, (100, 100), choose_position=choose,
+                                            protected_box=(55, 25, 90, 85))
+    assert visible.getbbox() == (55, 25, 90, 85)
+
+
 def test_fit_preserves_clearance_for_a_complete_subject_but_allows_intentional_crops():
     photo = Image.new("RGB", (160, 100), "blue")
     mask = Image.new("L", photo.size)
