@@ -18,13 +18,16 @@ export const ANGLE_PRESETS = [
 
 export const ANGLE_LABELS = Object.fromEntries(ANGLE_PRESETS.map((preset) => [preset.id, preset.label]))
 
-// 각도 한 장에 걸리는 대략적인 시간(초). 서버 측정(PR #16, 그래픽 카드 위) 29~44초 중 큰 값에 가깝게.
-export const SECONDS_PER_ANGLE = 40
+// 실제 모델 서버 측정(11/27, PR #24, 도미 사진): 각도 없음 18.3초, 각도 1개 105.1초.
+// 각도 없이 대표 사진 보정, 문구, 해시태그까지 걸리는 대략적인 시간(초)
+export const BASE_SECONDS = 20
+// 첫 각도는 오래 걸린다 (105.1초 - 18.3초 = 약 87초)
+export const FIRST_ANGLE_SECONDS = 87
+// 두 번째 각도부터 한 장에 걸리는 시간(초). 서버 측정(PR #16) 29~44초 중 큰 값. 여러 장은 아직 다시 재지 않았다.
+export const SECONDS_PER_ANGLE = 44
 
-// 각도 없이 대표 사진, 문구, 해시태그까지 걸리는 대략적인 시간(초)
-export const BASE_SECONDS = 30
-
-// 고른 각도 수로 예상 시간을 "약 N분"으로 알려준다.
+// 고른 각도 수로 예상 시간을 "약 N분"으로 알려준다. 짧게 말하는 것보다 길게 말하는 편이 낫다.
 export function estimateMinutes(angleCount) {
-  return Math.max(1, Math.ceil((BASE_SECONDS + angleCount * SECONDS_PER_ANGLE) / 60))
+  const angleSeconds = angleCount > 0 ? FIRST_ANGLE_SECONDS + (angleCount - 1) * SECONDS_PER_ANGLE : 0
+  return Math.max(1, Math.ceil((BASE_SECONDS + angleSeconds) / 60))
 }

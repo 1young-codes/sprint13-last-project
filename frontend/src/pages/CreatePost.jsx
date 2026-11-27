@@ -7,9 +7,6 @@ import { createPostJob, getPostJob, POLL_MS, USE_SAMPLE } from '../api/postApi.j
 import { estimateMinutes } from '../anglePresets.js'
 import { postSlides } from '../postSlides.js'
 
-// 가게 설정 화면이 생기기 전까지 쓰는 임시 가게 이름
-const STORE_NAME = '[가게 이름]'
-
 // 문구 생성 함수(유진님, generate_product_captions)가 받는 값과 같은 칸
 const EMPTY_FORM = { productName: '', unit: '', price: '', usageExample: '', notes: '' }
 
@@ -22,7 +19,8 @@ function parsePrice(text) {
 }
 
 // 게시글 만들기 (매번): ① 입력 → ② 결과 → ③ 게시
-export default function CreatePost() {
+//   storeName: 게시글 위쪽과 가게 프로필에 나오는 이름 (가게 설정에서 넣는다)
+export default function CreatePost({ storeName }) {
   const [step, setStep] = useState(0)
   const [photo, setPhoto] = useState(null)
   const [photoUrl, setPhotoUrl] = useState('')
@@ -186,6 +184,7 @@ export default function CreatePost() {
       {step === 1 && (
         <ResultStep
           job={job}
+          storeName={storeName}
           excluded={excluded}
           onToggle={toggleSlide}
           onBack={() => setStep(0)}
@@ -194,13 +193,13 @@ export default function CreatePost() {
       )}
 
       {step === 2 && job?.status === 'ready' && (
-        <PublishedStep job={job} excluded={excluded} onMore={restart} />
+        <PublishedStep job={job} storeName={storeName} excluded={excluded} onMore={restart} />
       )}
     </section>
   )
 }
 
-function ResultStep({ job, excluded, onToggle, onBack, onPublish }) {
+function ResultStep({ job, storeName, excluded, onToggle, onBack, onPublish }) {
   const waiting = job.status === 'queued' || job.status === 'running'
   const ready = job.status === 'ready'
   const product = job.product_photo
@@ -244,14 +243,14 @@ function ResultStep({ job, excluded, onToggle, onBack, onPublish }) {
       {product && (
         <PostCard
           kind="product"
-          storeName={STORE_NAME}
+          storeName={storeName}
           result={product}
           pendingAngles={waiting ? pendingAngles : []}
           excluded={excluded}
           onToggle={onToggle}
         />
       )}
-      {job.usage_example && <PostCard kind="usage" storeName={STORE_NAME} result={job.usage_example} />}
+      {job.usage_example && <PostCard kind="usage" storeName={storeName} result={job.usage_example} />}
 
       {ready && (
         <div className="card">
@@ -275,7 +274,7 @@ function ResultStep({ job, excluded, onToggle, onBack, onPublish }) {
   )
 }
 
-function PublishedStep({ job, excluded, onMore }) {
+function PublishedStep({ job, storeName, excluded, onMore }) {
   const chosen = postSlides(job.product_photo).filter((slide) => slide.url && !excluded.includes(slide.key))
 
   return (
@@ -289,7 +288,7 @@ function PublishedStep({ job, excluded, onMore }) {
         <header className="profile-head">
           <span className="avatar large">로고</span>
           <div>
-            <strong>{STORE_NAME}</strong>
+            <strong>{storeName}</strong>
             <p className="hint">[프로필 소개글]</p>
           </div>
         </header>

@@ -80,6 +80,10 @@ body {
   border-radius: var(--radius);
 }
 
+.store-form {
+  margin-bottom: 16px;
+}
+
 .placeholder {
   color: var(--muted);
   text-align: center;
