@@ -166,10 +166,13 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(tmp_
                 return json.dumps(answer)
             if step == "ad_composition":
                 if calls.count(step) == 1:
+                    if staged:
+                        return '{"reason":"가장자리까지 상품을 키웁니다","revision":{"subject_box":[0,0,100,100]}}'
                     return '{"ready":false,"reason":"위쪽이 무의미하게 비어 있습니다","revision":null}'
-                assert data["layout_error"] == "위쪽이 무의미하게 비어 있습니다"
                 if staged:
+                    assert data["layout_error"] == "전체를 보여 줄 상품이 사진 가장자리에 닿습니다"
                     return '{"ready":false,"reason":"제품명과 가격이 여전히 떨어져 있습니다","revision":null}'
+                assert data["layout_error"] == "위쪽이 무의미하게 비어 있습니다"
                 return '{"ready":true,"reason":"제목과 용기가 같은 축에 보입니다","revision":null}'
             if step == "ad_format_measured_layout":
                 assert data["layout_error"] == "제품명과 가격이 여전히 떨어져 있습니다"
@@ -519,6 +522,12 @@ def test_format_delegates_new_breaks_to_copy_review():
     updated = studio_formats.format_styles(Agent(), styles, layers, first_lines)
     assert updated == {"headline": {"max_lines": 2, "break_after": 2}, "product_name": {"max_lines": 1}}
     assert studio_formats.format_styles(None, styles, layers, first_lines) == updated
+
+
+def test_format_margin_checks_rendered_ink_in_proportion_to_the_short_side():
+    studio_formats.check_type_margin((1080, 1920), {"headline": [3, 2, 50, 17]})
+    with pytest.raises(ValueError, match="가장자리에 너무 가깝습니다"):
+        studio_formats.check_type_margin((864, 1080), {"headline": [10, 1, 50, 17]})
 
 
 def test_format_options_use_measured_sizes_and_keep_clear_of_the_product(monkeypatch):

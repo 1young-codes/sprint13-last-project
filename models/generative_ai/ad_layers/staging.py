@@ -1,8 +1,8 @@
-"""원본 상품의 분리 가능한 한 요소를 옮긴 촬영 구도를 만듭니다."""
+"""원본 상품의 분리 가능한 요소를 옮겨 촬영 구도를 만듭니다."""
 
 import numpy as np
-from PIL import Image, ImageDraw
-from scipy.ndimage import label
+from PIL import Image, ImageDraw, ImageOps
+from scipy.ndimage import find_objects, label
 
 from .creative_brief import ask_stage, required_text
 from .layers import to_float
@@ -29,6 +29,19 @@ other product pieces must still be recognizable. For a move forward, compare
 the bottom contact points in the second image. A sideways move alone does not establish foreground.
 Reject a move that does not support the idea. Return ready (boolean) and observation (one concrete Korean sentence)."""
 
+GROUP_HERO = """Image 1 is the original product photo, image 2 is the approved poster, and image 3
+labels source pieces. The new format needs a different arrangement of the same pieces. Identify the one
+that carries the approved campaign's visual action or focus, so it can lead the new arrangement.
+Return hero, a number from pieces or null if no individual piece should lead, and reason in Korean."""
+
+GROUP_CHECK = """Image 1 is the original product photo and image 2 is the approved campaign.
+The rest are actual cutout arrangements of the original pieces, in option_order, on the target canvas.
+Choose the arrangement that best uses the long axis while leaving a connected space for this exact copy.
+Read the staggered rows as depth on one shared surface from the existing camera, with the leading piece
+readable. Gray is a placeholder for the setting. Reject a cramped grid of unrelated objects, components
+that cannot realistically be moved, and layouts that merely repeat the original line of pieces.
+Return choice as a key from option_order or null, and one visible reason in Korean."""
+
 
 def source_parts(mask):
     if mask is None:
@@ -40,6 +53,78 @@ def source_parts(mask):
     if len(visible) < 2:
         return None
     return np.where(np.isin(labels, visible), labels, 0)
+
+
+def arrange_rows(rows, gap, *, stagger):
+    widths = [sum(piece.width for piece in row) + gap * (len(row) - 1) for row in rows]
+    heights = [max(piece.height for piece in row) for row in rows]
+    width = max(widths)
+    result = Image.new("RGBA", (width, sum(heights) + gap * (len(rows) - 1)))
+    y = 0
+    for index, (row, row_width, height) in enumerate(zip(rows, widths, heights, strict=True)):
+        slack = width - row_width
+        x = round(slack * (0.25 if index % 2 == 0 else 0.75)) if stagger else slack // 2
+        for piece in row:
+            result.alpha_composite(piece, (x, y + height - piece.height))
+            x += piece.width + gap
+        y += height + gap
+    return result.crop(result.getbbox())
+
+
+def stage_group(ai, photo, parts, size, approved, issue, copy):
+    items = []
+    for index, bounds in enumerate(find_objects(parts), 1):
+        if bounds is None:
+            continue
+        y, x = bounds
+        box = x.start, y.start, x.stop, y.stop
+        if x.start == 0 or y.start == 0 or x.stop == photo.width or y.stop == photo.height:
+            return None
+        piece = photo.crop(box).convert("RGBA")
+        piece.putalpha(Image.fromarray(parts[bounds] == index).convert("L"))
+        items.append((index, box, piece))
+    if len(items) < 3:
+        return None
+
+    marked = photo.copy()
+    draw = ImageDraw.Draw(marked)
+    for index, box, _ in items:
+        draw.rectangle(box, outline="white", width=max(1, min(photo.size) // 180))
+        draw.text(box[:2], str(index), fill="white", stroke_width=2, stroke_fill="black")
+    data = {"pieces": [index for index, _, _ in items], "target_canvas": size, "format_issue": issue, "copy": copy}
+    images = [to_float(photo), approved]
+    focus = ask_stage(ai, "ad_format_group_hero", GROUP_HERO, data, [*images, to_float(marked)])
+    hero = focus.get("hero")
+    if hero is not None and (type(hero) is not int or hero not in data["pieces"]):
+        raise ValueError("상품군에서 강조할 원본 요소를 찾지 못했습니다")
+    items.sort(key=lambda item: (item[0] == hero, item[1][0]))
+    pieces = [piece for _, _, piece in items]
+    gap = max(1, round(float(np.median([min(piece.size) for piece in pieces])) / 12))
+    options = {}
+    max_columns = min(len(pieces) - (hero is not None), 4)
+    for columns in range(1, max_columns + 1):
+        others = pieces[:-1] if hero is not None and columns > 1 else pieces
+        rows = [others[i:i + columns] for i in range(0, len(others), columns)]
+        if len(others) != len(pieces):
+            rows.append(pieces[-1:])
+        if len(rows) == 1 and size[1] > size[0]:
+            continue
+        options[f"columns_{columns}"] = arrange_rows(rows, gap, stagger=hero is not None)
+    previews = []
+    for group in options.values():
+        canvas = Image.new("RGB", size, "#808080")
+        fitted = ImageOps.contain(group, (round(size[0] * 0.88), round(size[1] * 0.70)), Image.Resampling.LANCZOS)
+        canvas.paste(fitted, ((size[0] - fitted.width) // 2, size[1] * 4 // 5 - fitted.height),
+                     fitted.getchannel("A"))
+        previews.append(to_float(canvas))
+    answer = ask_stage(ai, "ad_format_group_check", GROUP_CHECK,
+                       data | {"option_order": list(options), "hero": hero}, [*images, *previews])
+    choice = answer.get("choice")
+    if choice is None:
+        return None
+    if not isinstance(choice, str) or choice not in options:
+        raise ValueError("게시 규격에 맞춰 상품군을 놓을 방식을 확인하지 못했습니다")
+    return options[choice], required_text(answer, "reason", "상품군 재배치 검토")
 
 
 def padded_box(box, margin, size):

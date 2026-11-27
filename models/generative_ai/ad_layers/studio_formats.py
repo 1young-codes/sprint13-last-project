@@ -93,6 +93,8 @@ photograph, image 2 is the approved poster, image 3 is the attempted resize when
 two images are the new finished poster and its phone preview. If has_moved_piece is true, the two images
 immediately before the finished poster show the actual moved piece from the source and the new photo detail
 at that location. Compare its shape and material closely and verify it appears once.
+If has_staged_group is true, the image immediately before the finished poster shows the planned group
+made from real product pixels. Compare count, colors, materials and the new depth ordering with that guide.
 Check product identity, including the exact visible versions, essential details, visible packaging and component
 count. Image 2 defines the campaign motif and styling. Match that motif without merely framing the original
 composition in empty bands. Look along the long axis for the specific visible arrangement or photographic cue
@@ -285,6 +287,14 @@ def selected_placement(answer, options, design):
     return {"boxes": plan["boxes"], "styles": measured_styles(design, plan, colors), "accent": None}
 
 
+def check_type_margin(size, ink):
+    width, height = size
+    clearance = min(size) / 40
+    for left, top, right, bottom in ink.values():
+        if min(min(left, 100 - right) * width, min(top, 100 - bottom) * height) < 100 * clearance:
+            raise ValueError("실제 글자가 포스터 가장자리에 너무 가깝습니다. 안쪽 여백을 남겨 다시 배치하세요")
+
+
 def adapt_format(source, output, format_name, ai, expand=None):
     layout = load_layout(source)
     size = FORMATS[format_name]
@@ -384,6 +394,8 @@ def adapt_format(source, output, format_name, ai, expand=None):
                 revised.pop("subject_box", None)
                 candidate = design_layers(revised, copy, size, fonts, stage)
                 check_text_overlap(foreground, candidate, stage)
+                ink = rendered_text_bounds(candidate, stage)
+                check_type_margin(size, ink)
             except ValueError as error:
                 inputs["layout_error"] = str(error)
                 inputs["previous_layout"] = answer
@@ -392,7 +404,6 @@ def adapt_format(source, output, format_name, ai, expand=None):
             framing_mask.save(stage / "foreground.png")
             poster = compose(candidate, stage)
             phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
-            ink = rendered_text_bounds(candidate, stage)
             review = ask_stage(ai, "studio_format_reading", FORMAT_READING,
                                {"copy": copy, "product_bounds": bounds, "rendered_ink": ink,
                                 "outer_margins": outer_margins(bounds, ink.values())},
@@ -435,17 +446,24 @@ def rebuild_format(source, output, format_name, photo, fields, idea, ai, models,
             raise ValueError("새 구도에서 채택 시안의 규격 또는 문구가 달라졌습니다")
         if layout["design"]["crop"] == "preserve" and touches_photo_edge(foreground_mask(folder, layout)):
             raise ValueError("새 게시용 사진에서 전체를 보여 줄 상품이 사진 가장자리에 닿습니다")
+        check_type_margin(size, rendered_text_bounds(layout, folder))
         with Image.open(source / "ad.png") as reference, Image.open(folder / "ad.png") as poster:
             phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
             before = [to_float(issue.poster)] if issue.poster is not None else []
             details = []
-            if layout.get("revision", {}).get("staged_piece_box") is not None:
+            revision = layout.get("revision", {})
+            has_moved_piece = revision.get("staged_piece_box") is not None
+            if has_moved_piece:
                 with Image.open(folder / layout["artwork"]["file"]) as scene:
                     piece, box = staged_evidence(folder, layout, scene)
                     details = [to_float(piece), to_float(scene.crop(box))]
+            elif revision.get("staged_group"):
+                with Image.open(folder / "staging.png") as guide:
+                    details = [to_float(guide)]
             review = ask_stage(ai, "studio_format_native_review", NATIVE_REVIEW,
                                {"size": size, "format_issue": str(issue), "copy": copy,
-                                "has_attempted_resize": bool(before), "has_moved_piece": bool(details)},
+                                "has_attempted_resize": bool(before), "has_moved_piece": has_moved_piece,
+                                "has_staged_group": revision.get("staged_group", False)},
                                [to_float(photo), to_float(reference), *before, *details, to_float(poster), to_float(phone)])
         observation = required_text(review, "observation", "새 게시 규격 검토")
         if review.get("ready") is not True:

@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw, ImageOps
 from .art_direction import ANGLES, LIGHTING, SHOT_SCALES, THEMES, plan_art_direction
 from .creative_brief import LAYOUT_ROLES, TEXT_ROLES, ask_stage, plan_copy, required_text, validate_boxes
 from .layers import compose, cutout_product, load_layout, load_settings, save_layout, to_float
-from .staging import on_gray, source_parts, stage_subject
+from .staging import on_gray, source_parts, stage_group, stage_subject
 from .text_render import minimum_font_size, render_texts
 from .viewpoint import available_viewpoints, camera_view, place_camera_view
 
@@ -561,8 +561,8 @@ def review_composition_plan(ai, product, design, layout, folder, inputs, images)
             candidate = Path(temporary)
             try:
                 revised = design_layers(changed, inputs["copy"], tuple(layout["size"]), inputs["fonts"], candidate)
-                rendered, foreground = composition_preview(product, changed, revised, candidate)
-                check_draft(foreground, changed, revised, candidate)
+                rendered, proposed_foreground = composition_preview(product, changed, revised, candidate)
+                check_draft(proposed_foreground, changed, revised, candidate)
             except ValueError as error:
                 review_input.update(rejected_design=changed, layout_error=str(error))
                 continue
@@ -948,18 +948,26 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                                       images, revision_info)
     if mask_model is not None and source_mask is None:
         product, source_mask = extract_subject(photo, mask_model, threshold)
+    group = None
     if format_rebuild is not None and product is not None and prior["design"].get("source_crop") is None:
         parts = source_parts(source_mask)
         if parts is not None:
-            staging = ask_stage(ai, "ad_format_staging", FORMAT_STAGING,
-                                {"target_canvas": size, "format_issue": format_issue, "copy": copy},
-                                [images[0], prior_image, to_float(on_gray(product))])
-            if staging.get("move") is not None:
-                staging_intent = required_text(staging, "move", "게시 규격의 상품 배치")
-                revision_info["staging_intent"] = staging_intent
+            group = stage_group(ai, photo, parts, size, prior_image, format_issue, copy)
+            if group is None:
+                staging = ask_stage(ai, "ad_format_staging", FORMAT_STAGING,
+                                    {"target_canvas": size, "format_issue": format_issue, "copy": copy},
+                                    [images[0], prior_image, to_float(on_gray(product))])
+                if staging.get("move") is not None:
+                    staging_intent = required_text(staging, "move", "게시 규격의 상품 배치")
+                    revision_info["staging_intent"] = staging_intent
     moved_view = None
     staged_view = None
-    if staging_intent:
+    moved_piece = None
+    if group is not None:
+        product, observation = group
+        revision_info.update(staged_group=True, staging_observation=observation)
+        staged_view = to_float(on_gray(product))
+    elif staging_intent:
         if product is None:
             raise ValueError("새 구도에 옮길 상품 영역을 찾지 못했습니다")
         product, moved_piece, observation = stage_subject(ai, photo, source_mask, parts, staging_intent)
@@ -1028,6 +1036,10 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             design_images = [*design_images, staged_view]
             design_task += ("\nThe final image is the actual rearranged product. Use its new positions and physical "
                             "shape when directing the layout. Gray is transparent.")
+            if group is not None:
+                design_task += (" Use the full rearranged silhouette as the shape of subject_box. Give its leading "
+                                "piece space for the planned visual action and fit the typography into the adjacent "
+                                "quiet part of the same scene. Do not flatten the photographed rows back into a line.")
         elif moved_view is not None:
             design_images = [*design_images, to_float(moved_view)]
             design_task += ("\nThe final image shows the requested camera viewpoint with unreconstructed regions. "
@@ -1100,8 +1112,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                     direction_task += "\nDescribe the exact requested_scene_change and omit any conflicting design detail."
             if staged_view is not None:
                 direction_images.append(staged_view)
-                direction_task += ("\nThe final image shows the actual product in its new arrangement. Keep its moved "
-                                   "piece exactly once there, give it realistic support, and rebuild the old location.")
+                direction_task += ("\nThe rearrangement guide shows the actual product in its new positions. Keep each "
+                                   "piece exactly once there and give all components realistic support on one surface.")
             elif moved_view is not None:
                 direction_input["viewpoint"] = viewpoint
                 direction_images.append(to_float(moved_view))
@@ -1182,9 +1194,10 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 placement_area = subject_box or [8, 8, 84, 84]
                 guide = product_reference(photo, effective, render_size, placement_area)
                 guide.save(result / "staging.png")
-                piece_box = frame_subject(moved_piece, picture_size, placement_area).getbbox()
-                revision_info["staged_piece_box"] = list(piece_box)
-                on_gray(moved_piece.crop(moved_piece.getbbox())).save(result / "staged-piece.png")
+                if moved_piece is not None:
+                    piece_box = frame_subject(moved_piece, picture_size, placement_area).getbbox()
+                    revision_info["staged_piece_box"] = list(piece_box)
+                    on_gray(moved_piece.crop(moved_piece.getbbox())).save(result / "staged-piece.png")
             elif moved_view is not None:
                 placement_box = pixel_box(subject_box or [0, 0, 100, 100], picture_size)
                 guide = place_camera_view(moved_view, source_mask.getbbox(), photo.size, picture_size, placement_box)

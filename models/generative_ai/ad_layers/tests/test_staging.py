@@ -2,8 +2,10 @@ import json
 
 import pytest
 from PIL import Image, ImageDraw
+import numpy as np
 
-from models.generative_ai.ad_layers.staging import move_source_piece, source_parts, stage_subject
+from models.generative_ai.ad_layers.layers import to_float
+from models.generative_ai.ad_layers.staging import move_source_piece, source_parts, stage_group, stage_subject
 
 
 def test_staging_moves_source_pixels_without_copying_them():
@@ -49,3 +51,33 @@ def test_staging_holds_a_move_that_fails_the_visual_check():
     with pytest.raises(ValueError, match="앞쪽에 놓이지 않았습니다"):
         stage_subject(Reviewer(), photo, mask, source_parts(mask), "가까이에 놓습니다")
     assert len(attempts) == 2 and "앞쪽에 놓이지 않았습니다" in attempts[1]
+
+
+def test_group_staging_places_every_source_component_once_without_resizing():
+    photo = Image.new("RGB", (130, 85), "white")
+    mask = Image.new("1", photo.size)
+    colors = [(160, 30, 70), (230, 110, 20), (30, 120, 90), (25, 45, 110)]
+    for left, color in zip((9, 37, 65, 93), colors, strict=True):
+        box = left, 24, left + 18, 55
+        photo.paste(color, box)
+        mask.paste(1, box)
+    calls = []
+
+    class Reviewer:
+        def ask(self, step, images, prompt, *, model):
+            calls.append(step)
+            data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
+            if step == "ad_format_group_hero":
+                assert data["pieces"] == [1, 2, 3, 4]
+                return '{"hero":3,"reason":"세 번째 상품에 강조점이 있습니다"}'
+            assert data["option_order"] == ["columns_1", "columns_2", "columns_3"]
+            assert all(image.shape[:2] == (180, 100) for image in images[2:])
+            return '{"choice":"columns_2","reason":"세 번째 상품이 앞쪽에서 분명히 보입니다"}'
+
+    result, _ = stage_group(Reviewer(), photo, source_parts(mask), (100, 180), to_float(photo), "가로 배열", {})
+    assert result.height > result.width
+    pixels = np.asarray(result)
+    for color in colors:
+        assert (pixels == (*color, 255)).all(axis=2).sum() == 18 * 31
+    assert (pixels[-1] == (*colors[2], 255)).all(axis=1).any()
+    assert calls == ["ad_format_group_hero", "ad_format_group_check"]
