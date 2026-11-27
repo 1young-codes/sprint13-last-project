@@ -108,3 +108,31 @@ def test_brainstorm_rejects_an_overlong_headline_before_layout():
 
     with pytest.raises(ValueError, match="제목이 .*자를 넘겼습니다"):
         creative_brief.brainstorm(Interpreter(), Image.new("RGB", (20, 12)), {"product_name": "필통"}, "", "5,000원")
+
+
+def test_brainstorm_retries_overlapping_layout_with_same_copy(monkeypatch):
+    boxes = {"product": [0, 0, 50, 100], "headline": [50, 10, 50, 20],
+             "product_name": [50, 50, 50, 20], "price": [50, 75, 50, 20]}
+    overlapping = boxes | {"headline": [49, 10, 50, 20]}
+    layout = {"boxes": boxes, "reading_order": list(boxes), "typography": "clear"}
+    steps = {
+        "ad_plan": {"message": "메시지", "evidence": "근거"},
+        "ad_direction": {"scene": "studio"},
+        "ad_headline": {"headline": "한 줄"},
+    }
+    layout_calls = []
+
+    def ask_stage(ai, step, task, inputs, images=()):
+        if step != "ad_layout":
+            return steps.pop(step)
+        layout_calls.append(inputs)
+        return layout | {"boxes": overlapping} if len(layout_calls) == 1 else layout
+
+    monkeypatch.setattr(creative_brief, "ask_stage", ask_stage)
+    brief = creative_brief.brainstorm(None, Image.new("RGB", (20, 12)), {"product_name": "필통"}, "", "5,000원")
+    assert not steps
+    assert len(layout_calls) == 2 and brief["boxes"] == boxes
+    first, retry = layout_calls
+    assert all(retry[key] == value for key, value in first.items())
+    assert retry["rejected_boxes"] == overlapping
+    assert "product, headline" in retry["layout_error"]

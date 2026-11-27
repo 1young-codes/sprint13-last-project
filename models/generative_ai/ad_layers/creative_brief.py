@@ -1,6 +1,7 @@
 """상품 사진과 입력 정보에서 광고 디자인을 기획하고 생성 지시를 저장합니다."""
 
 import argparse
+from itertools import combinations
 import json
 from pathlib import Path
 
@@ -33,10 +34,11 @@ LAYOUT = """You handle layout. Use the supplied scene and exact copy. Decide whe
 headline, product name and price appear. Return one JSON object with:
 - "boxes": one [x, y, width, height] array each for "product", "headline", "product_name" and "price".
   Use whole percentages of the canvas from its top-left corner. Each box must fit entirely inside the canvas
-  and have positive width and height. Leave room to read all three strings without obscuring the product.
+  and have positive width and height. Keep all four boxes disjoint, with enough room to read each string.
 - "reading_order": an array listing the four roles from first seen to last, each exactly once.
 - "typography": one English sentence describing type weight, alignment and contrast.
-Keep the chosen scene and supplied wording. Include design directions only."""
+Keep the chosen scene and supplied wording. If a previous layout was rejected, correct the reported issue.
+Include design directions only."""
 
 
 def ask_stage(ai, step, task, inputs, images=()):
@@ -66,6 +68,9 @@ def layout_boxes(answer):
         x, y, width, height = coordinates
         if not (0 <= x < x + width <= 100 and 0 <= y < y + height <= 100):
             raise ValueError(f"레이아웃의 {role} 위치가 캔버스 범위를 벗어났습니다")
+    for (first, (x, y, width, height)), (second, (left, top, w, h)) in combinations(boxes.items(), 2):
+        if max(x, left) < min(x + width, left + w) and max(y, top) < min(y + height, top + h):
+            raise ValueError(f"레이아웃의 {first}, {second} 영역이 겹쳤습니다")
     order = answer.get("reading_order")
     if not isinstance(order, list) or len(order) != len(LAYOUT_ROLES) or any(order.count(role) != 1 for role in LAYOUT_ROLES):
         raise ValueError("레이아웃의 읽는 순서에 제품, 제목, 상품명, 가격이 각각 한 번씩 필요합니다")
@@ -87,8 +92,14 @@ def brainstorm(ai, photo, fields, idea, price):
         raise ValueError(f"문구 단계에서 제목이 {MAX_HEADLINE_LENGTH}자를 넘겼습니다")
 
     copy = {"headline": headline, "product_name": fields["product_name"], "price": price}
-    layout = ask_stage(ai, "ad_layout", LAYOUT, {"scene": scene, "message": plan["message"], "copy": copy})
-    return plan | {"scene": scene, "headline": headline} | layout_boxes(layout)
+    layout_input = {"scene": scene, "message": plan["message"], "copy": copy}
+    layout = ask_stage(ai, "ad_layout", LAYOUT, layout_input)
+    try:
+        placement = layout_boxes(layout)
+    except ValueError as error:
+        retry_input = layout_input | {"rejected_boxes": layout.get("boxes"), "layout_error": str(error)}
+        placement = layout_boxes(ask_stage(ai, "ad_layout", LAYOUT, retry_input))
+    return plan | {"scene": scene, "headline": headline} | placement
 
 
 def compile_prompt(brief, title, price):
