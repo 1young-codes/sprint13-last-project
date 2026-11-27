@@ -727,6 +727,38 @@ def test_small_format_margin_repair_moves_the_entire_copy_without_changing_type(
     assert moved["styles"]["price"] == design["styles"]["price"]
 
 
+def test_copy_position_comparison_keeps_the_shared_center_axis(draft):
+    folder, _ = draft
+    layout = load_layout(folder)
+    design = layout["design"]
+    design["styles"]["headline"]["align"] = "center"
+    for text in layout["texts"]:
+        design["boxes"][text["role"]][0] = text["x"] = 45
+    foreground = np.zeros((100, 100), dtype=bool)
+    foreground[77:95, 29:64] = True
+    ink = studio_formats.rendered_text_bounds(layout, folder)
+    options = studio_formats.copy_position_options(design, layout, ink, foreground, folder)
+    assert options
+    assert all(revised["boxes"]["headline"][0] == 45 for revised, _, _ in options.values())
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            data = json.loads(request.split("Input JSON follows:\n", 1)[1])
+            order = data["position_order"]
+            assert step == "studio_format_copy_position" and "current" not in order
+            assert len(images) == len(order) == len(options) + 1
+            assert all(image.shape == (640, 640, 3) for image in images)
+            assert any(np.any(images[0][452:] != image[452:]) for image in images[1:])
+            return json.dumps({"position": order[-1], "observation": "같은 자리의 여백을 비교했습니다"})
+
+    chosen, observation = studio_formats.compare_copy_positions(Agent(), options, (design, layout, ink),
+                                                               foreground, folder, {})
+    assert chosen == list(options.values())[-1]
+    assert observation == "같은 자리의 여백을 비교했습니다"
+    foreground[56:77, 29:64] = True
+    assert not studio_formats.copy_position_options(design, layout, ink, foreground, folder)
+
+
 def test_format_options_use_measured_sizes_and_keep_clear_of_the_product(monkeypatch):
     style = {"align": "left", "max_font_size": 8}
     rows = [style | {"role": "headline_line_1"}, style | {"role": "headline_line_2"}]

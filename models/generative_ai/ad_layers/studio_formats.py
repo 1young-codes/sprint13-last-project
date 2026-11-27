@@ -159,6 +159,25 @@ Honor the requested side, alignment and hierarchy. Keep current if the movement 
 breaks an existing alignment or introduces a new conflict. Return position (a key from position_order) and
 observation (one Korean sentence naming the visible relationship that justifies the choice)."""
 
+STACKED_COPY_POSITION = """These are actual posters using the same photo, words and lettering. Only the position of
+the complete copy group changes. The cards follow position_order. Each card shows
+the whole poster above and the exact same area of the poster enlarged below. Use the lower views to compare
+the background between the lettering and the actual photographic edge, including any rim, highlight or shadow.
+Name the visible subject detail that should receive the viewer's eye after reading the copy.
+Prefer a change only when the words and that detail form a clearer reading path. For motion or a visible
+effect, look at the actual point of contact or effect, not merely the outline of the largest object.
+For stacked copy and subject, look at the blank strip between the last line and the subject and the outer
+margin above the complete group. If the strip splits the poster into disconnected parts, prefer the candidate
+that reduces it while leaving a clear gap to the visible edge. Reject candidates where the edge crowds the letters.
+Honor the requested side, alignment and hierarchy. Return position (a key from position_order, or null if
+there is no meaningful visual difference) and observation (one Korean sentence comparing the gap or visual
+relationship to the alternatives).
+First compare the enlarged gaps and rule out layouts where the final row appears
+attached to the visible rim or bright object. Among the remaining aligned options, prefer the one whose
+shorter clear interval joins the copy and subject without crowding. Name both the usable shortened interval
+and the crowding rejected in the alternative. Compare any large vacant band to the visible gap between
+the text lines."""
+
 NATIVE_REVIEW = """Review a poster newly photographed for one publishing ratio. Image 1 is the original product
 photograph, image 2 is the approved poster, image 3 is the attempted resize when present, and the last
 two images are the new finished poster and its phone preview.
@@ -530,6 +549,25 @@ def translate_copy(design, dx, dy):
     return design | {"boxes": boxes, "styles": styles}
 
 
+def stacked_copy_direction(design, ink, foreground):
+    if design["styles"]["headline"]["align"] != "center":
+        return None
+    height, width = foreground.shape
+    rows = np.flatnonzero(foreground.any(axis=1))
+    columns = np.flatnonzero(foreground.any(axis=0))
+    if not rows.size:
+        return None
+    product_center = 50 * (columns[0] + columns[-1]) / width
+    headline_center = sum(ink["headline"][::2]) / 2
+    if abs(headline_center - product_center) > 5:
+        return None
+    if max(bounds[3] for bounds in ink.values()) < 100 * rows[0] / height:
+        return 1
+    if min(bounds[1] for bounds in ink.values()) > 100 * rows[-1] / height:
+        return -1
+    return None
+
+
 def copy_position_options(design, layout, ink, foreground, stage):
     if design.get("accent") or any(text.get("depth") == "behind_subject" or
                                    any(line.get("depth") == "behind_subject" for line in text.get("lines", ()))
@@ -538,6 +576,7 @@ def copy_position_options(design, layout, ink, foreground, stage):
     size = layout["size"]
     short_edge = min(size)
     keepout = distance_transform_edt(~foreground) < short_edge / 80
+    toward_product = stacked_copy_direction(design, ink, foreground)
     choices = {}
     rooms = []
     for axis, side in enumerate(size):
@@ -572,11 +611,12 @@ def copy_position_options(design, layout, ink, foreground, stage):
             return None
         return revised, candidate, revised_ink
 
-    for axis, side in enumerate(size):
+    for axis in (1,) if toward_product else (0, 1):
+        side = size[axis]
         cross_axis = 1 - axis
         nudge = round(5 * short_edge / size[cross_axis])
         left, right = (min(room, nudge) for room in rooms[cross_axis])
-        sidesteps = dict.fromkeys((0, -left, right))
+        sidesteps = (0,) if toward_product else dict.fromkeys((0, -left, right))
         for direction, room in zip((-1, 1), rooms[axis], strict=True):
             for distance in sorted({min(room, round(ratio * short_edge / side)) for ratio in (6, 12, 20, 30)}):
                 if distance * side < 6 * short_edge:
@@ -588,6 +628,11 @@ def copy_position_options(design, layout, ink, foreground, stage):
                     if result := translated_candidate(offset):
                         choices[f"position_{len(choices) + 1}"] = result
                         break
+    if toward_product:
+        title_y = design["boxes"]["headline"][1]
+        if not any(toward_product * (revised["boxes"]["headline"][1] - title_y) > 0
+                   for revised, _, _ in choices.values()):
+            return {}
     return choices
 
 
@@ -662,12 +707,61 @@ def offer_position_options(design, layout, foreground, stage, tried):
     return choices
 
 
-def offer_preview(poster, ink):
+def paired_preview(poster, detail):
     preview = Image.new("RGB", (640, 640), "#f0efec")
-    for source, top, height in ((poster, 0, 444), (offer_detail(poster, ink), 452, 188)):
+    for source, top, height in ((poster, 0, 444), (detail, 452, 188)):
         image = ImageOps.contain(source, (640, height), Image.Resampling.LANCZOS)
         preview.paste(image, ((640 - image.width) // 2, top + (height - image.height) // 2))
     return preview
+
+
+def offer_preview(poster, ink):
+    return paired_preview(poster, offer_detail(poster, ink))
+
+
+def copy_position_details(inks, foreground):
+    height, width = foreground.shape
+    size = (width, height)
+    distances, nearest = distance_transform_edt(~foreground, return_indices=True)
+    details = []
+    for ink in inks:
+        nearest_edge = None
+        for role in TEXT_ROLES:
+            left, top, right, bottom = ink[role]
+            x, y, w, h = pixel_box([left, top, right - left, bottom - top], size)
+            region = distances[y:y + max(1, h), x:x + max(1, w)]
+            row, column = np.unravel_index(region.argmin(), region.shape)
+            if nearest_edge is None or region[row, column] < nearest_edge[0]:
+                near_y, near_x = nearest[:, y + row, x + column]
+                edge_x, edge_y = 100 * near_x / width, 100 * near_y / height
+                nearest_edge = (region[row, column], role, (edge_x, edge_y, edge_x, edge_y))
+        _, role, edge = nearest_edge
+        details.append(edge)
+        details.extend((ink["product_name"], ink["price"]) if role != "headline" else (ink[role],))
+    return details
+
+
+def compare_copy_positions(ai, options, original, foreground, stage, inputs):
+    design, _, ink = original
+    if stacked_copy_direction(design, ink, foreground):
+        alternatives = list(options.values())
+        alternatives.insert(len(alternatives) // 2, original)
+        choices = {f"layout_{index + 1}": item for index, item in enumerate(alternatives)}
+        detail = copy_position_details([item[2] for item in alternatives], foreground)
+        posters = [compose(item[1], stage) for item in alternatives]
+        previews = [paired_preview(poster, text_detail(poster, detail)) for poster in posters]
+        prompt = STACKED_COPY_POSITION
+    else:
+        choices = {"current": original, **options}
+        previews = [ImageOps.contain(compose(item[1], stage), (640, 640), Image.Resampling.LANCZOS)
+                    for item in choices.values()]
+        prompt = COPY_POSITION
+    choice = ask_stage(ai, "studio_format_copy_position", prompt, inputs | {"position_order": list(choices)},
+                       [to_float(preview) for preview in previews])
+    position = choice.get("position")
+    if isinstance(position, str) and position in choices and choices[position] is not original:
+        return choices[position], required_text(choice, "observation", "문구 위치 비교")
+    return original, None
 
 
 def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
@@ -851,16 +945,9 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                 if joint_repair or (not attempt and (photo_cue or intent)):
                     options = copy_position_options(revised, candidate, ink, foreground, stage)
                     if options:
-                        previews = [compose(candidate, stage), *(compose(item[1], stage) for item in options.values())]
-                        choice = ask_stage(ai, "studio_format_copy_position", COPY_POSITION,
-                                           {"position_order": ["current", *options], "photo_cue": photo_cue,
-                                            "intent": intent, "copy": copy},
-                                           [to_float(ImageOps.contain(preview, (640, 640), Image.Resampling.LANCZOS))
-                                            for preview in previews])
-                        position = choice.get("position")
-                        if isinstance(position, str) and position in options:
-                            revised, candidate, ink = options[position]
-                            copy_position_review = required_text(choice, "observation", "문구 위치 비교")
+                        (revised, candidate, ink), copy_position_review = compare_copy_positions(
+                            ai, options, (revised, candidate, ink), foreground, stage,
+                            {"photo_cue": photo_cue, "intent": intent, "copy": copy})
                 tried_offers = {tuple(revised["boxes"][role][axis]
                                       for role in ("product_name", "price") for axis in (0, 1))}
             poster = compose(candidate, stage)
