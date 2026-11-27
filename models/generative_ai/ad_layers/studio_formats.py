@@ -166,8 +166,8 @@ def reflect_margin(filled, contained, product, placed, side):
     sx, sy, ex, ey = strips[side]
     if sx == ex or sy == ey:
         return None
-    bounds = {"left": (0, 0, left, height), "right": (right, 0, width, height),
-              "top": (0, 0, width, top), "bottom": (0, bottom, width, height)}[side]
+    bounds = {"left": (0, top, left, bottom), "right": (right, top, width, bottom),
+              "top": (left, 0, right, top), "bottom": (left, bottom, right, height)}[side]
     amount = (left, width - right) if side in ("left", "right") else (top, height - bottom)
     before, after = (amount[0], 0) if side in ("left", "top") else (0, amount[1])
     padding = ((0, 0), (before, after), (0, 0)) if side in ("left", "right") else ((before, after), (0, 0), (0, 0))

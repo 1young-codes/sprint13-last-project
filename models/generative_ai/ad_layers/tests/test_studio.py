@@ -762,6 +762,16 @@ def test_reflected_margin_uses_the_background_without_repeating_the_product():
     assert result.crop((0, 0, 20, 50)).tobytes() == frame.crop((0, 0, 20, 50)).tobytes()
 
 
+def test_reflected_margins_leave_clean_corners_when_expanding_both_axes():
+    photo = Image.new("RGB", (70, 80), "white")
+    subject = Image.new("L", photo.size)
+    subject.paste(255, (20, 25, 50, 55))
+    filled, placed = studio_formats.extend_edges(photo, (100, 100), 0.5)
+    for side in ("left", "right", "top", "bottom"):
+        filled = studio_formats.reflect_margin(filled, photo, subject, placed, side)
+    assert filled.getextrema() == ((255, 255),) * 3
+
+
 def test_wide_crop_keeps_available_space_beyond_the_product():
     photo = Image.new("RGB", (100, 100), "white")
     mask = Image.new("L", photo.size)
