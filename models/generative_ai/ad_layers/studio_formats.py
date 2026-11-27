@@ -726,26 +726,102 @@ def offer_preview(poster, ink):
     return paired_preview(poster, offer_detail(poster, ink))
 
 
+def ink_contrast(lightness, background):
+    return np.quantile(np.maximum(lightness, background) / np.minimum(lightness, background), 0.1)
+
+
+def ink_background(backdrop, text, ink):
+    x, y, w, h = (text[key] for key in ("x", "y", "w", "h"))
+    pixels = to_float(backdrop.crop((x, y, x + w, y + h)))[ink]
+    return luminance(srgb_to_linear(pixels)) + 0.05
+
+
+def color_lightness(rgb):
+    return luminance(srgb_to_linear(np.asarray(rgb) / 255)) + 0.05
+
+
+def legible_tone(color, background, minimum):
+    original = np.asarray(ImageColor.getrgb(color))
+    if not background.size or ink_contrast(color_lightness(original), background) >= minimum:
+        return color
+    for step in range(1, 21):
+        for neutral in (255, 0):
+            shade = tuple(np.rint(original + (neutral - original) * step / 20).astype(int))
+            if ink_contrast(color_lightness(shade), background) >= minimum:
+                return "#%02X%02X%02X" % shade
+    return color
+
+
+def recolor_ink(path, alpha, color):
+    bitmap = Image.new("RGBA", alpha.size, color)
+    bitmap.putalpha(alpha)
+    bitmap.save(path)
+
+
+def readable_headline_colors(design, layout, backdrop, folder, foreground):
+    title = next(text for text in layout["texts"] if text["role"] == "headline")
+    style = design["styles"]["headline"]
+    original = title.get("lines", [title])
+    marked_lines = sum(bool(line.get("emphasis")) for line in original)
+    marked_color = None
+    preview_scale = min(1, 360 / backdrop.width, 640 / backdrop.height)
+    lines = []
+    for line in original:
+        # A mixed-color line is still judged in the rendered review.
+        emphasis = line.get("emphasis")
+        if emphasis and (marked_lines != 1 or emphasis["phrase"] != line["text"]):
+            lines.append(line)
+            continue
+        path = folder / line["file"]
+        with Image.open(path) as bitmap:
+            alpha = bitmap.getchannel("A")
+        ink = np.asarray(alpha) >= 128
+        if line.get("depth") == "behind_subject":
+            x, y = line["x"], line["y"]
+            ink &= ~foreground[y:y + line["h"], x:x + line["w"]]
+        bounds = alpha.getbbox()
+        large = bounds and line["max_lines"] == 1 and (bounds[3] - bounds[1]) * preview_scale >= 18
+        before = emphasis["color"] if emphasis else line["color"]
+        color = legible_tone(before, ink_background(backdrop, line, ink), 3 if large else 4.5)
+        if color != before:
+            recolor_ink(path, alpha, color)
+            line = line | {"color": color}
+            if emphasis:
+                marked_color = color
+                line["emphasis"] = emphasis | {"color": color}
+        lines.append(line)
+    if lines == original:
+        return design, layout
+    if "lines" in title:
+        title = title | {"lines": lines}
+        style = style | {"lines": [row | {"color": line["color"]}
+                                   for row, line in zip(style["lines"], lines, strict=True)]}
+    else:
+        title = lines[0]
+        style = style | {"color": title["color"]}
+    if marked_color:
+        title = title | {"emphasis": title["emphasis"] | {"color": marked_color}}
+        style = style | {"emphasis": style["emphasis"] | {"color": marked_color}}
+    return design | {"styles": design["styles"] | {"headline": style}}, layout | {
+        "texts": [title if text["role"] == "headline" else text for text in layout["texts"]]}
+
+
 def readable_offer_colors(design, layout, backdrop, folder):
     roles = ("product_name", "price")
     headline = design["styles"]["headline"]
     palette = [headline["color"], *(line.get("color", headline["color"]) for line in headline.get("lines") or [])]
     offer = [text for text in layout["texts"] if text["role"] in roles]
     colors = list(dict.fromkeys([*(text["color"] for text in offer), *palette, "#000000", "#FFFFFF"]))
-    lightness = {color: luminance(srgb_to_linear(np.asarray(ImageColor.getrgb(color)) / 255)) + 0.05
-                 for color in colors}
+    lightness = {color: color_lightness(ImageColor.getrgb(color)) for color in colors}
     masks, contrasts = {}, {}
     for text in offer:
-        x, y, w, h = (text[key] for key in ("x", "y", "w", "h"))
         with Image.open(folder / text["file"]) as layer:
             alpha = layer.getchannel("A")
-        pixels = to_float(backdrop.crop((x, y, x + w, y + h)))[np.asarray(alpha) >= 128]
-        if pixels.size:
-            background = luminance(srgb_to_linear(pixels)) + 0.05
+        background = ink_background(backdrop, text, np.asarray(alpha) >= 128)
+        if background.size:
             masks[text["role"]] = alpha
             contrasts[text["role"]] = {
-                color: np.quantile(np.maximum(value, background) / np.minimum(value, background), 0.1)
-                for color, value in lightness.items()
+                color: ink_contrast(value, background) for color, value in lightness.items()
             }
     minimum = 4.5
     low = {text["role"] for text in offer if text["role"] in contrasts
@@ -765,10 +841,7 @@ def readable_offer_colors(design, layout, backdrop, folder):
             if color is None:
                 color = max((current, "#000000", "#FFFFFF"), key=scores.__getitem__)
             if color != current:
-                alpha = masks[role]
-                recolored = Image.new("RGBA", alpha.size, color)
-                recolored.putalpha(alpha)
-                recolored.save(folder / text["file"])
+                recolor_ink(folder / text["file"], masks[role], color)
                 styles[role] = styles[role] | {"color": color}
                 text = text | {"color": color}
         texts.append(text)
@@ -947,6 +1020,9 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
         tried_offers = set()
         copy_position_review = None
         layout_attempts = offer_attempts = 0
+        measured_fallback = False
+        measured_choices = iter(placements)
+        used_placements = set()
 
         def render_copy(design):
             candidate = design_layers(design, copy, size, fonts, stage)
@@ -957,6 +1033,25 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                 raise ValueError("제목과 상품명, 가격이 모두 화면에 보여야 합니다")
             check_offer_spacing(ink, size)
             return candidate, ink, headline_behind_subject
+
+        def render_placement(answer):
+            proposed = selected_placement(answer, placements, design)
+            styles = format_styles(ai, proposed.get("styles"), layout["texts"], first_lines)
+            styles = format_type_hierarchy(styles, design["focus"])
+            plan = design | {"artwork_box": [0, 0, 100, 100], "boxes": proposed.get("boxes"),
+                             "styles": styles, "accent": proposed.get("accent")}
+            plan.pop("subject_box", None)
+            rendered, actual_ink, behind = render_copy(plan)
+            try:
+                check_type_margin(size, actual_ink)
+            except ValueError:
+                shifted = move_copy_inside(plan, actual_ink, size) if intent else None
+                if shifted is None:
+                    raise
+                rendered, actual_ink, behind = render_copy(shifted)
+                check_type_margin(size, actual_ink)
+                plan = shifted
+            return plan, rendered, actual_ink, behind
 
         for attempt in range(4):
             joint_repair = False
@@ -981,32 +1076,34 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                                               "사진과 확정 문구는 유지하고 제목까지 함께 재배치하세요.")
             if not offer_repair:
                 if layout_attempts == 2:
-                    break
-                layout_attempts += 1
-                answer = ask_stage(ai, "studio_reframe", REFRAME, inputs | {"preferred_first_lines": first_lines}, images)
-                if placements and not intent and "layout_error" not in inputs and answer.get("placement") is None:
-                    answer = {"placement": next(iter(placements))}
-                try:
-                    proposed = selected_placement(answer, placements, design)
-                    styles = format_styles(ai, proposed.get("styles"), layout["texts"], first_lines)
-                    styles = format_type_hierarchy(styles, design["focus"])
-                    revised = design | {"artwork_box": [0, 0, 100, 100], "boxes": proposed.get("boxes"),
-                                        "styles": styles, "accent": proposed.get("accent")}
-                    revised.pop("subject_box", None)
-                    candidate, ink, headline_behind_subject = render_copy(revised)
+                    if not measured_fallback:
+                        break
+                    for name in measured_choices:
+                        if name in used_placements:
+                            continue
+                        answer = {"placement": name}
+                        try:
+                            revised, candidate, ink, headline_behind_subject = render_placement(answer)
+                        except ValueError:
+                            continue
+                        break
+                    else:
+                        break
+                else:
+                    layout_attempts += 1
+                    answer = ask_stage(ai, "studio_reframe", REFRAME,
+                                       inputs | {"preferred_first_lines": first_lines}, images)
+                    if placements and not intent and "layout_error" not in inputs and answer.get("placement") is None:
+                        answer = {"placement": next(iter(placements))}
+                    if isinstance(name := answer.get("placement"), str):
+                        used_placements.add(name)
                     try:
-                        check_type_margin(size, ink)
-                    except ValueError:
-                        shifted = move_copy_inside(revised, ink, size) if intent else None
-                        if shifted is None:
-                            raise
-                        candidate, ink, headline_behind_subject = render_copy(shifted)
-                        check_type_margin(size, ink)
-                        revised = shifted
-                except ValueError as error:
-                    inputs["layout_error"] = str(error)
-                    inputs["previous_layout"] = answer
-                    continue
+                        revised, candidate, ink, headline_behind_subject = render_placement(answer)
+                    except ValueError as error:
+                        inputs["layout_error"] = str(error)
+                        inputs["previous_layout"] = answer
+                        measured_fallback = layout_attempts == 2
+                        continue
                 framing.save(stage / candidate["artwork"]["file"])
                 framing_mask.save(stage / "foreground.png")
                 copy_position_review = None
@@ -1019,6 +1116,7 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                 tried_offers = {tuple(revised["boxes"][role][axis]
                                       for role in ("product_name", "price") for axis in (0, 1))}
             backdrop = compose(candidate | {"texts": []}, stage) if candidate.get("graphic") else framing
+            revised, candidate = readable_headline_colors(revised, candidate, backdrop, stage, foreground)
             revised, candidate = readable_offer_colors(revised, candidate, backdrop, stage)
             poster = compose(candidate, stage)
             phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)

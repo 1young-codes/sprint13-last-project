@@ -814,6 +814,34 @@ def test_offer_contrast_uses_actual_ink_on_the_new_photo(draft, price_background
         assert image.getchannel("A").tobytes() == before_alpha
 
 
+def test_title_contrast_changes_the_printed_emphasis_without_changing_the_glyphs(tmp_path):
+    first = {"role": "headline_line_1", "text": "내용", "file": "first.png", "color": "#FAEBD8",
+             "x": 0, "y": 0, "w": 30, "h": 25, "max_lines": 1}
+    emphasis = {"phrase": "강조", "color": "#932A38"}
+    second = first | {"role": "headline_line_2", "text": "강조", "y": 28, "file": "second.png", "emphasis": emphasis}
+    title = {"role": "headline", "text": "내용 강조", "lines": [first, second], "emphasis": emphasis}
+    design = {"styles": {"headline": {"lines": [{"color": first["color"]}, {"color": emphasis["color"]}],
+                                      "emphasis": emphasis}}}
+    for line in (first, second):
+        bitmap = Image.new("RGBA", (30, 25))
+        bitmap.paste(line.get("emphasis", line)["color"], (4, 1, 26, 23))
+        bitmap.save(tmp_path / line["file"])
+    original = (tmp_path / first["file"]).read_bytes()
+    backdrop = Image.new("RGB", (100, 100), "#663525")
+
+    revised, layout = studio_formats.readable_headline_colors(design, {"texts": [title]}, backdrop, tmp_path,
+                                                            np.zeros((100, 100), dtype=bool))
+    updated = layout["texts"][0]
+    color = updated["emphasis"]["color"]
+    assert updated["text"] == title["text"] and updated["lines"][1]["y"] == second["y"]
+    assert color != emphasis["color"] and color == updated["lines"][1]["emphasis"]["color"]
+    assert color == revised["styles"]["headline"]["emphasis"]["color"]
+    assert updated["lines"][0] == first and (tmp_path / first["file"]).read_bytes() == original
+    with Image.open(tmp_path / second["file"]) as bitmap:
+        assert bitmap.getchannel("A").getbbox() == (4, 1, 26, 23)
+        assert tuple(bytes.fromhex(color[1:])) == bitmap.getpixel((10, 10))[:3]
+
+
 def test_copy_position_comparison_keeps_the_shared_center_axis(draft):
     folder, _ = draft
     layout = load_layout(folder)
@@ -909,6 +937,35 @@ def test_requested_format_repair_can_use_custom_layout_when_measured_options_exi
         assert selected["copy_position_review"] == "실제 배치를 비교했습니다"
     else:
         assert boxes["headline"][:2] == [10, 20]
+
+
+def test_format_tries_a_rendered_measured_placement_after_two_invalid_custom_boxes(tmp_path, draft, monkeypatch):
+    folder, _ = draft
+    measured = {"boxes": {"headline": [15, 15, 45, 15], "product_name": [15, 35, 45, 10], "price": [15, 50, 45, 10]},
+                "headline_lines": [], "font_sizes": {"headline": 5, "product_name": 5, "price": 3}}
+    monkeypatch.setattr(studio_formats, "format_measurements", lambda *_: None)
+    monkeypatch.setattr(studio_formats, "position_options", lambda *_: {"fit": measured})
+    stages = []
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            stages.append(step)
+            data = json.loads(request.split("Input JSON follows:\n", 1)[1])
+            if step == "studio_reframe":
+                if len(stages) == 2:
+                    assert "오른쪽 가장자리" in data["layout_error"]
+                proposed = data["approved_design"]
+                proposed["boxes"]["headline"] = [98, 10, 2, 20]
+                proposed["accent"] = {"shape": "rectangle", "layer": "overlay", "box": [10, 90, 4, 7], "color": "#FF8888"}
+                return json.dumps(proposed)
+            assert step == "studio_format_reading"
+            assert data["rendered_ink"]["headline"][0] == 15
+            return '{"finding":"ready","headline_touches_product":false,"observation":"실제 이미지의 오른쪽 여백을 확인했습니다"}'
+
+    output = tmp_path / "reframed"
+    studio_formats.adapt_format(folder, output, "thumbnail", Agent(), intent="상품 옆에 글을 배치")
+    assert stages == ["studio_reframe", "studio_reframe", "studio_format_reading"]
+    assert load_layout(output)["text_placement"] == "fit"
 
 
 def test_format_price_stays_secondary_except_when_the_price_is_the_focus(monkeypatch):
