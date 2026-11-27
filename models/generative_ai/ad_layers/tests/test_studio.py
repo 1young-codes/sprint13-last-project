@@ -568,7 +568,7 @@ def test_format_options_use_measured_sizes_and_keep_clear_of_the_product(monkeyp
     source_style = {"size": 6, "lines": [{"box": [8, 5, 35, 9]}, {"box": [8, 15, 40, 11]}]}
     layout = {"size": [100, 100], "texts": [style | {"role": "headline", "lines": rows},
               style | {"role": "product_name"}, style | {"role": "price"}],
-              "design": {"boxes": {"headline": [8, 5, 40, 22]},
+              "design": {"focus": "price", "boxes": {"headline": [8, 5, 40, 22]},
                          "styles": {"headline": source_style, "product_name": {}, "price": {}}}}
     mask = np.zeros((100, 100), dtype=bool)
     mask[34:70, 20:87] = True
@@ -589,6 +589,25 @@ def test_format_options_use_measured_sizes_and_keep_clear_of_the_product(monkeyp
     for option in options.values():
         for x, y, w, h in option["boxes"].values():
             assert not mask[y:y+h, x:x+w].any()
+
+
+def test_format_price_stays_secondary_except_when_the_price_is_the_focus(monkeypatch):
+    styles = {"headline": {"size": 5, "lines": [{"size": 4}, {"size": 8}]},
+              "product_name": {"size": 6}, "price": {"size": 7, "font": "noto_sans_kr_black"}}
+    assert format_layout.format_type_hierarchy(styles, "product")["price"] == styles["price"] | {"size": 4.8}
+    assert format_layout.format_type_hierarchy(styles, "product_name")["price"]["size"] == pytest.approx(3.6)
+    assert format_layout.format_type_hierarchy(styles, "price") is styles
+    assert format_layout.supporting_price_size("headline", 7, 2.5, 2) == 2
+    source = {"size": (1000, 1000), "texts": [{"role": "headline", "max_font_size": 80},
+              {"role": "product_name", "max_font_size": 60}, {"role": "price", "max_font_size": 70}],
+              "design": {"focus": "product"}}
+    monkeypatch.setattr(format_layout, "measure_texts",
+                        lambda probes, _: {row["role"]: (100, row["max_font_size"]) for row in probes})
+    dimensions, sizes = format_layout.format_measurements(source, (1280, 720))
+    assert dimensions["price"][1] < dimensions["headline"][1]
+    source["design"]["focus"] = "price"
+    _, featured_sizes = format_layout.format_measurements(source, (1280, 720))
+    assert sizes["price"] < featured_sizes["price"] and sizes["headline"] == featured_sizes["headline"]
 
 
 def test_expands_only_the_chosen_photo_placement():

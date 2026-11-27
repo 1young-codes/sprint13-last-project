@@ -8,7 +8,8 @@ import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
 from .creative_brief import ask_stage, required_text
-from .format_layout import format_measurements, measured_styles, outer_margins, position_options, preview_placement
+from .format_layout import (format_measurements, format_type_hierarchy, measured_styles, outer_margins, position_options,
+                            preview_placement)
 from .layers import compose, load_layout, load_settings, save_layout, to_float
 from .scene_ad import (check_text_overlap, design_layers, make_scene_ad, rendered_text_bounds, tighten_text_groups,
                        touches_photo_edge)
@@ -52,7 +53,8 @@ approved poster, the second is the actual photo in the new frame, and the third 
 pixels tinted in red. The fourth, if present, is a rejected rendered poster. Keep the photo unchanged. Use
 visible space outside the tinted shapes to place the exact headline, product name and price. Keep the approved
 campaign's colors and hierarchy. Pick fonts from the supplied list. Use an integer from 2 to 20 for size,
-as a percentage of the new canvas width. Group the product name and price while letting the headline lead.
+as a percentage of the new canvas width. Group the product name and price. Keep the price visually
+secondary unless approved_design.focus is price.
 Read the new photo before choosing positions. In a tall canvas, do not separate title and product with a wide
 unused stretch of background. Place the nearest title line beside or near the feature in the actual framing.
 In a wide canvas with no clear footer, keep the product name and price beside the headline or the product.
@@ -77,8 +79,10 @@ to repair failed boxes while keeping the parts that fit."""
 
 FORMAT_READING = """Compare the approved poster and the actual reframed poster in the first and second images.
 Judge the second at mobile size, using rendered_ink and product_bounds as evidence. Check the exact copy,
-contrast, title line grouping, and how a viewer reaches the product and price. Quiet margins around the whole
-composition are allowed. A large empty band between the title and subject, with no visible photographic cue
+contrast, title line grouping, and how a viewer reaches the product and price. Check what draws the first
+glance. The price may lead when focus is price. Otherwise it should read clearly without taking attention
+from the intended focus. Quiet margins around the whole composition are allowed.
+A large empty band between the title and subject, with no visible photographic cue
 across it, breaks the reading path. A pair of title lines needs to read as one phrase before the viewer reaches
 the product. Also use outer_margins to inspect the actual space outside the product and all the lettering.
 Read the long axis from edge to edge. An enlarged stretch of featureless wall, floor or surface has no
@@ -388,6 +392,7 @@ def adapt_format(source, output, format_name, ai, expand=None):
             try:
                 proposed = selected_placement(answer, placements, design)
                 styles = format_styles(ai, proposed.get("styles"), layout["texts"], first_lines)
+                styles = format_type_hierarchy(styles, design["focus"])
                 revised = design | {"artwork_box": [0, 0, 100, 100], "boxes": proposed.get("boxes"),
                                     "styles": styles, "accent": proposed.get("accent")}
                 revised.pop("subject_box", None)
@@ -405,7 +410,7 @@ def adapt_format(source, output, format_name, ai, expand=None):
             poster = compose(candidate, stage)
             phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
             review = ask_stage(ai, "studio_format_reading", FORMAT_READING,
-                               {"copy": copy, "product_bounds": bounds, "rendered_ink": ink,
+                               {"copy": copy, "focus": design["focus"], "product_bounds": bounds, "rendered_ink": ink,
                                 "outer_margins": outer_margins(bounds, ink.values())},
                                [reference, to_float(phone)])
             reading = required_text(review, "observation", "게시 규격 검토")

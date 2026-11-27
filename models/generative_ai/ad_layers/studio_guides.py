@@ -19,8 +19,8 @@ ACTION_GUIDES = {
     "edit_text": {
         "findings": ("typography", "layout"),
         "guide": "Change only the typography that needs work. Keep the exact wording and photograph. "
-                 "Use shared alignment and nearby spacing for related copy. Keep the heading in charge, "
-                 "while giving the product name and price enough size and contrast to read together. "
+                 "Use shared alignment and nearby spacing for related copy. Keep design.focus prominent while "
+                 "giving the product name and price enough size and contrast to read together. "
                  "Move glyphs out of the product and check legibility in the actual image.",
         "arguments": {"changes": TEXT_CHANGES},
     },

@@ -35,16 +35,46 @@ def free_position(integral, size, extent, near, *, x_limits=(0, 100), y_limits=(
     return int(px[order]), int(py[order])
 
 
+def supporting_price_size(focus, proposed, lead, minimum):
+    if focus == "price" or lead is None:
+        return proposed
+    return min(proposed, max(minimum, 0.60 * lead))
+
+
+def format_type_hierarchy(styles, focus):
+    if not isinstance(styles, dict) or not isinstance(styles.get("price"), dict):
+        return styles
+    price = styles["price"].get("size")
+    if type(price) not in (int, float) or not 2 <= price <= 20:
+        return styles
+    front = styles.get("product_name" if focus == "product_name" else "headline")
+    if not isinstance(front, dict):
+        return styles
+    size = front.get("size")
+    lines = front.get("lines", ())
+    sizes = ([line.get("size", size) for line in lines if isinstance(line, dict)]
+             if isinstance(lines, (list, tuple)) and lines else [size])
+    lead = max((value for value in sizes if type(value) in (int, float) and 2 <= value <= 20), default=None)
+    adjusted = supporting_price_size(focus, price, lead, 2)
+    return styles if adjusted == price else styles | {"price": styles["price"] | {"size": adjusted}}
+
+
 def format_measurements(layout, size):
     width, height = size
     scale = width / layout["size"][0]
     heading_scale = min(scale, sqrt(scale * height / layout["size"][1]))
     tokens = [row for text in layout["texts"] for row in text.get("lines", (text,))]
-    probes = []
+    pixels_by_role = {}
     for text in tokens:
         ratio = heading_scale if text["role"].startswith("headline") else scale
         pixels = min(int(width * 0.2), max(minimum_font_size(width), round(text["max_font_size"] * ratio)))
-        probes.append(text | {"x": 0, "y": 0, "w": width, "h": height, "max_font_size": pixels})
+        pixels_by_role[text["role"]] = pixels
+    focus = layout.get("design", {}).get("focus")
+    lead = (pixels_by_role.get("product_name") if focus == "product_name" else
+            max((pixels for role, pixels in pixels_by_role.items() if role.startswith("headline")), default=None))
+    pixels_by_role["price"] = round(supporting_price_size(focus, pixels_by_role["price"], lead, minimum_font_size(width)))
+    probes = [text | {"x": 0, "y": 0, "w": width, "h": height, "max_font_size": pixels_by_role[text["role"]]}
+              for text in tokens]
     return measure_texts(probes, size), {text["role"]: max(2, 100 * text["max_font_size"] / width) for text in probes}
 
 
