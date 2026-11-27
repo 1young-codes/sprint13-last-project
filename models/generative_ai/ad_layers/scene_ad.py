@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 from PIL import Image, ImageDraw, ImageOps
 
+from .art_direction import ANGLES, SHOT_SCALES, THEMES, plan_art_direction
 from .creative_brief import LAYOUT_ROLES, TEXT_ROLES, ask_stage, plan_copy, required_text, validate_boxes
 from .layers import compose, cutout_product, load_layout, load_settings, save_layout, to_float
 from .text_render import minimum_font_size, render_texts
@@ -50,14 +51,23 @@ For each style return "font" (one of the supplied fonts), "align" (left, center,
 "size" (intended font size as an integer percentage of canvas width), and "max_lines" (1 or 2 for the
 headline or product_name, 1 for price). If two lines are intentional, set "break_after" to the number of
 space-separated words on the first line. Keep Korean phrases, quantities and product names intact at the
-break. If a prior design failed, address the reported issue."""
+break. For the headline only, optionally set "depth" to "behind_subject" when the contour of the foreground
+can deliberately cross a small outer part of a large headline. Every word must stay readable. Leave out
+depth when the type belongs in clear space. If a prior design failed, address the reported issue."""
 
 FINAL_REVIEW = """Review the first poster, using the second image (its generated photo without type) and the reference
 posters that follow. Keep the generated photo, position, crop and canvas color. Use the actual product bounds to
 place type outside the product. Group the related text, give the main line a distinct scale, and judge contrast
-using the actual photograph. Match the lettering to the visual mood. Set break_after for any specific Korean
-line break you intend. Use the supplied wording exactly. Return JSON with reason and revision (null or an
-object containing boxes, styles and accent per the design schema). Fix any reported validation error."""
+using the actual photograph. Find the visible axis, gesture or light that connects photo and words. If there is
+an unused band between them or the offer reads as unrelated fragments, move and scale the type as one composition.
+Use rendered_text_bounds to judge the actual ink, not the empty text boxes. For stacked supporting copy,
+leave less space between the name and price than between their group and the headline. Keep that group near
+the product rather than letting all the type drift into a distant corner.
+When the approved image and headline still feel like separate columns, consider whether one larger headline
+can share the subject's axis or tuck behind a small part of its outline. Use depth only when it adds that relation.
+Match the lettering to the visual mood and keep any confirmed line breaks. Use the supplied wording exactly.
+Return JSON with a concrete Korean reason and revision (null or an object with boxes, styles or accent per
+the design schema). Fix any reported validation error. Use null when the composition already works."""
 
 CRITIQUE = """The first image is the previous finished ad, the second is the source product, and the rest are
 design references. Identify the most consequential visible weakness of the ad that changing the photograph
@@ -112,6 +122,11 @@ def layout_texts(answer, copy, canvas_size, fonts):
         layer = {"role": role, "text": text, "font": font, "align": align, "color": color,
                  "x": x, "y": y, "w": w, "h": h, "file": f"text_{role}.png", "max_lines": max_lines,
                  "max_font_size": round(size * width / 100), "min_font_size": minimum_font_size(width)}
+        depth = style.get("depth")
+        if depth is not None:
+            if role != "headline" or depth != "behind_subject":
+                raise ValueError("제품 뒤에 걸 수 있는 글자는 제목뿐입니다")
+            layer["depth"] = depth
         if break_after is not None:
             if max_lines != 2 or type(break_after) is not int or not 0 < break_after < len(text.split()):
                 raise ValueError(f"{role} 줄바꿈 위치가 올바르지 않습니다")
@@ -205,17 +220,29 @@ def check_text_overlap(foreground, layout, folder):
         with Image.open(folder / layer_info["file"]) as layer:
             ink = np.asarray(layer.getchannel("A")) > 128
         x, y = layer_info["x"], layer_info["y"]
-        if (mask[y:y + layer_info["h"], x:x + layer_info["w"]] & ink).any():
+        covered = mask[y:y + layer_info["h"], x:x + layer_info["w"]] & ink
+        if layer_info.get("depth") == "behind_subject":
+            if covered.any():
+                from scipy.ndimage import label
+
+                parts, _ = label(ink, structure=np.ones((3, 3), dtype=bool))
+                sizes = np.bincount(parts[ink])
+                hidden = np.bincount(parts[covered], minlength=len(sizes))
+                if covered.sum() > 0.12 * ink.sum() or np.any((sizes > 2) & (hidden > 0.35 * sizes)):
+                    raise ValueError("제품 뒤로 넘어가는 제목이 너무 많아 읽기 어렵습니다")
+        elif covered.any():
             raise ValueError(f"{name} 레이어가 실제 제품을 가립니다")
 
 
-def review_finished(ai, answer, layout, scene, foreground, folder, design_input, references):
-    """완성 사진에서 레이어가 피사체를 가리는 경우에만 배치를 고칩니다."""
+def review_finished(ai, answer, layout, scene, foreground, folder, design_input, references, *,
+                    assess_composition=False, keep_wrap=False):
+    """완성 사진 위의 글자와 구도를 검사하고 사진을 유지한 채 배치를 고칩니다."""
+    original_error = None
     try:
         check_text_overlap(foreground, layout, folder)
     except ValueError as error:
         original_error = str(error)
-    else:
+    if original_error is None and not assess_composition:
         return answer, layout, None
     first = compose(layout, folder)
     artwork = layout["artwork"]
@@ -226,6 +253,17 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
          artwork["y"] + rows.max() + 1), (*size, *size), strict=True)]
     inputs = design_input | {"design": answer, "product_bounds_left_top_right_bottom": placement,
                              "layout_error": original_error}
+    if assess_composition:
+        ink_bounds = {}
+        for text in layout["texts"]:
+            with Image.open(folder / text["file"]) as image:
+                bounds = image.getchannel("A").getbbox()
+            if bounds:
+                ink_bounds[text["role"]] = [
+                    round(100 * (edge + offset) / side)
+                    for edge, offset, side in zip(bounds, (text["x"], text["y"]) * 2, size * 2, strict=True)
+                ]
+        inputs["rendered_text_bounds"] = ink_bounds
     for _ in range(2):
         review = ask_stage(ai, "ad_final_layout", FINAL_REVIEW + "\n" + DESIGN_SCHEMA, inputs,
                            [to_float(first), to_float(scene), *references])
@@ -233,6 +271,15 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
         if not isinstance(revision, dict):
             break
         revised = answer | {key: revision[key] for key in ("boxes", "styles", "accent") if key in revision}
+        if keep_wrap and isinstance(revised["styles"], dict):
+            styles = {}
+            for role, style in revised["styles"].items():
+                original = answer["styles"].get(role)
+                if isinstance(style, dict) and original:
+                    style = {key: value for key, value in style.items() if key not in ("max_lines", "break_after")}
+                    style.update({key: original[key] for key in ("max_lines", "break_after") if key in original})
+                styles[role] = style
+            revised["styles"] = styles
         if revised == answer:
             break
         with TemporaryDirectory(dir=folder) as staging:
@@ -240,6 +287,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
             try:
                 updated = design_layers(revised, design_input["copy"], size, design_input["fonts"], candidate)
                 scene.save(candidate / artwork["file"])
+                Image.fromarray(foreground).save(candidate / "foreground.png")
                 check_text_overlap(foreground, updated, candidate)
             except ValueError as error:
                 inputs = inputs | {"design": revised, "layout_error": str(error)}
@@ -250,7 +298,9 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
             if "graphic" in layout and "graphic" not in updated:
                 (folder / layout["graphic"]["file"]).unlink()
             return revised, updated, review.get("reason")
-    raise ValueError(original_error)
+    if original_error is not None:
+        raise ValueError(original_error)
+    return answer, layout, None
 
 
 def blend_edges(scene, foreground=None, *, position=(0, 0), canvas_size=None):
@@ -346,11 +396,16 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
     if revision_info:
         design_input.update(brief={"message": brief["message"], "evidence": brief.get("evidence")},
                             idea=idea, revision_feedback=revision_info)
+    art_plan = proposal.get("art_direction_plan") if proposal else plan_art_direction(
+        ai, fields, design_input["brief"] | {"headline": copy["headline"]}, idea, images, revision_info)
+    if art_plan:
+        design_input["art_direction_plan"] = art_plan | {"layout_guide": THEMES[art_plan["theme"]]["layout"]}
 
     folder.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=folder.parent) as staging:
         result = Path(staging)
-        design_task = DESIGN + "\nReturn a JSON design object.\n" + DESIGN_SCHEMA
+        design_task = (DESIGN + "\nUse the selected layout_guide and connect the chosen photo_device to one "
+                       "clear reading path. Return a JSON design object.\n" + DESIGN_SCHEMA)
         if feedback:
             design_task += ("\nThe second image is the previous poster. Plan the requested_scene_change in revision_feedback "
                             "and preserve unaffected parts of that composition. Do not substitute another change.")
@@ -369,9 +424,11 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
 
         if not proposal:
             direction_input = {"message": brief["message"], "idea": idea, "design": answer}
+            angle, scale = ANGLES[art_plan["angle"]], SHOT_SCALES[art_plan["shot_scale"]]
+            direction_input.update(art_direction_plan=art_plan, angle_guide=angle, framing_guide=scale)
             if revision_info:
                 direction_input.update(revision_info)
-            direction_task = PHOTO_DIRECTION
+            direction_task = PHOTO_DIRECTION + "\nKeep the selected angle, framing, and photo_device in the scene."
             if feedback:
                 direction_task += "\nDescribe the exact requested_scene_change and omit any conflicting design detail."
             direction = ask_stage(ai, "ad_scene_direction", direction_task, direction_input, images[:1])
@@ -384,8 +441,10 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                      if subject_box else "")
         correction = (f"Required photographic change, taking precedence over other scene details: {feedback} "
                       "Keep all poster copy out of the photograph. " if feedback else "")
+        guide = (f"{ANGLES[art_plan['angle']]} {SHOT_SCALES[art_plan['shot_scale']]} {art_plan['photo_device']} "
+                 if art_plan else "")
         prompt = ("Make a new commissioned photograph with a newly built setting and lighting. "
-                  f"{correction}{placement}Replace the surroundings with the requested setting. "
+                  f"{correction}{placement}{guide}Replace the surroundings with the requested setting. "
                   "Keep the product shape, material and details. "
                   f"{answer['art_direction']} Preserve the recognizable product details and genuine packaging labels. "
                   "Keep surroundings, props and surfaces free of stray lettering, numbers and logos. "
@@ -409,11 +468,14 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             if answer["edge"] == "blend":
                 scene = blend_edges(scene, foreground, position=(artwork["x"], artwork["y"]), canvas_size=size)
             scene.save(result / artwork["file"])
-            answer, layout, final_review_reason = review_finished(ai, answer, layout, scene, foreground, result,
-                                                                  design_input, images[1:])
             Image.fromarray(foreground).save(result / "foreground.png")
+            answer, layout, final_review_reason = review_finished(ai, answer, layout, scene, foreground, result,
+                                                                  design_input, images[1:],
+                                                                  assess_composition=bool(art_plan and not proposal))
         layout.update(fields=fields, brief=brief, design=answer, scene_prompt=prompt, preview=preview,
                       final_review_reason=final_review_reason)
+        if art_plan:
+            layout["art_direction_plan"] = art_plan
         if preview:
             scene.save(result / "scene.png")
         poster = compose(layout, result)

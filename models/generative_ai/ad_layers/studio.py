@@ -8,6 +8,7 @@ import shutil
 
 from PIL import Image, ImageOps
 
+from .art_direction import THEMES
 from .creative_brief import ask_stage, required_text
 from .layers import load_layout, load_settings, to_float
 from .scene_ad import make_scene_ad
@@ -28,6 +29,12 @@ physically believable, including how the parts are held or supported. Check the 
 Product facts are background evidence. Omitted optional product facts such as volume or weight are allowed
 unless the poster makes a misleading offer. Then inspect visual focus, visual idea, the scale and hierarchy of
 the headline, and how the photo and type relate. Evaluate the poster against the remaining design references.
+Use any supplied theme guides. Identify the actual visible line, action, light, or scale that leads the eye
+between the image and the headline. Empty margin and legible copy beside a product are insufficient if the
+image does not show the message. Classify a missing photographic idea as scene, and a weak reading path as layout.
+For ready, name the visible composition decision in observation, such as a shared axis, directed action,
+or meaningful typographic contrast that leads from the message to the product. Evidence that the item
+matches the words confirms the subject and cannot by itself justify the visual composition.
 Use the phone preview to read it as a shopper seeing the whole poster. Check whether the product name and price can be
 spotted and read as related information after the first glance. Report typography if either is visually lost
 or the price reads like a detached footnote. A supporting price can be smaller than the headline.
@@ -128,8 +135,14 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         pictures = {name: to_float(poster) for name, poster in zip(order, posters, strict=True)}
         edition = load_layout(versions / current)
         required_copy = {text["role"]: text["text"] for text in edition["texts"]}
+        directions = {}
+        for name in order:
+            version = edition if name == current else load_layout(versions / name)
+            direction = version.get("art_direction_plan")
+            if direction and direction.get("theme") in THEMES:
+                directions[name] = direction | {"review_guide": THEMES[direction["theme"]]["review"]}
         review = ask_stage(ai, "studio_look", LOOK, {"product_facts": fields, "required_copy": required_copy,
-                                                   "idea": idea, "version_order": order},
+                                                   "idea": idea, "version_order": order, "art_directions": directions},
                            [to_float(photo), *pictures.values(), to_float(phone_preview(posters)), *sources])
         visible = review.get("version")
         finding = review.get("finding")
@@ -178,12 +191,13 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
                 try:
                     if not (base / "foreground.png").is_file():
                         raise ValueError("크기 변경에 사용할 제품 영역이 없습니다")
-                    adapt_format(base, variant, name, ai, fill_margin if generation is not None else None)
+                    framing = adapt_format(base, variant, name, ai, fill_margin if generation is not None else None)
                 except (ValueError, FileNotFoundError) as error:
                     record("format_failed", format=name, observation=str(error))
                     continue
                 variants[name] = variant / "ad.png"
-                record("format", format=name, image=variants[name].relative_to(output).as_posix())
+                record("format", format=name, image=variants[name].relative_to(output).as_posix(),
+                       **({"framing": framing} if framing else {}))
             status = "complete" if set(variants) == set(formats) else "format_review"
             record(status, version=current, image="final/ad.png")
             return {"status": status, "version": current, "image": final / "ad.png", "formats": variants}

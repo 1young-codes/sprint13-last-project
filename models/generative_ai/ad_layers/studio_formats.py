@@ -7,15 +7,24 @@ from tempfile import TemporaryDirectory
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
-from .creative_brief import ask_stage
+from .creative_brief import ask_stage, required_text
 from .layers import compose, load_layout, load_settings, save_layout, to_float
-from .scene_ad import check_text_overlap, design_layers
+from .scene_ad import check_text_overlap, design_layers, review_finished
 from .studio_edits import foreground_mask, line_break_after
 from .text_render import LINE_HEIGHT, minimum_font_size
 
 
 FORMATS = {"1:1": (1024, 1024), "4:5": (864, 1080), "9:16": (1080, 1920), "16:9": (1280, 720),
            "thumbnail": (600, 600)}
+
+POSITION = """Pick the placement of the same photograph for one poster in the new ratio.
+The first image is the approved poster. The following previews are in position_order. Their extended
+edges preview where space will be filled. Choose where the product, copy and negative space work together.
+Check which placement gives the headline and supporting copy one useful quiet area near the product
+and keeps the scene anchored. Avoid distributing space into two large unused strips. Prefer extending
+an already simple part of the scene over extending furniture, hard edges, or important props.
+Keep every visible product and retain the campaign's visual focus. Return JSON with position from
+position_order and reason as one concrete Korean sentence about the intended composition."""
 
 REFRAME = """Reframe the approved poster's exact typography for a new aspect ratio. The first image is the
 approved poster and the second is the actual photo in the new frame. Keep the new photo unchanged. Use its
@@ -26,7 +35,8 @@ Return a JSON object with boxes and styles keyed by headline, product_name and p
 [left, top, width, height] in whole percentages of the poster. Keep them inside the poster and off one another.
 Each style has font, align (left, center, or right), color (#RRGGBB), size, and max_lines (1 or 2,
 always 1 for price). Each box must be at least min_box_height_percent for its line count and needs more height
-for larger lettering. Allow enough width for any preferred_first_lines. An optional accent is null or an object
+for larger lettering. Allow enough width for any preferred_first_lines. For the headline only, optional
+depth behind_subject lets a small part of the headline tuck behind the product. An optional accent is null or an object
 with shape (rectangle or ellipse), box, color, and layer (overlay). Use the previous_layout and layout_error
 to repair failed boxes while keeping the parts that fit."""
 
@@ -37,9 +47,8 @@ COPY_BREAK = """검토할 광고 문구를 두 줄에 놓을 때 자연스러운
 자연스러운 줄바꿈이 없다는 뜻의 null을 값으로 하는 JSON 객체를 반환하세요."""
 
 
-def extend_edges(photo, size):
-    contained = ImageOps.contain(photo, size, Image.Resampling.LANCZOS)
-    left, top = (size[0] - contained.width) // 2, (size[1] - contained.height) // 2
+def extend_edges(contained, size, placement):
+    left, top = int((size[0] - contained.width) * placement), int((size[1] - contained.height) * placement)
     columns = (left, size[0] - contained.width - left)
     rows = (top, size[1] - contained.height - top)
     pixels = np.pad(np.asarray(contained), (rows, columns, (0, 0)), mode="edge")
@@ -55,7 +64,7 @@ def extend_edges(photo, size):
     return frame, (left, top, left + contained.width, top + contained.height)
 
 
-def frame_photo(photo, mask, size, expand=None):
+def frame_photo(photo, mask, size, expand=None, choose_position=None):
     width, height = photo.size
     target_width, target_height = size
     ratio = target_width / target_height
@@ -72,7 +81,19 @@ def frame_photo(photo, mask, size, expand=None):
     photo, mask = photo.crop(bounds), mask.crop(bounds)
     if fits:
         return photo.resize(size, Image.Resampling.LANCZOS), mask.resize(size, Image.Resampling.NEAREST)
-    frame, placed = extend_edges(photo, size)
+    contained = ImageOps.contain(photo, size, Image.Resampling.LANCZOS)
+    extra_width, extra_height = size[0] - contained.width, size[1] - contained.height
+    positions = ("left", "center", "right") if extra_width > extra_height else ("top", "center", "bottom")
+    framing = "center"
+    if choose_position is not None and max(extra_width, extra_height) >= min(size) * 0.06:
+        choices = {name: extend_edges(contained, size, fraction)
+                   for name, fraction in zip(positions, (0.15, 0.5, 0.85), strict=True)}
+        framing = choose_position({name: item[0] for name, item in choices.items()})
+        if not isinstance(framing, str) or framing not in choices:
+            raise ValueError("게시 규격에 사용할 사진 위치를 고르지 못했습니다")
+        frame, placed = choices[framing]
+    else:
+        frame, placed = extend_edges(contained, size, 0.5)
     framed_mask = Image.new("L", size)
     left, top, right, bottom = placed
     framed_mask.paste(mask.resize((right - left, bottom - top), Image.Resampling.NEAREST), (left, top))
@@ -132,13 +153,26 @@ def adapt_format(source, output, format_name, ai, expand=None):
     with Image.open(source / layout["artwork"]["file"]) as original:
         photo = original.convert("RGB")
     design = layout["design"]
-    framing, framing_mask = frame_photo(photo, mask, size, expand)
     with Image.open(source / "ad.png") as poster:
-        images = [to_float(poster), to_float(framing)]
+        reference = to_float(poster)
     copy = {item["role"]: item["text"] for item in layout["texts"]}
+    position_info = {}
+
+    def choose_position(previews):
+        pictures = [to_float(ImageOps.contain(image, (540, 540), Image.Resampling.LANCZOS))
+                    for image in previews.values()]
+        answer = ask_stage(ai, "studio_format_position", POSITION,
+                           {"size": size, "copy": copy, "position_order": list(previews)}, [reference, *pictures])
+        position_info.update(position=answer.get("position"), reason=required_text(answer, "reason", "사진 배치"))
+        return position_info["position"]
+
+    framing, framing_mask = frame_photo(photo, mask, size, expand, choose_position)
+    images = [reference, to_float(framing)]
     fonts = load_settings()["fonts"]
     bounds = [round(100 * point / side) for point, side in zip(framing_mask.getbbox(), (*size, *size), strict=True)]
     inputs = {"size": size, "copy": copy, "fonts": list(fonts), "approved_design": design, "product_bounds": bounds}
+    if position_info:
+        inputs["framing"] = position_info
     line_height = minimum_font_size(size[0]) * LINE_HEIGHT
     inputs["min_box_height_percent"] = {"one_line": ceil(100 * line_height / size[1]),
                                         "two_lines": ceil(200 * line_height / size[1])}
@@ -162,10 +196,20 @@ def adapt_format(source, output, format_name, ai, expand=None):
                 continue
             framing.save(stage / candidate["artwork"]["file"])
             framing_mask.save(stage / "foreground.png")
+            if position_info:
+                revised, candidate, reason = review_finished(
+                    ai, revised, candidate, framing, np.asarray(framing_mask) > 128, stage,
+                    inputs, [reference], assess_composition=True, keep_wrap=True)
+                if reason:
+                    candidate["final_review_reason"] = reason
             compose(candidate, stage).save(stage / "ad.png")
             candidate.update(fields=layout["fields"], brief=layout["brief"], design=revised,
                              scene_prompt=layout["scene_prompt"], format=format_name)
+            if "art_direction_plan" in layout:
+                candidate["art_direction_plan"] = layout["art_direction_plan"]
+            if position_info:
+                candidate["framing"] = position_info
             save_layout(candidate, stage)
             stage.rename(output)
-            return
+            return position_info
     raise ValueError(inputs["layout_error"])

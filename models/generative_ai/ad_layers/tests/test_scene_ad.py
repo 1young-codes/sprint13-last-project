@@ -5,6 +5,7 @@ from PIL import Image
 import pytest
 
 from models.generative_ai.ad_layers import scene_ad
+from models.generative_ai.ad_layers.layers import compose
 from models.generative_ai.ad_layers.text_render import page_html
 from models.generative_ai.photo_retouch import product_mask
 
@@ -37,6 +38,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             assert reference.getpixel((243, 460)) == photo.getpixel((30, 28))
             is_revision = "ad_cycle_critique" in calls
             assert ("Narrow studio beam" if is_revision else "Amber reflections") in prompt
+            assert "Shoot near the subject's height" in prompt and "Show the amber edge in side light." in prompt
             assert (correction in prompt) == expect_correction
             assert "부드러운 아침" not in prompt
             calls.append("qwen")
@@ -52,6 +54,10 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 return '{"scene":"Soft window light"}'
             if step == "ad_headline":
                 return '{"headline":"부드러운 아침"}'
+            if step == "ad_art_direction":
+                assert len(images) == 2 and "부드러운 아침" in prompt
+                return json.dumps({"theme": "studio", "angle": "level", "shot_scale": "whole",
+                                   "evidence": "앰버색 병", "photo_device": "Show the amber edge in side light."})
             if step == "ad_cycle_critique":
                 assert len(images) == 4 and images[0][20, 15, 2] == 1
                 assert "병의 하단이 잘렸습니다" in prompt
@@ -59,6 +65,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             if step == "ad_scene_direction":
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
                 assert data["design"]["artwork_box"] == [0, 0, 50, 100]
+                assert "vertical layers" in data["angle_guide"] and data["art_direction_plan"]["angle"] == "level"
                 assert len(images) == 1 and "previous_art_direction" not in data
                 if expect_correction:
                     assert data["requested_scene_change"] == correction
@@ -75,6 +82,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             assert len(images) == (3 if expect_correction else 2)
             data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
             assert data["copy"] == {"headline": "부드러운 아침", "product_name": "수분 세럼", "price": "32,000원"}
+            assert "one axis" in data["art_direction_plan"]["layout_guide"]
             if "revision_feedback" in data:
                 assert "scene" not in data["brief"] and data["idea"] == "가벼운 아침 연출"
             if expect_correction:
@@ -105,9 +113,10 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     folder = tmp_path / "result"
     models = {"ai": Interpreter(), "generation": Model(), "mask": "mask"}
     layout = scene_ad.make_scene_ad(photo, fields, "", models, folder, references=[reference])
-    assert calls == ["ad_plan", "ad_direction", "ad_headline", "ad_layout", "ad_layout", "render",
+    assert calls == ["ad_plan", "ad_direction", "ad_headline", "ad_art_direction", "ad_layout", "ad_layout", "render",
                      "ad_scene_direction", "qwen", "ad_final_layout", "render"]
     assert layout["design"]["accent"] is None
+    assert layout["art_direction_plan"]["evidence"] == "앰버색 병"
     assert layout["final_review_reason"] == "상품명을 제품 옆으로 이동"
     assert (folder / "before-typesetting.png").is_file()
     assert {layer["text"] for layer in layout["texts"]} == {"부드러운 아침", "수분 세럼", "32,000원"}
@@ -133,7 +142,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     (rejected / "layout.json").write_text(json.dumps(rejected_layout), encoding="utf-8")
     revision = scene_ad.make_scene_ad(photo, fields, "가벼운 아침 연출", models, tmp_path / "revision", references=[reference],
                                       previous=folder, rejected=rejected)
-    assert calls == ["ad_cycle_critique", "ad_layout", "ad_layout", "render", "ad_scene_direction",
+    assert calls == ["ad_cycle_critique", "ad_art_direction", "ad_layout", "ad_layout", "render", "ad_scene_direction",
                      "qwen", "ad_final_layout", "render"]
     assert revision["revision"]["weakness"] == "평평한 조명"
     assert revision["design"]["art_direction"] == "Narrow studio beam"
@@ -163,6 +172,38 @@ def test_type_can_extend_over_photo_but_not_over_product(tmp_path):
     ink.save(tmp_path / "text.png")
     with pytest.raises(ValueError, match="실제 제품을 가립니다"):
         scene_ad.check_text_overlap(foreground, layout, tmp_path)
+
+
+def test_headline_can_tuck_behind_the_subject_without_repainting_it(tmp_path):
+    size = (30, 30)
+    Image.new("RGB", size, "blue").save(tmp_path / "scene.png")
+    Image.new("RGB", size, "black").save(tmp_path / "background.png")
+    mask = np.zeros((30, 30), dtype=bool)
+    mask[10, 12] = True
+    Image.fromarray(mask).save(tmp_path / "foreground.png")
+    ink = Image.new("RGBA", size)
+    ink.paste("white", (2, 10, 13, 11))
+    ink.save(tmp_path / "title.png")
+    layout = {"size": list(size), "background": {"file": "background.png"},
+              "artwork": {"file": "scene.png", "x": 0, "y": 0, "w": 30, "h": 30},
+              "texts": [{"role": "headline", "file": "title.png", "x": 0, "y": 0, "w": 30, "h": 30,
+                         "depth": "behind_subject"}]}
+    scene_ad.check_text_overlap(mask, layout, tmp_path)
+    rendered = compose(layout, tmp_path)
+    assert rendered.getpixel((12, 10)) == (0, 0, 255)
+    assert rendered.getpixel((11, 10)) == (255, 255, 255)
+    assert Image.open(tmp_path / "title.png").getpixel((12, 10)) == (255, 255, 255, 255)
+    mask[10, 10:13] = True
+    with pytest.raises(ValueError, match="제목이 너무 많아"):
+        scene_ad.check_text_overlap(mask, layout, tmp_path)
+
+    mask[:] = False
+    ink.paste("white", (2, 10, 13, 15))
+    ink.paste("white", (17, 16, 19, 18))
+    ink.save(tmp_path / "title.png")
+    mask[16:18, 17:19] = True
+    with pytest.raises(ValueError, match="제목이 너무 많아"):
+        scene_ad.check_text_overlap(mask, layout, tmp_path)
 
 
 def test_foreground_can_include_a_hand_touching_the_frame(monkeypatch):

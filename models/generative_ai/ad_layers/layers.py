@@ -110,8 +110,18 @@ def compose(layout: dict, folder: Path) -> Image.Image:
             paste_clipped(canvas, Image.open(folder / shadow["file"]).convert("RGBA"),
                           product["x"] + shadow["dx"], product["y"] + shadow["dy"])
         paste_clipped(canvas, Image.open(folder / product["file"]).convert("RGBA"), product["x"], product["y"])
+    foreground = None
     for text in layout["texts"]:
-        paste_clipped(canvas, Image.open(folder / text["file"]).convert("RGBA"), text["x"], text["y"])
+        with Image.open(folder / text["file"]) as source:
+            layer = source.convert("RGBA")
+        if text.get("depth") == "behind_subject" and not layout.get("preview"):
+            if foreground is None:
+                with Image.open(folder / "foreground.png") as mask:
+                    foreground = mask.convert("L").point(lambda value: 255 if value > 128 else 0)
+            x, y = text["x"] - artwork["x"], text["y"] - artwork["y"]
+            visible = ImageChops.invert(foreground.crop((x, y, x + layer.width, y + layer.height)))
+            layer.putalpha(ImageChops.multiply(layer.getchannel("A"), visible))
+        paste_clipped(canvas, layer, text["x"], text["y"])
     return canvas.convert("RGB")
 
 

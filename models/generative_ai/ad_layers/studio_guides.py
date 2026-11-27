@@ -16,7 +16,9 @@ ACTION_GUIDES = {
         "arguments": {"changes": "Object keyed by headline, product_name or price. Put edits directly inside each role. "
                                  "Available keys: box [left,top,width,height] in whole poster percent, font, align, "
                                  "color, size (integer percent), max_lines, first_line (exact words for line 1, or null "
-                                 "to clear a forced break). Example: {\"changes\":{\"headline\":{\"size\":6,"
+                                 "to clear a forced break). For headline only, depth can be behind_subject or null. "
+                                 "Use it only for a small intentional overlap that leaves the words readable. "
+                                 "Example: {\"changes\":{\"headline\":{\"size\":6,"
                                  "\"first_line\":\"<exact first line>\"}}}."},
     },
     "edit_region": {

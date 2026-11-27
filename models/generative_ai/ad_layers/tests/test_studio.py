@@ -160,6 +160,49 @@ def test_format_delegates_new_breaks_to_copy_review():
     assert studio_formats.format_styles(None, styles, layers, first_lines) == updated
 
 
+def test_expands_only_the_chosen_photo_placement():
+    photo = Image.new("RGB", (100, 100), "blue")
+    mask = Image.new("L", photo.size)
+    mask.paste(255, (7, 25, 93, 76))
+    expanded = []
+
+    def choose(previews):
+        assert list(previews) == ["top", "center", "bottom"]
+        assert all(preview.size == (50, 100) for preview in previews.values())
+        return "bottom"
+
+    def fill(frame, margin):
+        assert margin[:39].all() and margin[92:].all() and not margin[39:92].any()
+        expanded.append(frame)
+        return Image.new("RGB", frame.size, "green")
+
+    result, visible = studio_formats.frame_photo(photo, mask, (50, 100), fill, choose)
+    assert len(expanded) == 1 and visible.getbbox() == (2, 52, 48, 79)
+    assert result.crop((0, 39, 50, 92)).tobytes() == expanded[0].crop((0, 39, 50, 92)).tobytes()
+
+
+def test_composition_review_can_fix_a_valid_layout(draft):
+    folder, _ = draft
+    layout = load_layout(folder)
+    design = layout["design"]
+    foreground = studio_edits.foreground_mask(folder, layout)
+    copy = {layer["role"]: layer["text"] for layer in layout["texts"]}
+    original_photo = (folder / "scene.png").read_bytes()
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            assert step == "ad_final_layout" and len(images) == 2
+            boxes = design["boxes"] | {"product_name": [10, 37, 45, 7], "price": [10, 45, 45, 7]}
+            return json.dumps({"reason": "판매 정보를 묶었습니다", "revision": {"boxes": boxes}})
+
+    with Image.open(folder / "scene.png") as source:
+        revised, _, why = scene_ad.review_finished(Agent(), design, layout, source.copy(), foreground, folder,
+                                                   {"copy": copy, "fonts": ["noto_sans_kr"]}, [],
+                                                   assess_composition=True)
+    assert why == "판매 정보를 묶었습니다" and revised["boxes"]["price"] == [10, 45, 45, 7]
+    assert (folder / "scene.png").read_bytes() == original_photo
+
+
 def test_import_rejects_a_draft_with_modified_price(tmp_path, draft):
     folder, fields = draft
     layout = load_layout(folder)
