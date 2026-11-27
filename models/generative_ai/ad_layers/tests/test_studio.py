@@ -349,6 +349,51 @@ def test_composition_edit_softens_the_edge_without_repainting(tmp_path, draft):
         assert image.convert("RGB").tobytes() == scene.convert("RGB").tobytes()
 
 
+def test_studio_can_reframe_an_inset_photo_without_loading_a_generator(tmp_path, draft, monkeypatch):
+    folder, fields = draft
+    layout = load_layout(folder)
+    layout["artwork"].update(y=10, h=85)
+    layout["design"]["artwork_box"] = [0, 10, 100, 85]
+    with Image.open(folder / "foreground.png") as original:
+        mask = original.crop((0, 10, 100, 95))
+    mask.save(folder / "foreground.png")
+    Image.new("RGB", mask.size, "blue").save(folder / "scene.png")
+    compose(layout, folder).save(folder / "ad.png")
+    save_layout(layout, folder)
+    monkeypatch.setitem(studio.FORMATS, "1:1", (100, 100))
+    instruction = "사진 아래 빈 바탕을 줄여 주세요"
+
+    def reframe(source, target, format_name, ai, expand, *, intent):
+        assert format_name == "1:1" and expand is None and intent == instruction
+        shutil.copytree(source, target)
+        layout = load_layout(target)
+        layout["artwork"].update(y=0, h=100)
+        layout["design"]["artwork_box"] = [0, 0, 100, 100]
+        full_mask = Image.new("L", (100, 100))
+        full_mask.paste(mask, (0, 10))
+        full_mask.save(target / "foreground.png")
+        Image.new("RGB", full_mask.size, "blue").save(target / "scene.png")
+        compose(layout, target).save(target / "ad.png")
+        save_layout(layout, target)
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            data = json.loads(request.split("Input JSON follows:\n", 1)[1])
+            if step == "studio_look":
+                assert data["photo_boxes"]["v01"] == [0, 10, 100, 85]
+                version = data["version_order"][-1]
+                return json.dumps({"version": version, "finding": "layout", "observation": instruction})
+            action = "reframe_photo" if "reframe_photo" in data["actions"] else "hold"
+            arguments = {"instruction": instruction} if action == "reframe_photo" else {}
+            return json.dumps({"action": action, "arguments": arguments, "reason": instruction})
+
+    monkeypatch.setattr(studio, "adapt_format", reframe)
+    result = studio.run_studio(Image.new("RGB", (100, 100)), fields, instruction, tmp_path / "reframe", Agent(),
+                               draft=folder, edit_limit=2)
+    assert result["version"] == "v02"
+    assert load_layout(result["image"].parent)["texts"] == layout["texts"]
+
+
 @pytest.mark.parametrize(("finding", "observation", "has_reference", "planned_layout"), [
     ("scene", "원본 촛불과 다른 연출이 보이지 않습니다", False, None),
     ("scene", "원본 촛불과 다른 연출이 보이지 않습니다", True, None),

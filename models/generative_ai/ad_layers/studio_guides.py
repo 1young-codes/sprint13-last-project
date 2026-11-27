@@ -34,6 +34,15 @@ ACTION_GUIDES = {
         "arguments": {"instruction": "A concrete description of the broken reading path and how the words, edge "
                                       "and product should read together. Leave exact positions to the layout editor."},
     },
+    "reframe_photo": {
+        "findings": ("layout",),
+        "guide": "When a useful photograph occupies only part of the poster and the remaining flat panel "
+                 "looks accidental, make a closer crop of the existing photo and reflow the exact typography "
+                 "on the same canvas. Preserve every visible product and its photographic treatment. "
+                 "Use edit_composition when moving type or adjusting the edge alone can solve the issue.",
+        "arguments": {"instruction": "Explain which unused area should shrink and how the existing photo and "
+                                      "words should fill that space."},
+    },
     "edit_region": {
         "findings": ("distraction", "scene"),
         "guide": "Repair an exact area of the scenery. Use for a stray prop, mark, or local texture defect. "

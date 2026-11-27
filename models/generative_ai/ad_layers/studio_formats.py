@@ -58,6 +58,7 @@ secondary unless approved_design.focus is price.
 Read the new photo before choosing positions. In a tall canvas, do not separate title and product with a wide
 unused stretch of background. Place the nearest title line beside or near the feature in the actual framing.
 In a wide canvas with no clear footer, keep the product name and price beside the headline or the product.
+When intent is provided, address that visible problem on the new photo without rewriting copy.
 placement_options holds exact boxes checked against the product mask using the approved text sizes. If one
 is available, start by choosing its key as placement. You may also return colors as a map from a text role
 to a #RRGGBB when needed for contrast, including headline_line_1 or headline_line_2 for a split heading.
@@ -85,6 +86,8 @@ from the intended focus. Quiet margins around the whole composition are allowed.
 A large empty band between the title and subject, with no visible photographic cue
 across it, breaks the reading path. A pair of title lines needs to read as one phrase before the viewer reaches
 the product. Also use outer_margins to inspect the actual space outside the product and all the lettering.
+If intent describes a same-size repair, check that the photographed feature is more legible and the
+unused region visibly shrank in the second image.
 Read the long axis from edge to edge. An enlarged stretch of featureless wall, floor or surface has no
 photographic purpose merely because it balances a matching empty stretch at the other end. Check whether
 the subject itself meaningfully fills the long axis and directs the eye. If the scene was originally arranged
@@ -298,7 +301,7 @@ def check_type_margin(size, ink):
             raise ValueError("실제 글자가 포스터 가장자리에 너무 가깝습니다. 안쪽 여백을 남겨 다시 배치하세요")
 
 
-def adapt_format(source, output, format_name, ai, expand=None):
+def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
     layout = load_layout(source)
     size = FORMATS[format_name]
     threshold_mask = foreground_mask(source, layout)
@@ -331,7 +334,8 @@ def adapt_format(source, output, format_name, ai, expand=None):
             notes[name] = {"product_bounds": bounds, "placement": choice, "outer_margins": outer_margins(bounds, ink)}
             pictures.append(to_float(ImageOps.contain(frame, (540, 540), Image.Resampling.LANCZOS)))
         answer = ask_stage(ai, "studio_format_position", POSITION,
-                           {"size": size, "copy": copy, "position_order": list(previews), "placement_notes": notes},
+                           {"size": size, "copy": copy, "position_order": list(previews), "placement_notes": notes,
+                            **({"intent": intent} if intent else {})},
                            [reference, *pictures])
         position_info.update(position=answer.get("position"), reason=required_text(answer, "reason", "사진 배치"))
         return position_info["position"]
@@ -374,6 +378,8 @@ def adapt_format(source, output, format_name, ai, expand=None):
     fonts = load_settings()["fonts"]
     bounds, placements = available(framing_mask)
     inputs = {"size": size, "copy": copy, "fonts": list(fonts), "approved_design": design, "product_bounds": bounds}
+    if intent:
+        inputs["intent"] = intent
     inputs["placement_options"] = placements
     if position_info:
         inputs["framing"] = position_info
@@ -411,7 +417,8 @@ def adapt_format(source, output, format_name, ai, expand=None):
             phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
             review = ask_stage(ai, "studio_format_reading", FORMAT_READING,
                                {"copy": copy, "focus": design["focus"], "product_bounds": bounds, "rendered_ink": ink,
-                                "outer_margins": outer_margins(bounds, ink.values())},
+                                "outer_margins": outer_margins(bounds, ink.values()),
+                                **({"intent": intent} if intent else {})},
                                [reference, to_float(phone)])
             reading = required_text(review, "observation", "게시 규격 검토")
             if type(review.get("ready")) is not bool:

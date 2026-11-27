@@ -51,6 +51,10 @@ scene if the shot could be swapped for a standard product photo without weakenin
 if the shot shows the idea but the type and spacing flatten it into disconnected information.
 An unexplained photo seam or empty strip that separates the headline from the detail it describes is a layout
 problem even when the photography is effective and the left and right areas look clean on their own.
+If idea requires a visible edit to an existing poster, check that the chosen version actually shows it before
+returning ready. Use photo_boxes to locate the photograph on each full canvas. A large flat area outside a
+good photograph is a layout defect when it has no role in the intended reading path. A visually strong
+product or a readable headline does not satisfy a requested composition change on its own.
 Use the phone preview to read it as a shopper seeing the whole poster. Check whether the product name and price can be
 spotted and read as related information after the first glance. Report typography if either is visually lost
 or the price reads like a detached footnote. A supporting price can be smaller than the headline.
@@ -92,6 +96,8 @@ color or a shared margin alone cannot establish the relationship when the letter
 Name what actually connects them or what prevents the connection in layout.observation.
 Name the first focal point in the preview. If a high-contrast graphic housing secondary information steals the
 first glance from the advertised feature, flag the hierarchy. An offer can lead when the campaign is about it.
+Check any concrete requested edit in idea against the actual candidate, including the space outside photo_box.
+Return layout.ready false if the requested composition change is still visibly missing.
 Return JSON with reference_observation (one concrete Korean detail from a reference, or null without references), scene (treatment and
 observation), and layout (ready boolean and observation). Each observation is a concrete Korean sentence.
 State visible evidence for each separately. A strong photograph alone is insufficient to approve the layout."""
@@ -125,6 +131,8 @@ when available. Do not repeat an earlier edit that left the same issue.
 When the photo works but a hard edge or empty strip separates it from the headline, use edit_composition.
 Also use edit_composition when the headline and offer need to move together to repair their relationship to
 the photo, or when a colored panel competes with the subject. Use edit_text for local fixes to individual blocks.
+Use reframe_photo when the existing photograph would work larger and a flat region outside its frame is the
+visible defect. Choose it over moving type alone when the photo itself is too small within the poster.
 Check design.boxes for placement limits:
 the visible ink can occupy only part of a box, and text boxes cannot overlap.
 Use the rendered text and foreground bounds to judge the visible gap after moving the headline. Both use left,
@@ -214,6 +222,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
                 return "product", observation
         check = ask_stage(ai, "studio_campaign_check", CAMPAIGN_CHECK, {
             "required_copy": required_copy, "rendered_text_bounds": rendered_text_bounds(candidate, selected),
+            "idea": idea, "photo_box": candidate["design"].get("artwork_box"),
             "has_source_study": bool(study), "treatments": TREATMENTS,
             "planned_effect": revision.get("visible_result"), "staging_intent": revision.get("staging_intent"),
             "planned_layout": planned_layout,
@@ -272,8 +281,10 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         edition = load_layout(versions / current)
         required_copy = {text["role"]: text["text"] for text in edition["texts"]}
         directions = {}
+        photo_boxes = {}
         for name in order:
             version = edition if name == current else load_layout(versions / name)
+            photo_boxes[name] = version["design"].get("artwork_box")
             direction = version.get("art_direction_plan")
             if direction and direction.get("theme") in THEMES:
                 directions[name] = direction | {"review_guide": THEMES[direction["theme"]]["review"]}
@@ -282,7 +293,8 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
             record("resume_review", version=current, finding=review["finding"], observation=review["observation"])
         else:
             review = ask_stage(ai, "studio_look", LOOK, {"product_facts": fields, "required_copy": required_copy,
-                                                       "idea": idea, "version_order": order, "art_directions": directions},
+                                                       "idea": idea, "version_order": order, "art_directions": directions,
+                                                       "photo_boxes": photo_boxes},
                                [to_float(photo), *pictures.values(), to_float(phone_preview(posters)), *sources])
         visible = review.get("version")
         finding = review.get("finding")
@@ -307,6 +319,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         layout = load_layout(base)
         available = {"hold", "select"}
         foreground_bounds = None
+        same_format = next((name for name, size in FORMATS.items() if list(size) == layout["size"]), None)
         if turn < edit_limit:
             if (base / "foreground.png").is_file():
                 available.add("edit_text")
@@ -315,6 +328,8 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
                     foreground_bounds = [round(100 * (value + offset) / dimension) for value, offset, dimension in
                                          zip(bounds, (art["x"], art["y"]) * 2, layout["size"] * 2, strict=True)]
                     available.add("edit_composition")
+                    if same_format is not None and (art["w"], art["h"]) != tuple(layout["size"]):
+                        available.add("reframe_photo")
                 if generation is not None:
                     available.add("edit_region")
             if generation is not None:
@@ -380,6 +395,10 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
             if action == "rebuild_campaign":
                 make_scene_ad(photo, fields, idea, generation() | {"ai": ai}, revised, references=references,
                               previous=base, campaign_intent=required_text(arguments, "intent", "광고 연출"))
+            elif action == "reframe_photo":
+                instruction = required_text(arguments, "instruction", "사진 배치")
+                adapt_format(base, revised, same_format, ai, fill_margin if generation is not None else None,
+                             intent=instruction)
             elif action in ("revise_scene", "change_viewpoint"):
                 viewpoint = required_text(arguments, "viewpoint", "촬영 시점") if action == "change_viewpoint" else None
                 if viewpoint is not None and viewpoint not in camera_viewpoints:
