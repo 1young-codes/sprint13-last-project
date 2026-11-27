@@ -85,6 +85,11 @@ name and price. Identify how the text groups relate by their visible edges, alig
 element in the photograph. Use rendered_text_bounds (left, top, right, bottom percentages) to distinguish where
 the ink really is from where its invisible box ends. An intentional offset can lead the eye. Flag an arbitrary
 offset that leaves the headline and offer floating as unrelated groups even when the artwork is effective.
+If planned_layout is present, also return layout.connection as visible or missing. Locate the specific feature
+in the photo and how the lettering draws attention to it through position, emphasis, or shape. A different
+connection from the plan can work, including quiet negative space that draws attention to the detail. Shared
+color or a shared margin alone cannot establish the relationship when the letters and the feature are far apart.
+Name what actually connects them or what prevents the connection in layout.observation.
 Name the first focal point in the preview. If a high-contrast graphic housing secondary information steals the
 first glance from the advertised feature, flag the hierarchy. An offer can lead when the campaign is about it.
 Return JSON with reference_observation (one concrete Korean detail from a reference, or null without references), scene (treatment and
@@ -209,6 +214,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         pre_shoot = selected / "composition.png"
         study = [to_float(read_image(pre_shoot))] if pre_shoot.is_file() else []
         revision = candidate.get("revision", {})
+        planned_layout = revision.get("layout_device")
         if revision.get("staged_piece_box") is not None:
             original, bounds = staged_evidence(selected, candidate, scene)
             identity = ask_stage(ai, "studio_staged_identity", STAGED_IDENTITY, {
@@ -226,22 +232,28 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
             "required_copy": required_copy, "rendered_text_bounds": rendered_text_bounds(candidate, selected),
             "has_source_study": bool(study), "treatments": TREATMENTS,
             "planned_effect": revision.get("visible_result"), "staging_intent": revision.get("staging_intent"),
+            "planned_layout": planned_layout,
         }, [to_float(photo), to_float(poster), to_float(scene), to_float(phone_preview([poster])), *study, *sources])
         scene_review, layout_review = check.get("scene"), check.get("layout")
         treatment = scene_review.get("treatment") if isinstance(scene_review, dict) else None
         if (not isinstance(treatment, str) or treatment not in TREATMENTS
                 or not isinstance(layout_review, dict) or type(layout_review.get("ready")) is not bool):
             raise ValueError("참고 포스터와 비교한 결과를 확인하지 못했습니다")
+        connection = layout_review.get("connection")
+        if planned_layout and connection not in ("visible", "missing"):
+            raise ValueError("사진과 문구의 관계를 확인하지 못했습니다")
         photo_evidence = required_text(scene_review, "observation", "참고 포스터 비교")
         layout_evidence = required_text(layout_review, "observation", "참고 포스터 비교")
         finding = {"product_mismatch": "product", "catalog": "scene"}.get(treatment)
         if finding is None:
-            finding = "ready" if layout_review["ready"] else "layout"
+            connected = not planned_layout or connection == "visible"
+            finding = "ready" if layout_review["ready"] and connected else "layout"
         observation = {"product": photo_evidence, "scene": photo_evidence, "layout": layout_evidence,
                        "ready": f"{photo_evidence} {layout_evidence}"}[finding]
         record("campaign_check", version=name, finding=finding, observation=observation, treatment=treatment,
                scene_observation=photo_evidence, layout_observation=layout_evidence,
-               reference_observation=required_text(check, "reference_observation", "참고 포스터 비교") if sources else None)
+               reference_observation=required_text(check, "reference_observation", "참고 포스터 비교") if sources else None,
+               **({"layout_connection": connection} if planned_layout else {}))
         return finding, observation
 
     record("product", product_name=fields["product_name"], price_krw=fields["price_krw"])

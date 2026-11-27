@@ -116,7 +116,9 @@ using the actual photograph. Find the visible axis, gesture or light that connec
 an unused band between them or the offer reads as unrelated fragments, move and scale the type as one composition.
 Use rendered_text_bounds to judge the actual ink, not the empty text boxes. For stacked supporting copy,
 leave less space between the name and price than between their group and the headline. Keep that group near
-the product rather than letting all the type drift into a distant corner.
+the product rather than letting all the type drift into a distant corner. For a one-line information group,
+fit the first text box to its visible lettering before placing the next box. A shared baseline with excess
+space between the two can still make them look unrelated.
 When the approved image and headline still feel like separate columns, consider whether one larger headline
 can share the subject's axis or tuck behind a small part of its outline. Use depth only when it adds that relation.
 Match the lettering to the visual mood and keep any confirmed line breaks. Use the supplied wording exactly.
@@ -140,6 +142,15 @@ if changed, must include headline, product_name and price. Boxes are [left, top,
 percentages. Their rectangles must not intersect. The end of one stacked box must be at or before the next
 box's top. Use depth only for the value behind_subject and omit it to put type in front. Fix any reported
 layout_error using the actual photograph. Return revision: null only when the layout works and layout_error is null."""
+
+FINISHED_COMPOSITION_COMPARE = """The first poster is the current one, and the second tries to fix the stated
+composition_issue. Compare the actual letter shapes, gaps, and their relationship to the photographed feature.
+Use the visible ink bounds to locate the type. A change in position, size or color alone is insufficient.
+Choose revision only when the affected parts now read together more clearly or the issue is visibly solved.
+If the request identifies several related problems, check each in both images. Keep the current poster if a
+requested relationship still looks broken or if the change solves one by worsening another.
+If the copy is readable in both, explain what happens to the advertised feature and title on the first glance.
+Return choice (original or revision) and a concrete Korean reason that describes what the images show."""
 
 CRITIQUE = """The first image is the previous finished ad, the second is the source product, and the rest are
 design references. Identify the most consequential visible weakness of the ad that changing the photograph
@@ -568,6 +579,19 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                 inputs = inputs | {"rejected_design" if needs_alternative else "design": revised,
                                    "layout_error": str(error)}
                 continue
+            if needs_alternative and original_error is None:
+                comparison = ask_stage(ai, "ad_final_composition_compare", FINISHED_COMPOSITION_COMPARE, {
+                    "composition_issue": inputs["composition_issue"], "copy": inputs["copy"],
+                    "original_ink": inputs["rendered_text_bounds"],
+                    "revision_ink": rendered_text_bounds(updated, candidate),
+                }, [to_float(first), to_float(compose(updated, candidate)), *references])
+                reason = required_text(comparison, "reason", "완성 배치 비교")
+                if comparison.get("choice") not in ("original", "revision"):
+                    raise ValueError("어느 배치가 더 나은지 확인하지 못했습니다")
+                if comparison["choice"] == "original":
+                    inputs = inputs | {"rejected_design": revised, "layout_error": reason}
+                    continue
+                review["reason"] = reason
             first.save(folder / "before-typesetting.png")
             for path in candidate.iterdir():
                 path.replace(folder / path.name)

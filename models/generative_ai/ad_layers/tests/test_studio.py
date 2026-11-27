@@ -163,6 +163,10 @@ def test_composition_edit_softens_the_edge_without_repainting(tmp_path, draft):
                 return '{"version":"v02","finding":"ready","observation":"제품과 제목이 이어집니다"}'
             if step == "studio_campaign_check":
                 return CAMPAIGN_READY
+            if step == "ad_final_composition_compare":
+                assert data["original_ink"]["headline"][0] == 10 and data["revision_ink"]["headline"][0] == 27
+                assert images[0][10, 10].tolist() != images[1][10, 10].tolist()
+                return '{"choice":"revision","reason":"사진 경계를 지나 제목과 제품이 이어집니다"}'
             if step == "ad_final_layout":
                 assert data["composition_issue"] == "제목과 제품 사이의 세로 경계를 부드럽게 이어 주세요"
                 if data["layout_error"] is None:
@@ -193,13 +197,14 @@ def test_composition_edit_softens_the_edge_without_repainting(tmp_path, draft):
         assert image.convert("RGB").tobytes() == scene.convert("RGB").tobytes()
 
 
-@pytest.mark.parametrize(("finding", "observation", "has_reference"), [
-    ("scene", "원본 촛불과 다른 연출이 보이지 않습니다", False),
-    ("scene", "원본 촛불과 다른 연출이 보이지 않습니다", True),
-    ("layout", "제목과 가격이 서로 어긋나 별개로 읽힙니다", True),
-    ("product", "움직인 상품의 실제 구조가 바뀌었습니다", True),
+@pytest.mark.parametrize(("finding", "observation", "has_reference", "planned_layout"), [
+    ("scene", "원본 촛불과 다른 연출이 보이지 않습니다", False, None),
+    ("scene", "원본 촛불과 다른 연출이 보이지 않습니다", True, None),
+    ("layout", "제목과 가격이 서로 어긋나 별개로 읽힙니다", True, None),
+    ("product", "움직인 상품의 실제 구조가 바뀌었습니다", True, None),
+    ("layout", "제목과 불빛이 떨어져 각각 읽힙니다", True, "불빛을 따라 제목을 읽습니다"),
 ])
-def test_campaign_comparison_can_block_selection(tmp_path, draft, finding, observation, has_reference):
+def test_campaign_comparison_can_block_selection(tmp_path, draft, finding, observation, has_reference, planned_layout):
     folder, fields = draft
     if finding == "scene":
         Image.new("RGB", (100, 100), "green").save(folder / "composition.png")
@@ -208,6 +213,10 @@ def test_campaign_comparison_can_block_selection(tmp_path, draft, finding, obser
         layout["revision"] = {"staged_piece_box": [20, 10, 60, 40], "staging_intent": "상품을 앞으로 옮깁니다"}
         save_layout(layout, folder)
         Image.new("RGB", (20, 20), "orange").save(folder / "staged-piece.png")
+    if planned_layout:
+        layout = load_layout(folder)
+        layout["revision"] = {"layout_device": planned_layout}
+        save_layout(layout, folder)
     references = [Image.new("RGB", (100, 100), "red")] if has_reference else []
 
     class Agent:
@@ -229,12 +238,15 @@ def test_campaign_comparison_can_block_selection(tmp_path, draft, finding, obser
                     assert images[-1][0, 0].tolist() == [1, 0, 0]
                 data = json.loads(request.split("Input JSON follows:\n", 1)[1])
                 assert data["has_source_study"] == has_study
+                assert data["planned_layout"] == planned_layout
                 assert data["rendered_text_bounds"]["headline"] == [10, 10, 13, 13]
                 assert "포근한 겨울 저녁" in request
                 return json.dumps({
                     "scene": {"treatment": "catalog" if finding == "scene" else "lighting",
                               "observation": observation if finding == "scene" else "촛불이 잘 보입니다"},
-                    "layout": {"ready": finding != "layout", "observation": observation if finding == "layout" else "문구가 연결됩니다"},
+                    "layout": {"ready": finding != "layout" or bool(planned_layout),
+                               "observation": observation if finding == "layout" else "문구가 연결됩니다",
+                               **({"connection": "missing"} if planned_layout else {})},
                     "reference_observation": "참고작의 그림자가 불빛의 위치를 드러냅니다" if has_reference else None,
                 })
             assert step == "studio_action"
