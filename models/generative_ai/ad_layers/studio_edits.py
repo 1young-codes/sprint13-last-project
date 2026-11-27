@@ -39,8 +39,8 @@ def change_text(stage, layout, changes):
     copy = {text["role"]: text["text"] for text in layout["texts"]}
     for role, change in changes.items():
         if (not isinstance(change, dict) or not change
-                or change.keys() - {"box", "font", "align", "color", "size", "max_lines", "first_line", "depth", "emphasis"}):
-            raise ValueError("글자에 설정할 수 있는 항목은 위치, 글꼴, 정렬, 색, 크기, 줄바꿈, 깊이와 제목 강조입니다")
+                or change.keys() - {"box", "font", "align", "color", "size", "max_lines", "first_line", "depth", "emphasis", "lines"}):
+            raise ValueError("지원되는 글자 배치와 스타일을 지정해야 합니다")
         if "box" in change:
             boxes[role] = change["box"]
         style = styles[role] | {key: value for key, value in change.items() if key not in ("box", "first_line")}
@@ -48,6 +48,8 @@ def change_text(stage, layout, changes):
             style.pop("break_after", None)
         if (first_line := change.get("first_line")) is not None:
             style.update(max_lines=2, break_after=line_break_after(copy[role], first_line))
+        if "lines" not in change and "break_after" not in style:
+            style.pop("lines", None)
         styles[role] = style
     revised = design | {"boxes": boxes, "styles": styles}
     texts = layout_texts(revised, copy, layout["size"], load_settings()["fonts"])

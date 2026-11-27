@@ -52,7 +52,8 @@ def font_file(name: str) -> Path:
 
 
 def phrase_html(text, parts, emphasis):
-    if not emphasis or (marked := text.find(emphasis["phrase"])) < 0:
+    marked = emphasis.get("start", text.find(emphasis["phrase"])) if emphasis else -1
+    if marked < 0:
         return "<br>".join(html.escape(text[start:end]) for start, end in parts)
     marked_end = marked + len(emphasis["phrase"])
     color = html.escape(emphasis["color"], quote=True)
@@ -106,6 +107,7 @@ def render_texts(texts: list[dict], size: tuple[int, int], folder: Path) -> None
     """texts의 각 줄을 folder/<file>로 저장합니다. 줄마다 x, y, w, h, text, font, color, file이 있어야 합니다."""
     from playwright.sync_api import sync_playwright
 
+    texts = [line for text in texts for line in text.get("lines", (text,))]
     if not texts:
         return
     paths = {font_file(t["font"]).name: font_file(t["font"]) for t in texts}

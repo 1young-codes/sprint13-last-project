@@ -10,7 +10,10 @@ TEXT_CHANGES = ("Object keyed by headline, product_name or price. Put edits dire
                 "Available keys: box [left,top,width,height] in whole poster percent, font, align, color, "
                 "size (percent), max_lines, first_line (exact words for line 1, or null to clear a forced break). "
                 "For headline only, depth can be behind_subject or null; keep a deliberate overlap small and legible. "
-                "Headline emphasis is optional: {phrase: exact words, color: #RRGGBB}, or null to clear.")
+                "Headline emphasis is optional: {phrase: exact words, color: #RRGGBB}, or null to clear. "
+                "For a split headline, lines is a two-object list in reading order. Each line has a box in whole "
+                "poster percentages within the headline box and can override size, font, align, color and depth. "
+                "When moving the outer box, supply updated line boxes too. Set lines to null to use one shared box.")
 
 ACTION_GUIDES = {
     "edit_text": {

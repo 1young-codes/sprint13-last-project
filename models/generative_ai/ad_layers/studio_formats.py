@@ -36,7 +36,10 @@ Return a JSON object with boxes and styles keyed by headline, product_name and p
 Each style has font, align (left, center, or right), color (#RRGGBB), size, and max_lines (1 or 2,
 always 1 for price). Each box must be at least min_box_height_percent for its line count and needs more height
 for larger lettering. Allow enough width for any preferred_first_lines. For the headline only, optional
-depth behind_subject lets a small part of the headline tuck behind the product. An optional accent is null or an object
+depth behind_subject lets a small part of the headline tuck behind the product. If the approved headline was
+placed as two independent lines, optional styles.headline.lines has two objects with new boxes in whole poster
+percentages inside the headline box. An object can override size, font, align, color or depth. Reposition the
+lines for the new canvas or omit lines if one shared heading block works better. An optional accent is null or an object
 with shape (rectangle or ellipse), box, color, and layer (overlay or behind_subject when the shape deliberately
 meets the visible product silhouette). Use the previous_layout and layout_error
 to repair failed boxes while keeping the parts that fit."""
@@ -143,6 +146,8 @@ def format_styles(ai, styles, layers, first_lines):
                     style["max_lines"] = 1
                 else:
                     style["break_after"] = line_break_after(layer["text"], first_lines[role])
+        if "break_after" not in style:
+            style.pop("lines", None)
         revised[role] = style
     return revised
 

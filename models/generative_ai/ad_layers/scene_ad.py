@@ -65,6 +65,10 @@ can deliberately cross a small outer part of a large headline. Every word must s
 depth when the type belongs in clear space. For the headline only, optional emphasis is an object with phrase
 (an exact contiguous phrase from the headline) and color (#RRGGBB). Use one accent when a visible color from
 the photograph draws attention to the corresponding words. Keep sufficient contrast. Use null to omit it.
+For a deliberately two-line headline, optional styles.headline.lines contains two objects in reading order.
+Each has a non-overlapping box inside the headline's outer box, in whole poster percentages, and may override
+size, align, color, font or depth. Use break_after to choose the exact words on each line. Set distinct positions
+or scales only when each clause has a visible role, such as a quiet lead-in and a short line near the subject.
 If a prior design failed, address the reported issue."""
 
 BLOCKING = """Review the first image as a full poster made from the real product silhouette and the exact
@@ -119,6 +123,9 @@ leave less space between the name and price than between their group and the hea
 the product rather than letting all the type drift into a distant corner. For a one-line information group,
 fit the first text box to its visible lettering before placing the next box. A shared baseline with excess
 space between the two can still make them look unrelated.
+Keep useful relationships that already exist. When the original title leads into the photo from above and
+supporting copy closes the reading path below it, preserve that order unless the new placement has a stronger
+visible reason. Examine the whole canvas before moving every text group into the same margin.
 When the approved image and headline still feel like separate columns, consider whether one larger headline
 can share the subject's axis or tuck behind a small part of its outline. Use depth only when it adds that relation.
 Match the lettering to the visual mood and keep any confirmed line breaks. Use the supplied wording exactly.
@@ -130,6 +137,12 @@ subject stays entirely visible. Keep both a visible part of the graphic and a pa
 Copy whole space-separated words exactly, including attached Korean particles or punctuation. Omit the emphasis
 if there is no suitable phrase. Use a single treatment and keep the accent legible against the actual background.
 If the same bright color on supporting information competes with the headline, reduce its emphasis.
+When a single headline box keeps both clauses far from the advertised feature, use an intentional break_after
+and two styles.headline.lines objects. Select an integer break_after from headline_breaks, which lists the first
+and second line text for each valid break. Each line has its own box in whole poster percentages inside the outer
+headline box, and can override size, font, align, color or depth. Place the line that names the feature near it.
+Use the other line to set up the message. Keep the two line boxes in reading order, vertical and non-overlapping.
+Keep both lines readable at feed size. Leave lines null to use one shared headline style.
 If a solid graphic panel is the strongest element by color contrast and the offer is secondary, soften or
 remove the panel. Use a common alignment and gap for the supporting text instead of relying on a shared box.
 If a hard photo boundary behind the words or between the heading and product cuts a shared background for no
@@ -146,6 +159,11 @@ layout_error using the actual photograph. Return revision: null only when the la
 FINISHED_COMPOSITION_COMPARE = """The first poster is the current one, and the second tries to fix the stated
 composition_issue. Compare the actual letter shapes, gaps, and their relationship to the photographed feature.
 Use the visible ink bounds to locate the type. A change in position, size or color alone is insufficient.
+Look at the full canvas in both. Compare the path through the headline, product and price and where any large
+empty area ends up. A split headline is not an improvement if stronger text rhythm is paid for by bunching
+all the text together, leaving a disconnected blank area, or removing a useful heading-to-photo progression.
+Use product_bounds alongside both ink maps. When the headline moves from above the product to below it or
+the reverse, explain what that move does to the entire reading path and the margin it leaves behind.
 Choose revision only when the affected parts now read together more clearly or the issue is visibly solved.
 If the request identifies several related problems, check each in both images. Keep the current poster if a
 requested relationship still looks broken or if the change solves one by worsening another.
@@ -193,6 +211,64 @@ def pixel_box(box, size):
             round((top + height) * canvas_h / 100) - y)
 
 
+def text_style(style, fonts, role):
+    font, align, color, size = (style.get(key) for key in ("font", "align", "color", "size"))
+    if (font not in tuple(fonts) or align not in ("left", "center", "right") or not is_color(color)
+            or type(size) not in (int, float) or not 2 <= size <= 20):
+        raise ValueError(f"{role} 글자 스타일 값이 올바르지 않습니다")
+    return {"font": font, "align": align, "color": color}
+
+
+def headline_breaks(text):
+    words = text.split()
+    return [{"break_after": index, "first_line": " ".join(words[:index]), "second_line": " ".join(words[index:])}
+            for index in range(1, len(words))]
+
+
+def headline_lines(layer, parent_style, canvas_size, fonts):
+    styles = parent_style["lines"]
+    if (not isinstance(styles, list) or len(styles) != 2 or "break_after" not in layer
+            or any(not isinstance(style, dict)
+                   or style.keys() - {"box", "size", "font", "align", "color", "depth", "text"}
+                   for style in styles)):
+        raise ValueError("나눠 배치할 제목에는 줄바꿈과 두 줄의 위치 및 스타일을 지정해야 합니다")
+    boxes = {str(index): style.get("box") for index, style in enumerate(styles, 1)}
+    validate_boxes(boxes, tuple(boxes))
+    if boxes["1"][1] + boxes["1"][3] > boxes["2"][1]:
+        raise ValueError("제목의 첫 줄은 둘째 줄보다 위에 있어야 합니다")
+    text = layer["text"]
+    words = list(re.finditer(r"\S+", text))
+    split = layer["break_after"]
+    parts = [(0, words[split - 1].end()), (words[split].start(), len(text))]
+    output = []
+    for index, ((start, end), style) in enumerate(zip(parts, styles, strict=True), 1):
+        line_text = text[start:end]
+        if style.get("text", line_text) != line_text:
+            raise ValueError("제목 줄의 문구가 확정된 원문과 다릅니다")
+        x, y, w, h = pixel_box(boxes[str(index)], canvas_size)
+        if not (layer["x"] <= x < x + w <= layer["x"] + layer["w"]
+                and layer["y"] <= y < y + h <= layer["y"] + layer["h"]):
+            raise ValueError("제목 각 줄은 제목 전체 영역 안에 들어가야 합니다")
+        visual = parent_style | style
+        child = text_style(visual, fonts, "제목 줄") | {
+            "text": line_text, "role": f"headline_line_{index}", "x": x, "y": y, "w": w, "h": h,
+            "file": f"text_headline_{index}.png", "max_lines": 1,
+            "max_font_size": round(visual["size"] * canvas_size[0] / 100), "min_font_size": layer["min_font_size"],
+        }
+        depth = style.get("depth", layer.get("depth"))
+        if depth not in (None, "front", "behind_subject"):
+            raise ValueError("제목 줄의 깊이는 제품 앞 또는 뒤여야 합니다")
+        if depth == "behind_subject":
+            child["depth"] = depth
+        if emphasis := layer.get("emphasis"):
+            marked = text.index(emphasis["phrase"])
+            first, last = max(start, marked), min(end, marked + len(emphasis["phrase"]))
+            if first < last:
+                child["emphasis"] = {"phrase": text[first:last], "color": emphasis["color"], "start": first - start}
+        output.append(child)
+    return output
+
+
 def layout_texts(answer, copy, canvas_size, fonts):
     boxes = validate_boxes(answer.get("boxes"), TEXT_ROLES)
     styles = answer.get("styles")
@@ -205,14 +281,11 @@ def layout_texts(answer, copy, canvas_size, fonts):
         style = styles[role]
         if not isinstance(style, dict):
             raise ValueError(f"{role} 글자 스타일이 빠졌습니다")
-        font, align, color = (style.get(key) for key in ("font", "align", "color"))
+        visual = text_style(style, fonts, role)
         size, max_lines, break_after = (style.get(key) for key in ("size", "max_lines", "break_after"))
-        if (font not in tuple(fonts) or align not in ("left", "center", "right")
-                or not is_color(color)
-                or type(size) not in (int, float) or not 2 <= size <= 20
-                or type(max_lines) is not int or not 1 <= max_lines <= (1 if role == "price" else 2)):
+        if type(max_lines) is not int or not 1 <= max_lines <= (1 if role == "price" else 2):
             raise ValueError(f"{role} 글자 스타일 값이 올바르지 않습니다")
-        layer = {"role": role, "text": text, "font": font, "align": align, "color": color,
+        layer = visual | {"role": role, "text": text,
                  "x": x, "y": y, "w": w, "h": h, "file": f"text_{role}.png", "max_lines": max_lines,
                  "max_font_size": round(size * width / 100), "min_font_size": minimum_font_size(width)}
         depth = style.get("depth")
@@ -229,6 +302,11 @@ def layout_texts(answer, copy, canvas_size, fonts):
             if role != "headline" or not valid_headline_emphasis(emphasis, text):
                 raise ValueError("강조는 제목에 한 번 나오는 일부 어절과 올바른 색을 지정해야 합니다")
             layer["emphasis"] = {key: emphasis[key] for key in ("phrase", "color")}
+        if style.get("lines") is not None:
+            if role != "headline":
+                raise ValueError("줄마다 따로 배치할 수 있는 문구는 제목입니다")
+            layer["lines"] = headline_lines(layer, style, canvas_size, fonts)
+            del layer["file"]
         texts.append(layer)
     return texts
 
@@ -451,7 +529,7 @@ def check_text_overlap(foreground, layout, folder):
     x, y = layout["artwork"]["x"], layout["artwork"]["y"]
     height, width = foreground.shape
     mask[y:y + height, x:x + width] = foreground
-    layers = [(f"{text['role']} 글자", text) for text in layout["texts"]]
+    layers = [(f"{line['role']} 글자", line) for text in layout["texts"] for line in text.get("lines", (text,))]
     if graphic := layout.get("graphic"):
         layers.append(("색면", graphic))
     for name, layer_info in layers:
@@ -480,13 +558,18 @@ def rendered_text_bounds(layout, folder):
     size = tuple(layout["size"])
     bounds_by_role = {}
     for text in layout["texts"]:
-        with Image.open(folder / text["file"]) as image:
-            bounds = image.getchannel("A").getbbox()
-        if bounds:
-            bounds_by_role[text["role"]] = [
-                round(100 * (edge + offset) / side)
-                for edge, offset, side in zip(bounds, (text["x"], text["y"]) * 2, size * 2, strict=True)
-            ]
+        line_bounds = []
+        for line in text.get("lines", (text,)):
+            with Image.open(folder / line["file"]) as image:
+                bounds = image.getchannel("A").getbbox()
+            if bounds:
+                ink = [round(100 * (edge + offset) / side)
+                       for edge, offset, side in zip(bounds, (line["x"], line["y"]) * 2, size * 2, strict=True)]
+                bounds_by_role[line["role"]] = ink
+                line_bounds.append(ink)
+        if "lines" in text and line_bounds:
+            bounds_by_role[text["role"]] = [min(b[0] for b in line_bounds), min(b[1] for b in line_bounds),
+                                             max(b[2] for b in line_bounds), max(b[3] for b in line_bounds)]
     return bounds_by_role
 
 
@@ -508,6 +591,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
         (artwork["x"] + columns.min(), artwork["y"] + rows.min(), artwork["x"] + columns.max() + 1,
          artwork["y"] + rows.max() + 1), (*size, *size), strict=True)]
     inputs = design_input | {"design": answer, "product_bounds_left_top_right_bottom": placement,
+                             "headline_breaks": headline_breaks(design_input["copy"]["headline"]),
                              "layout_error": original_error, "rendered_text_bounds": rendered_text_bounds(layout, folder)}
     task = FINAL_REVIEW
     needs_alternative = "composition_issue" in inputs
@@ -582,6 +666,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
             if needs_alternative and original_error is None:
                 comparison = ask_stage(ai, "ad_final_composition_compare", FINISHED_COMPOSITION_COMPARE, {
                     "composition_issue": inputs["composition_issue"], "copy": inputs["copy"],
+                    "product_bounds": placement,
                     "original_ink": inputs["rendered_text_bounds"],
                     "revision_ink": rendered_text_bounds(updated, candidate),
                 }, [to_float(first), to_float(compose(updated, candidate)), *references])
@@ -745,7 +830,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             if not isinstance(camera_choice, str) or camera_choice not in campaign_viewpoints:
                 raise ValueError("새 연출에 사용할 촬영 시점을 확인하지 못했습니다")
             viewpoint = camera_choice
-    design_input = {"brief": brief, "copy": copy, "fonts": list(settings["fonts"]), "canvas_size": size}
+    design_input = {"brief": brief, "copy": copy, "fonts": list(settings["fonts"]), "canvas_size": size,
+                    "headline_breaks": headline_breaks(copy["headline"])}
     if revision_info:
         design_input.update(brief={"message": brief["message"], "evidence": brief.get("evidence")},
                             idea=idea, revision_feedback=revision_info)

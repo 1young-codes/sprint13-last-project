@@ -135,7 +135,8 @@ def compose(layout: dict, folder: Path) -> Image.Image:
                           product["x"] + shadow["dx"], product["y"] + shadow["dy"])
         paste_clipped(canvas, Image.open(folder / product["file"]).convert("RGBA"), product["x"], product["y"])
     for text in layout["texts"]:
-        paste_design_layer(text)
+        for line in text.get("lines", (text,)):
+            paste_design_layer(line)
     return canvas.convert("RGB")
 
 

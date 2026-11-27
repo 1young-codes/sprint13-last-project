@@ -372,6 +372,52 @@ def test_designed_line_break_reaches_html_renderer():
         scene_ad.layout_texts({"boxes": boxes, "styles": styles}, copy, (1024, 1024), ["noto_sans_kr"])
 
 
+def test_split_headline_keeps_copy_and_checks_each_visible_line(tmp_path):
+    boxes = {"headline": [0, 0, 90, 52], "product_name": [0, 60, 50, 15], "price": [0, 80, 50, 15]}
+    style = {"font": "noto_sans_kr", "align": "left", "color": "#ffffff", "size": 10, "max_lines": 1}
+    lines = [{"box": [10, 10, 60, 12], "size": 6, "text": "따뜻한 빛으로"},
+             {"box": [25, 35, 60, 12], "color": "#ffa040"}]
+    headline = style | {"max_lines": 2, "break_after": 2, "lines": lines,
+                        "emphasis": {"phrase": "빛으로 저녁을", "color": "#e04030"}}
+    answer = {"boxes": boxes, "styles": {"headline": headline, "product_name": style, "price": style}}
+    copy = {"headline": "따뜻한 빛으로 저녁을 감싸요", "product_name": "조명", "price": "30,000원"}
+    assert scene_ad.headline_breaks(copy["headline"])[1] == {
+        "break_after": 2, "first_line": "따뜻한 빛으로", "second_line": "저녁을 감싸요"}
+    texts = scene_ad.layout_texts(answer, copy, (100, 100), ["noto_sans_kr"])
+    first, second = texts[0]["lines"]
+    assert texts[0]["text"] == copy["headline"]
+    assert (first["text"], second["text"]) == ("따뜻한 빛으로", "저녁을 감싸요")
+    assert [line["max_font_size"] for line in (first, second)] == [6, 10]
+    html = page_html([first, second], (100, 100))
+    assert '따뜻한 <span style="color:#e04030">빛으로</span>' in html
+    assert '<span style="color:#e04030">저녁을</span> 감싸요' in html
+    for text in texts:
+        for line in text.get("lines", (text,)):
+            image = Image.new("RGBA", (line["w"], line["h"]))
+            image.paste(line["color"], (0, 0, 3, 3))
+            image.save(tmp_path / line["file"])
+    Image.new("RGB", (100, 100), "black").save(tmp_path / "background.png")
+    Image.new("RGBA", (100, 100)).save(tmp_path / "scene.png")
+    layout = {"size": [100, 100], "texts": texts, "background": {"file": "background.png"},
+              "artwork": {"file": "scene.png", "x": 0, "y": 0, "w": 100, "h": 100}}
+    rendered = scene_ad.compose(layout, tmp_path)
+    assert rendered.getpixel((11, 11)) == (255, 255, 255)
+    assert rendered.getpixel((26, 36)) == (255, 160, 64)
+    bounds = scene_ad.rendered_text_bounds(layout, tmp_path)
+    assert bounds["headline"] == [10, 10, 28, 38] and bounds["headline_line_2"] == [25, 35, 28, 38]
+    mask = np.zeros((100, 100), dtype=bool)
+    mask[35, 25] = True
+    with pytest.raises(ValueError, match="headline_line_2"):
+        scene_ad.check_text_overlap(mask, layout, tmp_path)
+    lines[0]["text"] = "다른 문구"
+    with pytest.raises(ValueError, match="확정된 원문"):
+        scene_ad.layout_texts(answer, copy, (100, 100), ["noto_sans_kr"])
+    del lines[0]["text"]
+    lines[1]["box"] = [25, 51, 60, 12]
+    with pytest.raises(ValueError, match="제목 전체 영역"):
+        scene_ad.layout_texts(answer, copy, (100, 100), ["noto_sans_kr"])
+
+
 def test_blended_photo_edges_keep_product_pixels_opaque():
     photo = Image.new("RGB", (30, 30), "orange")
     foreground = np.zeros((30, 30), dtype=bool)
