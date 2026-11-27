@@ -9,7 +9,7 @@ from PIL import Image, ImageFilter, ImageOps
 
 from .creative_brief import ask_stage, required_text
 from .layers import compose, load_layout, load_settings, save_layout, to_float
-from .scene_ad import check_text_overlap, design_layers, review_finished
+from .scene_ad import check_text_overlap, design_layers, rendered_text_bounds
 from .studio_edits import foreground_mask, line_break_after
 from .text_render import LINE_HEIGHT, minimum_font_size
 
@@ -35,10 +35,14 @@ ready (boolean), side (one of margin_sides if rejected, null if ready), and obse
 sentence naming what is visible and where)."""
 
 REFRAME = """Reframe the approved poster's exact typography for a new aspect ratio. The first image is the
-approved poster and the second is the actual photo in the new frame. Keep the new photo unchanged. Use its
-quiet space and the product bounds to place the exact headline, product name and price. Keep the approved
+approved poster, the second is the actual photo in the new frame, and the third shows protected product
+pixels tinted in red. The fourth, if present, is a rejected rendered poster. Keep the photo unchanged. Use
+visible space outside the tinted shapes to place the exact headline, product name and price. Keep the approved
 campaign's colors and hierarchy. Pick fonts from the supplied list. Use an integer from 2 to 20 for size,
 as a percentage of the new canvas width. Group the product name and price while letting the headline lead.
+Read the new photo before choosing positions. In a tall canvas, do not separate title and product with a wide
+unused stretch of background. Place the nearest title line beside or near the feature in the actual framing.
+In a wide canvas with no clear footer, keep the product name and price beside the headline or the product.
 Return a JSON object with boxes and styles keyed by headline, product_name and price. Each box is
 [left, top, width, height] in whole percentages of the poster. Keep them inside the poster and off one another.
 Each style has font, align (left, center, or right), color (#RRGGBB), size, and max_lines (1 or 2,
@@ -51,6 +55,14 @@ lines for the new canvas or omit lines if one shared heading block works better.
 with shape (rectangle or ellipse), box, color, and layer (overlay or behind_subject when the shape deliberately
 meets the visible product silhouette). Use the previous_layout and layout_error
 to repair failed boxes while keeping the parts that fit."""
+
+FORMAT_READING = """Compare the approved poster and the actual reframed poster in the first and second images.
+Judge the second at mobile size, using rendered_ink and product_bounds as evidence. Check the exact copy,
+contrast, title line grouping, and how a viewer reaches the product and price. Quiet margins around the whole
+composition are allowed. A large empty band between the title and subject, with no visible photographic cue
+across it, breaks the reading path. A pair of title lines needs to read as one phrase before the viewer reaches
+the product. Require enough contrast and space even on a wide crop. Return ready (boolean) and observation
+(one concrete Korean sentence describing actual placement or what must change)."""
 
 COPY_BREAK = """검토할 광고 문구를 두 줄에 놓을 때 자연스러운 첫 줄을 고릅니다.
 문구를 그대로 읽고 문장의 절이나 호흡이 끝나는 곳에서 나눕니다. 상품을 설명하는 수량과 단위, 이름처럼
@@ -233,7 +245,10 @@ def adapt_format(source, output, format_name, ai, expand=None):
         return side
 
     framing, framing_mask = frame_photo(photo, mask, size, expand, choose_position, check_margin)
-    images = [reference, to_float(framing)]
+    foreground = np.asarray(framing_mask) > 128
+    tint = Image.blend(framing, Image.new("RGB", size, "#d84458"), 0.6)
+    protected = Image.composite(tint, framing, framing_mask)
+    images = [reference, to_float(framing), to_float(protected)]
     fonts = load_settings()["fonts"]
     bounds = [round(100 * point / side) for point, side in zip(framing_mask.getbbox(), (*size, *size), strict=True)]
     inputs = {"size": size, "copy": copy, "fonts": list(fonts), "approved_design": design, "product_bounds": bounds}
@@ -255,22 +270,28 @@ def adapt_format(source, output, format_name, ai, expand=None):
                                     "styles": styles, "accent": answer.get("accent")}
                 revised.pop("subject_box", None)
                 candidate = design_layers(revised, copy, size, fonts, stage)
-                check_text_overlap(np.asarray(framing_mask) > 128, candidate, stage)
+                check_text_overlap(foreground, candidate, stage)
             except ValueError as error:
                 inputs["layout_error"] = str(error)
                 inputs["previous_layout"] = answer
                 continue
             framing.save(stage / candidate["artwork"]["file"])
             framing_mask.save(stage / "foreground.png")
-            if position_info:
-                revised, candidate, reason = review_finished(
-                    ai, revised, candidate, framing, np.asarray(framing_mask) > 128, stage,
-                    inputs, [reference], assess_composition=True, keep_wrap=True)
-                if reason:
-                    candidate["final_review_reason"] = reason
-            compose(candidate, stage).save(stage / "ad.png")
+            poster = compose(candidate, stage)
+            phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
+            review = ask_stage(ai, "studio_format_reading", FORMAT_READING,
+                               {"copy": copy, "product_bounds": bounds, "rendered_ink": rendered_text_bounds(candidate, stage)},
+                               [reference, to_float(phone)])
+            reading = required_text(review, "observation", "게시 규격 검토")
+            if type(review.get("ready")) is not bool:
+                raise ValueError("게시 규격의 글자와 상품 배치 판정을 확인하지 못했습니다")
+            if not review["ready"]:
+                inputs.update(layout_error=reading, previous_layout=revised)
+                images[3:] = [to_float(poster)]
+                continue
+            poster.save(stage / "ad.png")
             candidate.update(fields=layout["fields"], brief=layout["brief"], design=revised,
-                             scene_prompt=layout["scene_prompt"], format=format_name)
+                             scene_prompt=layout["scene_prompt"], format=format_name, final_review_reason=reading)
             if "art_direction_plan" in layout:
                 candidate["art_direction_plan"] = layout["art_direction_plan"]
             if position_info:

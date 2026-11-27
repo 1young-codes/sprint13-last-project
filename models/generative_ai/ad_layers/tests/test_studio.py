@@ -71,9 +71,18 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft):
                 assert data["approved_design"]["boxes"]["headline"] == [20, 20, 45, 10]
                 assert data["preferred_first_lines"] == {"headline": "포근한 겨울"}
                 assert data["min_box_height_percent"] == {"one_line": 3, "two_lines": 5}
+                assert len(images) == (4 if "layout_error" in data else 3)
                 updated = data["approved_design"]
                 updated["styles"]["headline"]["break_after"] = 1
+                if "layout_error" in data:
+                    assert data["layout_error"] == "판매 정보가 떨어져 보입니다"
+                    updated["boxes"]["price"] = [10, 47, 45, 10]
                 return json.dumps(updated)
+            if step == "studio_format_reading":
+                assert len(images) == 2 and data["copy"]["price"] == "18,000원"
+                if stages.count(step) == 1:
+                    return '{"ready":false,"observation":"판매 정보가 떨어져 보입니다"}'
+                return '{"ready":true,"observation":"판매 정보가 제목과 연결됩니다"}'
             if "edit_text" in data["actions"]:
                 assert set(data["actions"]) == {"edit_text", "hold"}
                 return json.dumps({"action": "edit_text", "arguments": {"changes": {"headline": {
@@ -88,7 +97,8 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft):
     output = tmp_path / "output"
     result = studio.run_studio(Image.new("RGB", (100, 100)), fields, "", output, Agent(), draft=folder,
                                formats=("thumbnail",))
-    assert stages == ["studio_look", "studio_action", "studio_look", "studio_campaign_check", "studio_action", "studio_reframe"]
+    assert stages == ["studio_look", "studio_action", "studio_look", "studio_campaign_check", "studio_action",
+                      "studio_reframe", "studio_format_reading", "studio_reframe", "studio_format_reading"]
     assert result["status"] == "complete" and result["version"] == "v02"
     assert (output / "final" / "scene.png").read_bytes() == (folder / "scene.png").read_bytes()
     assert (output / "final" / "text_price.png").read_bytes() == (folder / "text_price.png").read_bytes()
