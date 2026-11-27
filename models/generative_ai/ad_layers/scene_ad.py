@@ -89,8 +89,11 @@ the product rather than letting all the type drift into a distant corner.
 When the approved image and headline still feel like separate columns, consider whether one larger headline
 can share the subject's axis or tuck behind a small part of its outline. Use depth only when it adds that relation.
 Match the lettering to the visual mood and keep any confirmed line breaks. Use the supplied wording exactly.
+If a hard photo boundary runs behind the words and splits their background for no clear reason, set edge to
+blend so only the photo's outer surroundings fade into the canvas. Keep framed when a distinct image panel
+improves the composition. This affects the surroundings, leaving the subject intact.
 Return one JSON object with exactly two keys: reason (a concrete Korean sentence) and revision. A revision
-contains only boxes, styles, or accent in the same form as the supplied design. Each of boxes and styles,
+contains only boxes, styles, accent or edge in the same form as the supplied design. Each of boxes and styles,
 if changed, must include headline, product_name and price. Boxes are [left, top, width, height] in whole
 percentages. Their rectangles must not intersect. The end of one stacked box must be at or before the next
 box's top. Use depth only for the value behind_subject and omit it to put type in front. Fix any reported
@@ -394,7 +397,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                 for edge, offset, side in zip(bounds, (text["x"], text["y"]) * 2, size * 2, strict=True)
             ]
     inputs["rendered_text_bounds"] = ink_bounds
-    editable = ("boxes", "styles", "accent")
+    editable = ("boxes", "styles", "accent", "edge")
     for _ in range(2):
         review = ask_stage(ai, "ad_final_layout", FINAL_REVIEW, inputs,
                            [to_float(first), to_float(scene), *references])
@@ -425,7 +428,13 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
             candidate = Path(staging)
             try:
                 updated = design_layers(revised, design_input["copy"], size, design_input["fonts"], candidate)
-                scene.save(candidate / artwork["file"])
+                revised_scene = scene
+                if revised["edge"] != answer["edge"]:
+                    revised_scene = scene.convert("RGB")
+                    if revised["edge"] == "blend":
+                        revised_scene = blend_edges(revised_scene, foreground,
+                                                    position=(artwork["x"], artwork["y"]), canvas_size=size)
+                revised_scene.save(candidate / artwork["file"])
                 Image.fromarray(foreground).save(candidate / "foreground.png")
                 check_text_overlap(foreground, updated, candidate)
             except ValueError as error:

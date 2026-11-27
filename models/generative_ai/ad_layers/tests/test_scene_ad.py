@@ -97,7 +97,8 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                     if calls.count(step) == 1:
                         return '{"revision":null}'
                     assert "배치 수정이 빠졌습니다" in data["layout_error"]
-                    revised = data["design"] | {"boxes": boxes, "accent": None, "artwork_box": [0, 0, 100, 100]}
+                    revised = data["design"] | {"boxes": boxes, "accent": None, "edge": "blend",
+                                                  "artwork_box": [0, 0, 100, 100]}
                     revised["styles"]["headline"].update(size=6.3, depth="front")
                     return json.dumps(revised)
                 return json.dumps({"reason": "상품명을 제품 옆으로 이동", "revision": {"boxes": boxes, "accent": None}})
@@ -187,6 +188,10 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     assert targeted["artwork"] == layout["artwork"]
     headline = next(text for text in targeted["texts"] if text["role"] == "headline")
     assert headline["max_font_size"] == 65 and "depth" not in headline
+    assert targeted["design"]["edge"] == "blend"
+    with Image.open(tmp_path / "targeted" / "scene.png") as scene:
+        assert scene.getpixel((15, 20)) == (0, 0, 255, 255)
+        assert scene.getpixel((511, 20)) == (0, 0, 255, 0)
 
 
 def test_cropped_side_stays_at_the_photo_edge_in_model_reference():
