@@ -222,7 +222,7 @@ function ResultStep({ job, storeName, excluded, onToggle, onBack, onPublish }) {
       <h1>{ready ? '게시글 2개를 만들었습니다' : '게시글을 만들고 있습니다'}</h1>
       <p className="lead">
         {ready
-          ? 'PC에서 게시물을 열었을 때의 모습입니다. 사진을 넘겨 보고, 어색한 사진은 체크를 꺼서 뺀 뒤 게시를 누르세요.'
+          ? '인스타그램에서 게시물을 열었을 때의 모습입니다. 사진을 넘겨 보고, 어색한 사진은 체크를 꺼서 뺀 뒤 게시를 누르세요.'
           : `약 ${estimateMinutes(requested.length)}분 걸립니다. 다 된 사진부터 아래에 나옵니다. 이 화면을 닫지 말고 기다려 주세요.`}
       </p>
       {USE_SAMPLE && <p className="hint">지금은 서버 없이 예시 결과를 보여줍니다.</p>}

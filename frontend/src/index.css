@@ -20,6 +20,9 @@
 body {
   margin: 0;
   background: var(--bg);
+  /* 한국어는 낱말 중간에서 줄이 바뀌지 않게 한다 (좁은 휴대폰 화면에서 "계/정"처럼 끊기던 것) */
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
 
 .topbar {
@@ -602,6 +605,12 @@ input[type='text'] {
 
   .grid {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* 게시 뒤 버튼 두 개가 한 줄에 다 들어가지 않아 왼쪽이 잘리던 것: 세로로 쌓고, 주 버튼을 위에 둔다 */
+  .footer.end {
+    flex-direction: column-reverse;
+    align-items: stretch;
   }
 }
 
