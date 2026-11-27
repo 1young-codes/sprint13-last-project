@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
-from .creative_brief import ask_stage, required_text
+from .creative_brief import TEXT_ROLES, ask_stage, required_text, validate_boxes
 from .format_layout import (format_measurements, format_type_hierarchy, measured_styles, outer_margins, position_options,
                             preview_placement)
 from .layers import compose, load_layout, load_settings, save_layout, to_float
@@ -68,9 +68,15 @@ to a #RRGGBB when needed for contrast, including headline_line_1 or headline_lin
 Keep the measured boxes and font_sizes when selecting an option. If the
 available options do not fit after rendering, return a custom layout using boxes and styles instead.
 On retry, look at why previous_placement or the rendered poster failed before choosing a placement again.
+If offer_repair is present, the problem is local to the name and price. Move both together to a quieter
+area near the headline or the subject, keeping their spacing, type sizes, and the rest of the layout.
+Return only {"offer_offset": [dx, dy]} in whole canvas percentages, with negative values for left or up.
+Use the previous_layout boxes and the last image to choose that shift.
+When a previous offer move was insufficient, address the remaining visible conflict. If the title box
+limits upward movement, use available sideways space to clear the product edge.
 For a margin error, first shift the affected text group inward with its alignment intact. Keep the approved
 alignment and size of the other copy unless the error explicitly names a broken reading path.
-Return a JSON object with boxes and styles keyed by headline, product_name and price. Each box is
+For a full layout, return a JSON object with boxes and styles keyed by headline, product_name and price. Each box is
 [left, top, width, height] in whole percentages of the poster. Keep them inside the poster and off one another.
 Each style has font, align (left, center, or right), color (#RRGGBB), size, and max_lines (1 or 2,
 always 1 for price). Each box must be at least min_box_height_percent for its line count and needs more height
@@ -108,8 +114,11 @@ photographic purpose merely because it balances a matching empty stretch at the 
 the subject itself meaningfully fills the long axis and directs the eye. If the scene was originally arranged
 along the other axis, can changing the text position actually fix it without separating the words from the
 product or making the product smaller? Require enough contrast and space even on a wide crop.
-Return ready (boolean), observation (one concrete Korean sentence), and rebuild_photo (boolean, true only when
-ready is false and the photograph's arrangement or empty filled edges require a native composition)."""
+Return JSON with observation (one concrete Korean sentence) and finding (one of ready, offer, layout, photo).
+Use offer if moving the name and price together can fix the only visible problem. If your observation asks
+to move those two lines into free space and nothing else needs changing, this is an offer finding.
+Use layout when the title, type size or multiple groups actually need revision. Use photo only when the
+photograph's own arrangement or filled edges require a new composition."""
 
 NATIVE_REVIEW = """Review a poster newly photographed for one publishing ratio. Image 1 is the original product
 photograph, image 2 is the approved poster, image 3 is the attempted resize when present, and the last
@@ -358,9 +367,27 @@ def format_styles(ai, styles, layers, first_lines):
     return revised
 
 
+def round_box_edges(box):
+    if (not isinstance(box, list) or len(box) != 4
+            or any(type(value) not in (int, float) or not 0 <= value <= 100 for value in box)):
+        return box
+    x, y, w, h = box
+    if x + w > 100 or y + h > 100:
+        return box
+    return [round(x), round(y), round(x + w) - round(x), round(y + h) - round(y)]
+
+
 def selected_placement(answer, options, design):
     name = answer.get("placement")
     if name is None:
+        boxes, styles = answer.get("boxes"), answer.get("styles")
+        if isinstance(boxes, dict):
+            answer = answer | {"boxes": {role: round_box_edges(box) for role, box in boxes.items()}}
+        if isinstance(styles, dict) and isinstance(heading := styles.get("headline"), dict):
+            if isinstance(lines := heading.get("lines"), list):
+                lines = [line | {"box": round_box_edges(line.get("box"))} if isinstance(line, dict) else line
+                         for line in lines]
+                answer = answer | {"styles": styles | {"headline": heading | {"lines": lines}}}
         return answer
     if not isinstance(name, str) or name not in options:
         raise ValueError("계산한 게시 규격 배치 중 하나를 골라야 합니다")
@@ -394,6 +421,17 @@ def offer_detail(poster, ink):
                         min(height, round(max(bottom) * height / 100) + context)))
 
 
+def check_offer_spacing(ink, size):
+    first, second = sorted((ink["product_name"], ink["price"]))
+    if min(first[3], second[3]) <= max(first[1], second[1]):
+        return
+    width, height = size
+    gap = (second[0] - first[2]) * width
+    letter_height = max(first[3] - first[1], second[3] - second[1]) * height
+    if gap > 3 * letter_height:
+        raise ValueError("상품명과 가격 사이의 빈 공간이 너무 넓습니다. 제목과 사진은 두고 두 문구를 가까이 배치하세요")
+
+
 def move_copy_inside(design, ink, size):
     if design.get("accent"):
         return None
@@ -422,6 +460,26 @@ def move_copy_inside(design, ink, size):
         styles = styles | {"headline": styles["headline"] | {
             "lines": [line | {"box": translated(line["box"])} for line in lines]}}
     return design | {"boxes": boxes, "styles": styles}
+
+
+def move_offer(design, offset):
+    if (not isinstance(offset, list) or len(offset) != 2
+            or any(type(value) is not int or abs(value) > 100 for value in offset) or not any(offset)):
+        raise ValueError("상품명과 가격을 함께 옮길 위치가 필요합니다")
+    dx, dy = offset
+    steps = max(abs(dx), abs(dy))
+    for step in range(steps, 0, -1):
+        x_shift, y_shift = round(dx * step / steps), round(dy * step / steps)
+        boxes = design["boxes"].copy()
+        for role in ("product_name", "price"):
+            x, y, w, h = boxes[role]
+            boxes[role] = [x + x_shift, y + y_shift, w, h]
+        try:
+            validate_boxes(boxes, TEXT_ROLES)
+        except ValueError:
+            continue
+        return design | {"boxes": boxes}
+    raise ValueError("제목과 겹치지 않는 방향으로 상품명과 가격을 함께 옮겨 주세요")
 
 
 def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
@@ -525,19 +583,25 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
             ink = rendered_text_bounds(candidate, stage)
             if not {"product_name", "price"} <= ink.keys():
                 raise ValueError("상품명과 가격의 글자가 화면에 보여야 합니다")
+            check_offer_spacing(ink, size)
             return candidate, ink
 
-        for _ in range(2):
+        for attempt in range(3):
+            if attempt == 2 and "offer_repair" not in inputs:
+                break
             answer = ask_stage(ai, "studio_reframe", REFRAME, inputs | {"preferred_first_lines": first_lines}, images)
             if placements and "layout_error" not in inputs and answer.get("placement") is None:
                 answer = {"placement": next(iter(placements))}
             try:
-                proposed = selected_placement(answer, placements, design)
-                styles = format_styles(ai, proposed.get("styles"), layout["texts"], first_lines)
-                styles = format_type_hierarchy(styles, design["focus"])
-                revised = design | {"artwork_box": [0, 0, 100, 100], "boxes": proposed.get("boxes"),
-                                    "styles": styles, "accent": proposed.get("accent")}
-                revised.pop("subject_box", None)
+                if "offer_repair" in inputs:
+                    revised = move_offer(inputs["previous_layout"], answer.get("offer_offset"))
+                else:
+                    proposed = selected_placement(answer, placements, design)
+                    styles = format_styles(ai, proposed.get("styles"), layout["texts"], first_lines)
+                    styles = format_type_hierarchy(styles, design["focus"])
+                    revised = design | {"artwork_box": [0, 0, 100, 100], "boxes": proposed.get("boxes"),
+                                        "styles": styles, "accent": proposed.get("accent")}
+                    revised.pop("subject_box", None)
                 candidate, ink = render_copy(revised)
                 try:
                     check_type_margin(size, ink)
@@ -550,7 +614,10 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                     revised = shifted
             except ValueError as error:
                 inputs["layout_error"] = str(error)
-                inputs["previous_layout"] = answer
+                if "offer_repair" in inputs:
+                    inputs["previous_offer_offset"] = answer.get("offer_offset")
+                else:
+                    inputs["previous_layout"] = answer
                 continue
             framing.save(stage / candidate["artwork"]["file"])
             framing_mask.save(stage / "foreground.png")
@@ -562,13 +629,20 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                                 **({"intent": intent} if intent else {})},
                                [reference, to_float(phone), to_float(poster), to_float(offer_detail(poster, ink))])
             reading = required_text(review, "observation", "게시 규격 검토")
-            if type(review.get("ready")) is not bool:
+            finding = review.get("finding")
+            if finding not in ("ready", "offer", "layout", "photo"):
                 raise ValueError("게시 규격의 글자와 상품 배치 판정을 확인하지 못했습니다")
-            if not review["ready"]:
-                if review.get("rebuild_photo") is True:
-                    raise FormatPhotoIssue(reading, poster)
+            if finding == "photo":
+                raise FormatPhotoIssue(reading, poster)
+            if finding != "ready":
                 inputs.update(layout_error=reading, previous_layout=revised)
                 inputs["previous_placement"] = answer.get("placement")
+                if finding == "offer" and revised.get("accent") is None:
+                    inputs["offer_repair"] = {role: ink[role] for role in ("product_name", "price")}
+                    inputs["previous_offer_offset"] = answer.get("offer_offset")
+                else:
+                    inputs.pop("offer_repair", None)
+                    inputs.pop("previous_offer_offset", None)
                 images[3:] = [to_float(poster)]
                 continue
             poster.save(stage / "ad.png")

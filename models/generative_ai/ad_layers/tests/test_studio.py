@@ -44,7 +44,8 @@ def draft(tmp_path, monkeypatch):
     return folder, fields
 
 
-def test_observe_search_edit_and_select_the_best_version(tmp_path, draft, monkeypatch):
+@pytest.mark.parametrize("local_offer", [False, True])
+def test_observe_search_edit_and_select_the_best_version(tmp_path, draft, monkeypatch, local_offer):
     monkeypatch.setattr(studio_formats, "position_options", lambda *_: {})
     monkeypatch.setattr(studio_formats, "format_measurements", lambda *_: {})
     folder, fields = draft
@@ -79,14 +80,21 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft, monkey
                 updated["styles"]["headline"]["break_after"] = 1
                 if "layout_error" in data:
                     assert data["layout_error"] == "판매 정보가 떨어져 보입니다"
+                    if local_offer:
+                        assert set(data["offer_repair"]) == {"product_name", "price"}
+                        if data["previous_offer_offset"]:
+                            assert data["previous_layout"]["boxes"]["product_name"][1] == 30
+                            return '{"offer_offset":[2,0]}'
+                        return '{"offer_offset":[0,-7]}'
                     updated["boxes"]["price"] = [10, 47, 45, 10]
                 return json.dumps(updated)
             if step == "studio_format_reading":
                 assert len(images) == 4 and data["copy"]["price"] == "18,000원"
                 assert all(crop < poster for crop, poster in zip(images[3].shape[:2], images[2].shape[:2]))
-                if stages.count(step) == 1:
-                    return '{"ready":false,"observation":"판매 정보가 떨어져 보입니다"}'
-                return '{"ready":true,"observation":"판매 정보가 제목과 연결됩니다"}'
+                if stages.count(step) <= (2 if local_offer else 1):
+                    return json.dumps({"finding": "offer" if local_offer else "layout",
+                                       "observation": "판매 정보가 떨어져 보입니다"})
+                return '{"finding":"ready","observation":"판매 정보가 제목과 연결됩니다"}'
             if "edit_text" in data["actions"]:
                 assert set(data["actions"]) == {"edit_text", "hold"}
                 return json.dumps({"action": "edit_text", "arguments": {"changes": {"headline": {
@@ -102,7 +110,8 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft, monkey
     result = studio.run_studio(Image.new("RGB", (100, 100)), fields, "", output, Agent(), draft=folder,
                                formats=("thumbnail",))
     assert stages == ["studio_look", "studio_action", "studio_look", "studio_campaign_check", "studio_action",
-                      "studio_reframe", "studio_format_reading", "studio_reframe", "studio_format_reading"]
+                      "studio_reframe", "studio_format_reading", "studio_reframe", "studio_format_reading"] + (
+                         ["studio_reframe", "studio_format_reading"] if local_offer else [])
     assert result["status"] == "complete" and result["version"] == "v02"
     assert (output / "final" / "scene.png").read_bytes() == (folder / "scene.png").read_bytes()
     assert (output / "final" / "text_price.png").read_bytes() == (folder / "text_price.png").read_bytes()
@@ -111,6 +120,10 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft, monkey
     assert load_layout(output / "formats/thumbnail")["design"]["styles"]["headline"]["break_after"] == 2
     assert load_layout(output / "formats/thumbnail")["design"]["styles"]["headline"]["emphasis"] == {
         "phrase": "포근한 겨울", "color": "#FFAA33"}
+    boxes = load_layout(output / "formats/thumbnail")["design"]["boxes"]
+    assert boxes["headline"] == [20, 20, 45, 10]
+    assert boxes["product_name"] == ([12, 30, 45, 10] if local_offer else [10, 35, 45, 10])
+    assert boxes["price"] == ([12, 45, 45, 10] if local_offer else [10, 47, 45, 10])
     assert (output / "versions/v01/ad.png").read_bytes() == (folder / "ad.png").read_bytes()
     with Image.open(result["formats"]["thumbnail"]) as poster:
         assert poster.size == (600, 600)
@@ -641,6 +654,22 @@ def test_format_margin_checks_rendered_ink_in_proportion_to_the_short_side():
     studio_formats.check_type_margin((1080, 1920), {"headline": [3, 2, 50, 17]})
     with pytest.raises(ValueError, match="headline 글자가 포스터 위쪽 가장자리에.*11픽셀"):
         studio_formats.check_type_margin((864, 1080), {"headline": [10, 1, 50, 17]})
+
+
+def test_custom_format_rounds_absolute_text_edges_without_overlapping_rows():
+    raw = {"boxes": {"product_name": [20, 13, 60, 4.5], "price": [20, 17.8, 60, 4.5]},
+           "styles": {"headline": {"lines": [{"box": [13, 1, 74, 4.5]}, {"box": [20, 5.5, 60, 7]}]}}}
+    result = studio_formats.selected_placement(raw, {}, {})
+    assert result["boxes"] == {"product_name": [20, 13, 60, 5], "price": [20, 18, 60, 4]}
+    assert result["styles"]["headline"]["lines"] == [{"box": [13, 1, 74, 5]}, {"box": [20, 6, 60, 6]}]
+
+
+def test_product_name_and_price_cannot_occupy_opposite_ends_of_an_offer_line():
+    ink = {"product_name": [24, 18, 45, 21], "price": [73, 18, 85, 21]}
+    with pytest.raises(ValueError, match="상품명과 가격 사이의 빈 공간"):
+        studio_formats.check_offer_spacing(ink, (1024, 1024))
+    studio_formats.check_offer_spacing(ink | {"price": [48, 18, 60, 21]}, (1024, 1024))
+    studio_formats.check_offer_spacing(ink | {"price": [30, 22, 42, 25]}, (1024, 1024))
 
 
 def test_small_format_margin_repair_moves_the_entire_copy_without_changing_type():
