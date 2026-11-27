@@ -93,3 +93,18 @@ def test_layout_rejects_text_box_extending_past_canvas():
     answer["boxes"]["price"] = [85, 80, 20, 10]
     with pytest.raises(ValueError, match="price .*캔버스 범위"):
         creative_brief.layout_boxes(answer)
+
+
+def test_brainstorm_rejects_an_overlong_headline_before_layout():
+    answers = {
+        "ad_plan": {"message": "메시지", "evidence": "근거"},
+        "ad_direction": {"scene": "studio"},
+        "ad_headline": {"headline": "가" * (creative_brief.MAX_HEADLINE_LENGTH + 1)},
+    }
+
+    class Interpreter:
+        def ask(self, step, images, text, *, model):
+            return json.dumps(answers[step])
+
+    with pytest.raises(ValueError, match="제목이 .*자를 넘겼습니다"):
+        creative_brief.brainstorm(Interpreter(), Image.new("RGB", (20, 12)), {"product_name": "필통"}, "", "5,000원")

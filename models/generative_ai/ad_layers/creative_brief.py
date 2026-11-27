@@ -11,6 +11,7 @@ from .layers import to_float
 
 MODEL = "gpt-6-luna"
 LAYOUT_ROLES = ("product", "headline", "product_name", "price")
+MAX_HEADLINE_LENGTH = 24
 
 PLANNING = """You handle the ad strategy. Decide on one message for this product.
 Use the photo, supplied facts and owner's idea to choose one appeal the ad can demonstrate visually.
@@ -23,9 +24,10 @@ lighting direction, palette and product detail that makes the agreed message vis
 when it serves that message. Describe the intended scene, leaving placement decisions to the layout stage.
 Return only JSON with one English string, "scene". Do not write ad copy."""
 
-COPY = """You write the headline. Use the agreed message and scene to write one short, natural Korean line that
-fits this particular product. Keep all factual claims grounded in the supplied information. The product name
-and price have their own lines. Keep the headline free of prices. Return only JSON with "headline"."""
+COPY = f"""You write the headline. Express the agreed message as one short, natural Korean campaign line
+of at most {MAX_HEADLINE_LENGTH} characters including spaces. Give one memorable phrase or a short sentence.
+Keep claims grounded in the supplied information. The product name and price have their own lines.
+Keep the headline free of prices. Return only JSON with "headline"."""
 
 LAYOUT = """You handle layout. Use the supplied scene and exact copy. Decide where and at what scale the product,
 headline, product name and price appear. Return one JSON object with:
@@ -81,6 +83,8 @@ def brainstorm(ai, photo, fields, idea, price):
 
     writing = ask_stage(ai, "ad_headline", COPY, inputs | {"plan": plan, "scene": scene})
     headline = " ".join(required_text(writing, "headline", "문구").split())
+    if len(headline) > MAX_HEADLINE_LENGTH:
+        raise ValueError(f"문구 단계에서 제목이 {MAX_HEADLINE_LENGTH}자를 넘겼습니다")
 
     copy = {"headline": headline, "product_name": fields["product_name"], "price": price}
     layout = ask_stage(ai, "ad_layout", LAYOUT, {"scene": scene, "message": plan["message"], "copy": copy})
