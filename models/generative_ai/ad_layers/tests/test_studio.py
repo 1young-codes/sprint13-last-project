@@ -459,6 +459,7 @@ def test_campaign_checks_large_offer_panel_before_selection(tmp_path, draft, off
                 return '{"version":"v01","finding":"ready","observation":"문구를 읽을 수 있습니다"}'
             if step == "studio_campaign_check":
                 assert data["offer_panel"] == "bottom"
+                assert data["offer_panel_spacing"] == {"gap_px": 10, "line_height_px": 3}
                 assert images[4].shape == (73, 100, 3)
                 assert images[4][0, 0].tolist() == [0, 0, 1]
                 return json.dumps({"scene": {"treatment": "lighting", "observation": "조명이 보입니다"},

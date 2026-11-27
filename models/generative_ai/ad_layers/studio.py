@@ -96,10 +96,12 @@ connection from the plan can work, including quiet negative space that draws att
 color or a shared margin alone cannot establish the relationship when the letters and the feature are far apart.
 Name what actually connects them or what prevents the connection in layout.observation.
 When offer_panel is supplied, inspect the enlarged region from the product through the photo edge to the name
-and price. Return layout.offer_connection as connected or detached. An unused flat field or transition can
-interrupt that path even when the price and name are aligned and legible. Matching colors or a shared margin
-across an empty strip do not connect them. Accept a separate panel when it is compact or a visible
-compositional device gives the separation a purpose. Describe the connection or break in layout.observation.
+and price. offer_panel_spacing compares the edge-to-offer gap with the height of an actual line of offer type.
+Trace that intervening space. Describe the element in that space that joins the artwork to the offer, or name
+what interrupts it. A rule, badge, or color accent confined to the offer groups the words with each other.
+That device cannot also explain an empty region between the photo and the offer. Return layout.offer_connection
+as detached when that intervening region is large and empty, even if layout.ready would otherwise be true.
+A compact separate panel or a deliberate transition with a visible connection can be connected.
 Check this independently of layout.ready.
 Name the first focal point in the preview. If a high-contrast graphic housing secondary information steals the
 first glance from the advertised feature, flag the hierarchy. An offer can lead when the campaign is about it.
@@ -167,18 +169,19 @@ def offer_panel_detail(poster, artwork, ink):
     minimum_panel = min(poster.size) / 8
     offer = [ink[role] for role in ("product_name", "price")]
     regions = (
-        ("left", left, all(box[2] * width <= left * 100 for box in offer),
+        ("left", left, left - max(box[2] for box in offer) * width / 100,
          (0, 0, min(width, left + context), height)),
-        ("top", top, all(box[3] * height <= top * 100 for box in offer),
+        ("top", top, top - max(box[3] for box in offer) * height / 100,
          (0, 0, width, min(height, top + context))),
-        ("right", width - right, all(box[0] * width >= right * 100 for box in offer),
+        ("right", width - right, min(box[0] for box in offer) * width / 100 - right,
          (max(0, right - context), 0, width, height)),
-        ("bottom", height - bottom, all(box[1] * height >= bottom * 100 for box in offer),
+        ("bottom", height - bottom, min(box[1] for box in offer) * height / 100 - bottom,
          (0, max(0, bottom - context), width, height)),
     )
-    for side, depth, contains_offer, crop in regions:
-        if depth >= minimum_panel and contains_offer:
-            return side, poster.crop(crop)
+    for side, depth, gap, crop in regions:
+        if depth >= minimum_panel and gap >= 0:
+            line_height = max((box[3] - box[1]) * height / 100 for box in offer)
+            return side, poster.crop(crop), {"gap_px": round(gap), "line_height_px": round(line_height)}
     return None
 
 
@@ -261,7 +264,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
             "has_source_study": bool(study), "treatments": TREATMENTS,
             "planned_effect": revision.get("visible_result"), "staging_intent": revision.get("staging_intent"),
             "planned_layout": planned_layout,
-            **({"offer_panel": panel[0]} if panel else {}),
+            **({"offer_panel": panel[0], "offer_panel_spacing": panel[2]} if panel else {}),
         }, [to_float(photo), to_float(poster), to_float(scene), to_float(phone_preview([poster])),
             *([to_float(panel[1])] if panel else []), *study, *sources])
         scene_review, layout_review = check.get("scene"), check.get("layout")
@@ -286,7 +289,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         record("campaign_check", version=name, finding=finding, observation=observation, treatment=treatment,
                scene_observation=photo_evidence, layout_observation=layout_evidence,
                reference_observation=required_text(check, "reference_observation", "참고 포스터 비교") if sources else None,
-               **({"offer_connection": offer_connection} if panel else {}),
+               **({"offer_connection": offer_connection, "offer_panel_spacing": panel[2]} if panel else {}),
                **({"layout_connection": connection} if planned_layout else {}))
         return finding, observation
 
