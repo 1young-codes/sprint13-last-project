@@ -58,7 +58,7 @@ class Interpreter:
         self.client = OpenAI(api_key=key, timeout=self.settings["timeout_seconds"])
         self.usage = []  # 호출마다 {"step", "input_tokens", "output_tokens"}: 비용 계산용
 
-    def ask(self, step: str, images: list[np.ndarray], text: str) -> str:
+    def ask(self, step: str, images: list[np.ndarray], text: str, *, model: str | None = None) -> str:
         long_side = self.settings["image_long_side"]
         content = []
         for image in images:
@@ -69,7 +69,7 @@ class Interpreter:
             url = "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode()
             content.append({"type": "image_url", "image_url": {"url": url, "detail": self.settings["detail"]}})
         content.append({"type": "text", "text": text})
-        response = self.client.chat.completions.create(model=self.settings["model"], response_format={"type": "json_object"},
+        response = self.client.chat.completions.create(model=model or self.settings["model"], response_format={"type": "json_object"},
                                                        messages=[{"role": "user", "content": content}])
         if response.usage:
             self.usage.append({"step": step, "input_tokens": response.usage.prompt_tokens,

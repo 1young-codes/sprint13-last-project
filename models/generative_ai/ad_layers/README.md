@@ -82,6 +82,15 @@ GPU 파이썬 환경의 `PYTHONPATH`에 MOSS 편집 코드의 저장소 루트�
 
 같은 결과 폴더로 다시 실행하면 이미 생성한 PNG를 건너뜁니다. 모델마다 결과 폴더를 따로 지정합니다.
 
+상품별 캠페인 지시를 만들려면 사진과 상품 정보로 브레인스토밍을 실행합니다. OpenAI `gpt-6-luna`가 판매 메시지, 한글 제목, 장면, 구도, 글자 배치를 정합니다. 상품명과 가격은 실행기가 입력값으로 채웁니다. 준비 단계에서 GPU 없이 생성 지시를 저장하고, 같은 지시를 모델 비교에 사용할 수 있습니다.
+
+```bash
+python -m models.generative_ai.ad_layers.creative_brief photos/items.json photos comparison/briefs.json
+python -m models.generative_ai.ad_layers.compare_reference_ads flux comparison/briefs.json photos comparison/flux-brief weights
+```
+
+상품 목록의 각 항목은 참고 사진 파일명 `file`, 사장님의 한 줄 `idea`, 상품 정보 `fields`를 담습니다. `fields`에는 `product_name`, 원 단위 정수 `price_krw`와 선택 항목 `unit`, `usage_example`, `notes`를 넣습니다.
+
 ```bash
 python -m models.generative_ai.ad_layers.compare_reference_ads moss qwen/settings.json photos comparison/moss weights \
     --moss-snapshot /path/to/MOSS-Image-SFT/snapshot
