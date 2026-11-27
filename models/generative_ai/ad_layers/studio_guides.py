@@ -6,6 +6,12 @@ START_GUIDES = {
     "new_concept": "Build one visual idea from the approved product benefit and requested placement.",
 }
 
+TEXT_CHANGES = ("Object keyed by headline, product_name or price. Put edits directly inside each role. "
+                "Available keys: box [left,top,width,height] in whole poster percent, font, align, color, "
+                "size (percent), max_lines, first_line (exact words for line 1, or null to clear a forced break). "
+                "For headline only, depth can be behind_subject or null; keep a deliberate overlap small and legible. "
+                "Headline emphasis is optional: {phrase: exact words, color: #RRGGBB}, or null to clear.")
+
 ACTION_GUIDES = {
     "edit_text": {
         "findings": ("typography", "layout"),
@@ -13,14 +19,17 @@ ACTION_GUIDES = {
                  "Use shared alignment and nearby spacing for related copy. Keep the heading in charge, "
                  "while giving the product name and price enough size and contrast to read together. "
                  "Move glyphs out of the product and check legibility in the actual image.",
-        "arguments": {"changes": "Object keyed by headline, product_name or price. Put edits directly inside each role. "
-                                 "Available keys: box [left,top,width,height] in whole poster percent, font, align, "
-                                 "color, size (integer percent), max_lines, first_line (exact words for line 1, or null "
-                                 "to clear a forced break). For headline only, depth can be behind_subject or null. "
-                                 "Use it only for a small intentional overlap that leaves the words readable. "
-                                 "Headline emphasis is optional: {phrase: exact words, color: #RRGGBB}, or null to clear. "
-                                 "Example: {\"changes\":{\"headline\":{\"size\":6,"
-                                 "\"first_line\":\"<exact first line>\"}}}."},
+        "arguments": {"changes": TEXT_CHANGES},
+    },
+    "edit_composition": {
+        "findings": ("layout",),
+        "guide": "When an arbitrary photo seam or an unused strip separates words and product, adjust the seam "
+                 "and text positions together. Work with the existing photo, preserving its position, crop and subject. "
+                 "Bring the headline toward the relevant feature through quiet space without covering it. Use the "
+                 "actual visible bounds to place the name and price as a nearby, quieter group. Keep the exact copy. "
+                 "Use a hard edge only when it supports an intentional graphic panel.",
+        "arguments": {"instruction": "A concrete description of the broken reading path and how the words, edge "
+                                      "and product should read together. Leave exact positions to the layout editor."},
     },
     "edit_region": {
         "findings": ("distraction", "scene"),

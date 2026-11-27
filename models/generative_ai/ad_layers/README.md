@@ -110,7 +110,7 @@ python -m models.generative_ai.ad_layers.studio 사진.png 상품.json outputs/s
     --references 참고.png --formats 4:5 9:16 16:9 thumbnail --low-vram
 ```
 
-`상품.json`은 개별 상품의 `fields` 형식입니다. 제목을 확정했으면 `headline`에 넣습니다. 가격과 확정 문구는 편집 중에도 고정합니다. 기존 시안에서 글자만 고칠 때는 `--draft`와 `--typography-only`를 사용합니다. 이전에 피사체 마스크를 별도로 저장했다면 `--foreground`로 함께 전달합니다.
+`상품.json`은 개별 상품의 `fields` 형식입니다. 제목을 확정했으면 `headline`에 넣습니다. 가격과 확정 문구는 편집 중에도 고정합니다. 사진을 다시 생성하지 않고 기존 시안의 글자와 사진 경계를 고칠 때는 `--draft`와 `--typography-only`를 사용합니다. 배치 편집은 실제 글자와 피사체의 위치를 보고 후보를 만든 뒤 기존 시안과 비교합니다. 이전에 피사체 마스크를 별도로 저장했다면 `--foreground`로 함께 전달합니다.
 
 `events.jsonl`과 표준 출력에 시안, 관찰, 찾은 가이드, 실행한 작업을 함께 기록합니다. 후보는 `versions/`, 채택한 포스터는 `final/`에 있습니다. 요청한 추가 규격은 채택 후 `formats/`에 저장합니다. 제품이 잘리지 않는 범위에서 먼저 사진을 자릅니다. 새 비율에 여백이 필요하면 사진 보정에 쓰는 [LaMa 모델](../photo_retouch/README.md)로 그 영역만 채웁니다. `--typography-only`에서는 기존 가장자리 색과 조명을 이어 붙입니다. 각 규격에 맞춰 글자 위치를 다시 정합니다. 썸네일 크기는 600×600입니다.
 

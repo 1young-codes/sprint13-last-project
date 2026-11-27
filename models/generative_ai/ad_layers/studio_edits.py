@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 from .creative_brief import TEXT_ROLES, required_text, validate_boxes
 from .layers import compose, load_layout, load_settings, save_layout
-from .scene_ad import check_text_overlap, layout_texts, pixel_box
+from .scene_ad import check_text_overlap, layout_texts, pixel_box, review_finished
 from .text_render import render_texts
 
 
@@ -89,19 +89,35 @@ def change_region(stage, layout, arguments, generation):
     scene.save(path)
 
 
-def edit_version(source, output, action, arguments, generation):
+def change_composition(stage, layout, arguments, ai, references):
+    issue = required_text(arguments, "instruction", "배치 편집")
+    copy = {text["role"]: text["text"] for text in layout["texts"]}
+    inputs = {"copy": copy, "fonts": list(load_settings()["fonts"]), "composition_issue": issue}
+    with Image.open(stage / layout["artwork"]["file"]) as photo:
+        scene = photo.copy()
+    design, revised, reason = review_finished(ai, layout["design"], layout, scene, foreground_mask(stage, layout),
+                                             stage, inputs, references, assess_composition=True)
+    if "graphic" not in revised:
+        layout.pop("graphic", None)
+    layout.update(revised, design=design, final_review_reason=reason)
+
+
+def edit_version(source, output, action, arguments, generation, *, ai=None, references=()):
     with TemporaryDirectory(dir=output.parent) as temporary:
         stage = Path(temporary)
         shutil.copytree(source, stage, dirs_exist_ok=True)
         layout = load_layout(stage)
         if action == "edit_text":
             change_text(stage, layout, arguments.get("changes"))
+        elif action == "edit_composition" and ai is not None:
+            change_composition(stage, layout, arguments, ai, references)
         elif action == "edit_region":
             change_region(stage, layout, arguments, generation)
         else:
             raise ValueError("지원하지 않는 편집 작업입니다")
         check_text_overlap(foreground_mask(stage, layout), layout, stage)
-        (stage / "before-typesetting.png").unlink(missing_ok=True)
+        if action != "edit_composition":
+            (stage / "before-typesetting.png").unlink(missing_ok=True)
         compose(layout, stage).save(stage / "ad.png")
         save_layout(layout, stage)
         stage.rename(output)

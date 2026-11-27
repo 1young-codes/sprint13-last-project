@@ -110,8 +110,9 @@ the product rather than letting all the type drift into a distant corner.
 When the approved image and headline still feel like separate columns, consider whether one larger headline
 can share the subject's axis or tuck behind a small part of its outline. Use depth only when it adds that relation.
 Match the lettering to the visual mood and keep any confirmed line breaks. Use the supplied wording exactly.
-When the photograph clearly supports one specific phrase, consider highlighting that exact phrase in the
-headline with a color sampled visually from the relevant feature. Use style emphasis with phrase and color.
+When the photograph clearly supports one specific phrase, consider highlighting it with a color sampled visually
+from the relevant feature. Put {phrase, color} only at revision.styles.headline.emphasis. The revision.accent
+field is only for a graphic shape using shape, layer, box and color, or null to remove the graphic.
 Use a single treatment and keep the accent legible against the actual background.
 If the same bright color on supporting information competes with the headline, reduce its emphasis.
 If a hard photo boundary runs behind the words and splits their background for no clear reason, set edge to
@@ -436,6 +437,20 @@ def check_text_overlap(foreground, layout, folder):
             raise ValueError(f"{name} 레이어가 실제 제품을 가립니다")
 
 
+def rendered_text_bounds(layout, folder):
+    size = tuple(layout["size"])
+    bounds_by_role = {}
+    for text in layout["texts"]:
+        with Image.open(folder / text["file"]) as image:
+            bounds = image.getchannel("A").getbbox()
+        if bounds:
+            bounds_by_role[text["role"]] = [
+                round(100 * (edge + offset) / side)
+                for edge, offset, side in zip(bounds, (text["x"], text["y"]) * 2, size * 2, strict=True)
+            ]
+    return bounds_by_role
+
+
 def review_finished(ai, answer, layout, scene, foreground, folder, design_input, references, *,
                     assess_composition=False, keep_wrap=False):
     """완성 사진 위의 글자와 구도를 검사하고 사진을 유지한 채 배치를 고칩니다."""
@@ -454,29 +469,35 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
         (artwork["x"] + columns.min(), artwork["y"] + rows.min(), artwork["x"] + columns.max() + 1,
          artwork["y"] + rows.max() + 1), (*size, *size), strict=True)]
     inputs = design_input | {"design": answer, "product_bounds_left_top_right_bottom": placement,
-                             "layout_error": original_error}
-    ink_bounds = {}
-    for text in layout["texts"]:
-        with Image.open(folder / text["file"]) as image:
-            bounds = image.getchannel("A").getbbox()
-        if bounds:
-            ink_bounds[text["role"]] = [
-                round(100 * (edge + offset) / side)
-                for edge, offset, side in zip(bounds, (text["x"], text["y"]) * 2, size * 2, strict=True)
-            ]
-    inputs["rendered_text_bounds"] = ink_bounds
+                             "layout_error": original_error, "rendered_text_bounds": rendered_text_bounds(layout, folder)}
+    task = FINAL_REVIEW
+    needs_alternative = "composition_issue" in inputs
+    if needs_alternative:
+        task += ("\nAddress composition_issue on the actual poster. Design the reading path as a whole: place the "
+                 "headline by the photographic feature, then align and group the name and price so they do not "
+                 "form an unrelated block. Blend an arbitrary seam that divides the reading path. If a panel "
+                 "is appropriate, use its edge to align the elements. Give the headline enough scale for the phone feed. "
+                 "Return an actual alternative with at least one changed field. Both rendered posters will be compared later.")
     editable = ("boxes", "styles", "accent", "edge")
     for _ in range(2):
-        review = ask_stage(ai, "ad_final_layout", FINAL_REVIEW, inputs,
+        review = ask_stage(ai, "ad_final_layout", task, inputs,
                            [to_float(first), to_float(scene), *references])
         revision = review.get("revision")
         if "revision" not in review:
             revision = {key: review[key] for key in editable if key in review} or None
         if not isinstance(revision, dict):
-            if original_error is None:
+            if original_error is None and not needs_alternative:
                 break
-            inputs["layout_error"] = f"{original_error}. 제출한 배치 수정이 빠졌습니다."
+            inputs["layout_error"] = "제출한 배치 수정이 빠졌습니다."
+            if original_error:
+                inputs["layout_error"] = f"{original_error}. {inputs['layout_error']}"
             continue
+        accent = revision.get("accent")
+        styles = revision.get("styles", answer["styles"])
+        if (isinstance(accent, dict) and accent.keys() == {"phrase", "color"}
+                and isinstance(styles, dict) and isinstance(styles.get("headline"), dict)):
+            revision = {key: value for key, value in revision.items() if key != "accent"}
+            revision["styles"] = styles | {"headline": {"emphasis": accent} | styles["headline"]}
         revised = answer | {key: revision[key] for key in editable if key in revision}
         if keep_wrap and isinstance(revised["styles"], dict):
             styles = {}
@@ -490,25 +511,24 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                 styles[role] = style
             revised["styles"] = styles
         if revised == answer:
-            if original_error is None:
+            if original_error is None and not needs_alternative:
                 break
-            inputs["layout_error"] = f"{original_error}. 이전과 같은 배치입니다."
+            inputs["layout_error"] = "이전과 같은 배치입니다."
+            if original_error:
+                inputs["layout_error"] = f"{original_error}. {inputs['layout_error']}"
             continue
         with TemporaryDirectory(dir=folder) as staging:
             candidate = Path(staging)
             try:
                 updated = design_layers(revised, design_input["copy"], size, design_input["fonts"], candidate)
-                revised_scene = scene
-                if revised["edge"] != answer["edge"]:
-                    revised_scene = scene.convert("RGB")
-                    if revised["edge"] == "blend":
-                        revised_scene = blend_edges(revised_scene, foreground,
-                                                    position=(artwork["x"], artwork["y"]), canvas_size=size)
+                revised_scene = (scene if revised["edge"] == answer["edge"] else
+                                 set_photo_edge(scene, foreground, artwork, size, revised["edge"]))
                 revised_scene.save(candidate / artwork["file"])
                 Image.fromarray(foreground).save(candidate / "foreground.png")
                 check_text_overlap(foreground, updated, candidate)
             except ValueError as error:
-                inputs = inputs | {"design": revised, "layout_error": str(error)}
+                inputs = inputs | {"rejected_design" if needs_alternative else "design": revised,
+                                   "layout_error": str(error)}
                 continue
             first.save(folder / "before-typesetting.png")
             for path in candidate.iterdir():
@@ -518,6 +538,8 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
             return revised, updated, review.get("reason")
     if original_error is not None:
         raise ValueError(original_error)
+    if needs_alternative:
+        raise ValueError(inputs["layout_error"])
     return answer, layout, None
 
 
@@ -540,6 +562,15 @@ def blend_edges(scene, foreground=None, *, position=(0, 0), canvas_size=None):
     scene = scene.convert("RGBA")
     scene.putalpha(Image.fromarray(matte))
     return scene
+
+
+def set_photo_edge(scene, foreground, artwork, size, edge):
+    revised = (blend_edges(scene, position=(artwork["x"], artwork["y"]), canvas_size=size)
+               if edge == "blend" else scene.convert("RGB").convert("RGBA"))
+    alpha = revised.getchannel("A")
+    alpha.paste(scene.convert("RGBA").getchannel("A"), mask=Image.fromarray(foreground))
+    revised.putalpha(alpha)
+    return revised
 
 
 def preview_artwork(photo, artwork, canvas_size, design):

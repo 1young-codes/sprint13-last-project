@@ -12,7 +12,7 @@ from PIL import Image, ImageOps
 from .art_direction import THEMES
 from .creative_brief import ask_stage, required_text
 from .layers import load_layout, load_settings, save_layout, to_float
-from .scene_ad import make_scene_ad
+from .scene_ad import make_scene_ad, rendered_text_bounds
 from .studio_edits import edit_version, foreground_mask
 from .studio_formats import FORMATS, adapt_format, fill_margin
 from .studio_guides import START_GUIDES, find_actions
@@ -40,6 +40,8 @@ shape or motion in the photo. Allow restrained minimal designs when the treatmen
 A centered product, aligned type and recognizable details can all be present in a catalog image. Classify
 scene if the shot could be swapped for a standard product photo without weakening the idea. Classify layout
 if the shot shows the idea but the type and spacing flatten it into disconnected information.
+An unexplained photo seam or empty strip that separates the headline from the detail it describes is a layout
+problem even when the photography is effective and the left and right areas look clean on their own.
 Use the phone preview to read it as a shopper seeing the whole poster. Check whether the product name and price can be
 spotted and read as related information after the first glance. Report typography if either is visually lost
 or the price reads like a detached footnote. A supporting price can be smaller than the headline.
@@ -53,9 +55,11 @@ Name one visible treatment that makes a reference's message work. Compare the ca
 level, allowing for its own category and mood. A centered product, readable type and a visible feature already
 clear in the source do not by themselves establish a campaign idea. Compare the source and the candidate
 photograph before attributing a product feature to the new lighting, view or crop. If the scene adds no
-purposeful treatment to make the feature more noticeable, return scene. If the photograph does show the idea
+purposeful treatment to make the feature more noticeable, return scene. A crop that visibly magnifies and
+separates the advertised detail is a photographic treatment. If the photograph does show the idea
 but scale, typography or placement weakens it, return layout. Allow quiet minimalism when the treatment is
-visible and supports the message. Return JSON with finding (ready, scene or layout), observation (a concrete
+visible and supports the message. Check if a hard seam or an idle strip interrupts the reading path from the
+headline to the photographic detail. Return JSON with finding (ready, scene or layout), observation (a concrete
 Korean sentence about the candidate), and reference_observation (a concrete Korean detail from a reference)."""
 
 ACT = """Use the evidence in observation and the actual chosen poster (first image) to pick one action.
@@ -67,6 +71,9 @@ view only when the owner requires it or the message depends on the complete shap
 Read the earlier edits and what remained visible after each comparison. If moving or enlarging the words
 left the same photo-and-copy disconnect, choose a different composition action or revise the photography
 when available. Do not repeat an earlier edit that left the same issue.
+When the photo works but a hard edge or empty strip separates it from the headline, use edit_composition.
+Use the rendered text and foreground bounds to judge the visible gap after moving the headline. Both use left,
+top, right, bottom percentages of the poster. Keep the supporting copy at a deliberate distance from the headline.
 Keep the exact wording. Return JSON with action, arguments (an object with only the listed input keys),
 and reason (Korean, briefly saying what will visibly change)."""
 
@@ -199,10 +206,15 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         base = versions / current
         layout = load_layout(base)
         available = {"hold", "select"}
+        foreground_bounds = None
         if turn < edit_limit:
             if (base / "foreground.png").is_file():
-                foreground_mask(base, layout)
                 available.add("edit_text")
+                if bounds := Image.fromarray(foreground_mask(base, layout)).getbbox():
+                    art = layout["artwork"]
+                    foreground_bounds = [round(100 * (value + offset) / dimension) for value, offset, dimension in
+                                         zip(bounds, (art["x"], art["y"]) * 2, layout["size"] * 2, strict=True)]
+                    available.add("edit_composition")
                 if generation is not None:
                     available.add("edit_region")
             if generation is not None:
@@ -212,7 +224,9 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         decision = ask_stage(ai, "studio_action", ACT,
                              {"finding": finding, "observation": observation, "actions": guides, "product": fields,
                               "owner_idea": idea,
-                              "design": layout["design"], "copy": [text["text"] for text in layout["texts"]],
+                              "design": layout["design"], "actual_foreground_bounds": foreground_bounds,
+                              "rendered_text_bounds": rendered_text_bounds(layout, base) if "edit_text" in guides else {},
+                              "copy": [text["text"] for text in layout["texts"]],
                               "fonts": list(load_settings()["fonts"]), "last_edit_error": last_failure,
                               "earlier_edits": attempts}, [pictures[current], to_float(photo)])
         action = decision.get("action")
@@ -256,7 +270,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
                               previous=base, feedback=required_text(arguments, "instruction", "장면 편집"),
                               scene_issue=observation if finding == "scene" else None)
             else:
-                edit_version(base, revised, action, arguments, generation)
+                edit_version(base, revised, action, arguments, generation, ai=ai, references=sources)
         except ValueError as error:
             last_failure = str(error)
             record("edit_failed", version=current, action=action, observation=last_failure)
@@ -289,7 +303,7 @@ def main():
     parser.add_argument("--references", type=Path, nargs="*", default=[], help="광고 구도 참고 이미지")
     parser.add_argument("--draft", type=Path, help="이미 생성한 완성 시안에서 시작")
     parser.add_argument("--foreground", type=Path, help="기존 시안에서 별도로 저장한 피사체 마스크")
-    parser.add_argument("--typography-only", action="store_true", help="사진 생성 없이 기존 시안 글자만 편집")
+    parser.add_argument("--typography-only", action="store_true", help="사진을 다시 생성하지 않고 글자와 사진 경계를 편집")
     parser.add_argument("--edit-limit", type=int, default=3, help="수정 시도 횟수")
     parser.add_argument("--formats", nargs="+", choices=FORMATS, default=[], help="채택 시안에 적용할 추가 규격")
     parser.add_argument("--low-vram", action="store_true", help="가중치를 나눠 GPU로 옮김")

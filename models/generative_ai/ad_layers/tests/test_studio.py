@@ -94,6 +94,57 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft):
         assert poster.size == (600, 600)
 
 
+def test_composition_edit_softens_the_edge_without_repainting(tmp_path, draft):
+    folder, fields = draft
+    layout = load_layout(folder)
+    layout["artwork"].update(x=30, w=70)
+    layout["design"]["artwork_box"] = [30, 0, 70, 100]
+    mask = Image.new("L", (70, 100))
+    mask.paste(255, (35, 30, 55, 80))
+    mask.save(folder / "foreground.png")
+    scene = Image.new("RGBA", mask.size, "blue")
+    scene.putpixel((40, 40), (0, 0, 255, 170))
+    scene.save(folder / "scene.png")
+    compose(layout, folder).save(folder / "ad.png")
+    save_layout(layout, folder)
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            data = json.loads(request.split("Input JSON follows:\n", 1)[1])
+            if step == "studio_look":
+                if data["version_order"] == ["v01"]:
+                    return '{"version":"v01","finding":"layout","observation":"사진 경계가 글자와 제품을 갈라놓습니다"}'
+                return '{"version":"v02","finding":"ready","observation":"제품과 제목이 이어집니다"}'
+            if step == "ad_final_layout":
+                assert data["composition_issue"] == "제목과 제품 사이의 세로 경계를 부드럽게 이어 주세요"
+                if data["layout_error"] is None:
+                    return '{"reason":"기존 배치를 유지합니다","revision":null}'
+                assert "배치 수정이 빠졌습니다" in data["layout_error"]
+                boxes = data["design"]["boxes"] | {"headline": [27, 10, 34, 20]}
+                return json.dumps({"reason": "제품 쪽에 제목을 붙였습니다", "revision": {
+                    "edge": "blend", "boxes": boxes, "accent": {"phrase": "포근한 겨울", "color": "#FFAA33"}}})
+            if "edit_composition" in data["actions"]:
+                assert data["actual_foreground_bounds"] == [65, 30, 85, 80]
+                assert data["rendered_text_bounds"]["headline"] == [10, 10, 13, 13]
+                return json.dumps({"action": "edit_composition", "reason": "제목을 사진 쪽으로 옮깁니다",
+                                   "arguments": {"instruction": "제목과 제품 사이의 세로 경계를 부드럽게 이어 주세요"}})
+            return '{"action":"select","arguments":{},"reason":"경계가 사라졌습니다"}'
+
+    output = tmp_path / "composition-edit"
+    result = studio.run_studio(Image.new("RGB", (100, 100)), fields, "", output, Agent(), draft=folder, edit_limit=1)
+    assert result["status"] == "complete"
+    revised = load_layout(output / "final")
+    assert revised["artwork"] == layout["artwork"] and revised["design"]["edge"] == "blend"
+    assert revised["design"]["boxes"]["headline"] == [27, 10, 34, 20]
+    assert revised["design"]["styles"]["headline"]["emphasis"] == {"phrase": "포근한 겨울", "color": "#FFAA33"}
+    assert revised["design"]["accent"] is None
+    assert [row["text"] for row in revised["texts"]] == [row["text"] for row in layout["texts"]]
+    with Image.open(output / "final/scene.png") as image:
+        assert image.getpixel((0, 40)) == (0, 0, 255, 0)
+        assert image.getpixel((40, 40)) == scene.getpixel((40, 40))
+        assert image.convert("RGB").tobytes() == scene.convert("RGB").tobytes()
+
+
 def test_reference_comparison_can_block_selection(tmp_path, draft):
     folder, fields = draft
 
