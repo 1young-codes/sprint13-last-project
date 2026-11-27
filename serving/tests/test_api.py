@@ -165,3 +165,29 @@ def test_retouch_failure_keeps_original_photo(client, monkeypatch):
     monkeypatch.setattr(api, "retouch_photo", broken)
     body = wait_done(client, post(client).json()["job_id"])
     assert body["status"] == "ready" and main_photo_color(client, body) == (200, 80, 60)  # 원본 색
+
+
+def test_usage_suggestions_returns_list(client, monkeypatch):
+    seen = []
+
+    def fake(product_name):
+        seen.append(product_name)
+        return ["회", "구이"]
+
+    monkeypatch.setattr(api, "generate_usage_suggestions", fake)
+    res = client.get("/usage-suggestions", params={"product_name": " 참도미 "})
+    assert res.status_code == 200 and res.json() == {"suggestions": ["회", "구이"]}
+    assert seen == [" 참도미 "]  # 공백 정리는 추천 함수가 한다
+
+
+def test_usage_suggestions_empty_name_is_422(client, monkeypatch):
+    monkeypatch.setattr(api, "generate_usage_suggestions", lambda name: pytest.fail("모델을 부르면 안 됩니다"))
+    for params in ({"product_name": ""}, {"product_name": "  "}, {}):
+        res = client.get("/usage-suggestions", params=params)
+        assert res.status_code == 422 and res.json() == {"detail": "품목 이름을 입력해 주세요."}
+
+
+def test_usage_suggestions_failure_is_empty_list(client, monkeypatch):
+    monkeypatch.setattr(api, "generate_usage_suggestions", lambda name: [])
+    res = client.get("/usage-suggestions", params={"product_name": "참도미"})
+    assert res.status_code == 200 and res.json() == {"suggestions": []}
