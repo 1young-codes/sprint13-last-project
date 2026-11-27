@@ -49,11 +49,14 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft):
             stages.append(step)
             data = json.loads(request.split("Input JSON follows:\n", 1)[1])
             if step == "studio_look":
-                if len(images) == 2:
+                if data["version_order"] == ["v01"]:
+                    assert images[2].shape == (768, 768, 3)
+                    assert images[2][400, 400].tolist() == [0, 0, 1]
                     return '{"version":"v01","finding":"typography","observation":"제목이 어색합니다"}'
                 assert data["version_order"] == ["v01", "v02"]
                 assert images[1][10, 10].tolist() == [1, 1, 1]
                 assert images[2][10, 10].tolist() == [0, 0, 1]
+                assert images[3][400, 150].tolist() == images[3][400, 540].tolist() == [0, 0, 1]
                 return '{"version":"v02","finding":"ready","observation":"제목을 다시 배치했습니다"}'
             if step == "studio_reframe":
                 assert data["size"] == [600, 600]

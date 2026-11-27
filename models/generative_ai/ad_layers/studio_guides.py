@@ -10,7 +10,9 @@ ACTION_GUIDES = {
     "edit_text": {
         "findings": ("typography", "layout"),
         "guide": "Change only the typography that needs work. Keep the exact wording and photograph. "
-                 "Group related copy. Move glyphs out of the product and check legibility in the actual image.",
+                 "Use shared alignment and nearby spacing for related copy. Keep the heading in charge, "
+                 "while giving the product name and price enough size and contrast to read together. "
+                 "Move glyphs out of the product and check legibility in the actual image.",
         "arguments": {"changes": "Object keyed by headline, product_name or price. Put edits directly inside each role. "
                                  "Available keys: box [left,top,width,height] in whole poster percent, font, align, "
                                  "color, size (integer percent), max_lines, first_line (exact words for line 1, or null "

@@ -21,12 +21,16 @@ The first image shows the product. Remaining images are optional composition ref
 Use the product facts and the owner's idea. JSON keys: route, instruction (specific direction), reason (Korean)."""
 
 LOOK = """Look at the real poster images. The first image shows the source product. Then see the posters in
-version_order. Pick the better actual poster when there are two, and name the single most consequential visible
+version_order, followed by those same posters at phone-feed size from left to right. Any images after the
+phone preview are design references. Pick the better actual poster when there are two, and name the single most consequential visible
 problem of the chosen version. First check the actual product, count, shape, and whether displayed use is
 physically believable, including how the parts are held or supported. Check the required Korean copy exactly.
 Product facts are background evidence. Omitted optional product facts such as volume or weight are allowed
 unless the poster makes a misleading offer. Then inspect visual focus, visual idea, the scale and hierarchy of
 the headline, and how the photo and type relate. Evaluate the poster against the remaining design references.
+Use the phone preview to read it as a shopper seeing the whole poster. Check whether the product name and price can be
+spotted and read as related information after the first glance. Report typography if either is visually lost
+or the price reads like a detached footnote. A supporting price can be smaller than the headline.
 Do not approve based on legibility alone. Give no score. Return JSON with version (from version_order),
 finding (one of ready, typography, layout, distraction, product, scene), and observation (a concrete Korean sentence).
 Use ready when the poster could serve this campaign as seen."""
@@ -42,6 +46,18 @@ FINDINGS = {"ready", "typography", "layout", "distraction", "product", "scene"}
 def read_image(path):
     with Image.open(path) as image:
         return ImageOps.exif_transpose(image).convert("RGB")
+
+
+def phone_preview(posters):
+    sheet = Image.new("RGB", (768, 768), "#222222")
+    tiles = [ImageOps.contain(poster, (360, 704), Image.Resampling.LANCZOS) for poster in posters]
+    if len(tiles) == 1:
+        tile = tiles[0]
+        sheet.paste(tile, ((sheet.width - tile.width) // 2, (sheet.height - tile.height) // 2))
+    else:
+        for index, tile in enumerate(tiles):
+            sheet.paste(tile, (12 + index * 384 + (360 - tile.width) // 2, (sheet.height - tile.height) // 2))
+    return sheet
 
 
 def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(), draft=None, mask_path=None,
@@ -104,12 +120,13 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
     last_failure = None
     for turn in range(edit_limit + 1):
         order = [current, pending] if pending else [current]
-        pictures = {name: to_float(read_image(versions / name / "ad.png")) for name in order}
+        posters = [read_image(versions / name / "ad.png") for name in order]
+        pictures = {name: to_float(poster) for name, poster in zip(order, posters, strict=True)}
         edition = load_layout(versions / current)
         required_copy = {text["role"]: text["text"] for text in edition["texts"]}
         review = ask_stage(ai, "studio_look", LOOK, {"product_facts": fields, "required_copy": required_copy,
                                                    "idea": idea, "version_order": order},
-                           [to_float(photo), *pictures.values(), *sources])
+                           [to_float(photo), *pictures.values(), to_float(phone_preview(posters)), *sources])
         visible = review.get("version")
         finding = review.get("finding")
         if visible not in order or not isinstance(finding, str) or finding not in FINDINGS:
