@@ -50,17 +50,21 @@ finding (one of ready, typography, layout, distraction, product, scene), and obs
 Use ready when the poster could serve this campaign as seen."""
 
 CAMPAIGN_CHECK = """Recheck the candidate against the actual design references and the actual source product.
-Image order: source product, finished candidate, candidate photograph without type, then reference posters.
+Image order: source product, finished candidate, candidate photograph without type, candidate at phone-feed size,
+then reference posters. Judge the photograph and the layout independently.
 Name one visible treatment that makes a reference's message work. Compare the candidate's execution at that
 level, allowing for its own category and mood. A centered product, readable type and a visible feature already
 clear in the source do not by themselves establish a campaign idea. Compare the source and the candidate
-photograph before attributing a product feature to the new lighting, view or crop. If the scene adds no
-purposeful treatment to make the feature more noticeable, return scene. A crop that visibly magnifies and
-separates the advertised detail is a photographic treatment. If the photograph does show the idea
-but scale, typography or placement weakens it, return layout. Allow quiet minimalism when the treatment is
-visible and supports the message. Check if a hard seam or an idle strip interrupts the reading path from the
-headline to the photographic detail. Return JSON with finding (ready, scene or layout), observation (a concrete
-Korean sentence about the candidate), and reference_observation (a concrete Korean detail from a reference)."""
+photograph before attributing a product feature to the new lighting, view or crop. A crop that visibly magnifies
+and separates the advertised detail is a photographic treatment. Allow quiet minimalism with a visible purpose.
+In the phone preview, trace the actual reading path from the headline and its photographic subject to the product
+name and price. Identify how the text groups relate by their visible edges, alignment, spacing or a shared
+element in the photograph. Use rendered_text_bounds (left, top, right, bottom percentages) to distinguish where
+the ink really is from where its invisible box ends. An intentional offset can lead the eye. Flag an arbitrary
+offset that leaves the headline and offer floating as unrelated groups even when the artwork is effective.
+Return JSON with reference_observation (one concrete Korean detail from a reference), scene and layout. Both
+scene and layout are objects with ready (boolean) and observation (one concrete Korean sentence). State the
+visible evidence for each decision separately. A strong photograph alone is insufficient to approve the layout."""
 
 ACT = """Use the evidence in observation and the actual chosen poster (first image) to pick one action.
 The second image is the source photo. Ground any framing or staging change in a specific feature visible there.
@@ -72,6 +76,9 @@ Read the earlier edits and what remained visible after each comparison. If movin
 left the same photo-and-copy disconnect, choose a different composition action or revise the photography
 when available. Do not repeat an earlier edit that left the same issue.
 When the photo works but a hard edge or empty strip separates it from the headline, use edit_composition.
+Also use edit_composition when the headline and offer need to move together to repair their relationship to
+the photo. Use edit_text for local fixes to individual blocks. Check design.boxes for placement limits:
+the visible ink can occupy only part of a box, and text boxes cannot overlap.
 Use the rendered text and foreground bounds to judge the visible gap after moving the headline. Both use left,
 top, right, bottom percentages of the poster. Keep the supporting copy at a deliberate distance from the headline.
 Keep the exact wording. Return JSON with action, arguments (an object with only the listed input keys),
@@ -189,14 +196,22 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         observation = required_text(review, "observation", "시안 검토")
         if finding == "ready" and sources:
             selected = versions / visible
-            scene = read_image(selected / load_layout(selected)["artwork"]["file"])
-            check = ask_stage(ai, "studio_campaign_check", CAMPAIGN_CHECK, {"required_copy": required_copy},
-                              [to_float(photo), pictures[visible], to_float(scene), *sources])
-            finding = check.get("finding")
-            if finding not in ("ready", "scene", "layout"):
+            candidate = load_layout(selected)
+            scene = read_image(selected / candidate["artwork"]["file"])
+            check = ask_stage(ai, "studio_campaign_check", CAMPAIGN_CHECK, {
+                "required_copy": required_copy, "rendered_text_bounds": rendered_text_bounds(candidate, selected),
+            }, [to_float(photo), pictures[visible], to_float(scene),
+                to_float(phone_preview([posters[order.index(visible)]])), *sources])
+            assessments = {role: check.get(role) for role in ("scene", "layout")}
+            if any(not isinstance(item, dict) or type(item.get("ready")) is not bool
+                   for item in assessments.values()):
                 raise ValueError("참고 포스터와 비교한 결과를 확인하지 못했습니다")
-            observation = required_text(check, "observation", "참고 포스터 비교")
+            evidence = {role: required_text(item, "observation", "참고 포스터 비교")
+                        for role, item in assessments.items()}
+            finding = next((role for role, item in assessments.items() if not item["ready"]), "ready")
+            observation = evidence[finding] if finding != "ready" else " ".join(evidence.values())
             record("campaign_check", version=visible, finding=finding, observation=observation,
+                   scene_observation=evidence["scene"], layout_observation=evidence["layout"],
                    reference_observation=required_text(check, "reference_observation", "참고 포스터 비교"))
         record("look", versions=order, version=visible, finding=finding, observation=observation)
         if pending:

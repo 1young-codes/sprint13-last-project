@@ -145,7 +145,11 @@ def test_composition_edit_softens_the_edge_without_repainting(tmp_path, draft):
         assert image.convert("RGB").tobytes() == scene.convert("RGB").tobytes()
 
 
-def test_reference_comparison_can_block_selection(tmp_path, draft):
+@pytest.mark.parametrize(("finding", "observation"), [
+    ("scene", "원본 촛불과 다른 연출이 보이지 않습니다"),
+    ("layout", "제목과 가격이 서로 어긋나 별개로 읽힙니다"),
+])
+def test_reference_comparison_can_block_selection(tmp_path, draft, finding, observation):
     folder, fields = draft
 
     class Agent:
@@ -153,17 +157,23 @@ def test_reference_comparison_can_block_selection(tmp_path, draft):
             if step == "studio_look":
                 return '{"version":"v01","finding":"ready","observation":"중앙 정렬이 깔끔합니다"}'
             if step == "studio_campaign_check":
-                assert len(images) == 4 and images[1][10, 10].tolist() == [1, 1, 1]
+                assert len(images) == 5 and images[1][10, 10].tolist() == [1, 1, 1]
                 assert images[2][10, 10].tolist() == [0, 0, 1]
+                assert images[3].shape == (768, 768, 3)
+                data = json.loads(request.split("Input JSON follows:\n", 1)[1])
+                assert data["rendered_text_bounds"]["headline"] == [10, 10, 13, 13]
                 assert "포근한 겨울 저녁" in request
-                return json.dumps({"finding": "scene", "observation": "원본 촛불과 다른 연출이 보이지 않습니다",
-                                   "reference_observation": "참고작의 그림자가 불빛의 위치를 드러냅니다"})
+                return json.dumps({
+                    "scene": {"ready": finding != "scene", "observation": observation if finding == "scene" else "촛불이 잘 보입니다"},
+                    "layout": {"ready": finding != "layout", "observation": observation if finding == "layout" else "문구가 연결됩니다"},
+                    "reference_observation": "참고작의 그림자가 불빛의 위치를 드러냅니다",
+                })
             assert step == "studio_action"
             assert len(images) == 2 and images[0][10, 10].tolist() == [1, 1, 1]
             assert images[1][10, 10].tolist() == [0, 0, 0]
             data = json.loads(request.split("Input JSON follows:\n", 1)[1])
             assert list(data["actions"]) == ["hold"]
-            assert data["finding"] == "scene" and data["owner_idea"] == ""
+            assert data["finding"] == finding and data["observation"] == observation and data["owner_idea"] == ""
             return '{"action":"hold","arguments":{},"reason":"촬영부터 고쳐야 합니다"}'
 
     output = tmp_path / "output"
@@ -171,12 +181,12 @@ def test_reference_comparison_can_block_selection(tmp_path, draft):
                                references=[Image.new("RGB", (100, 100), "red")], edit_limit=0)
     assert result["status"] == "needs_review" and not (output / "final").exists()
     held = result["image"].parent
-    assert load_layout(held)["pending_review"]["finding"] == "scene"
+    assert load_layout(held)["pending_review"]["finding"] == finding
 
     class Resume(Agent):
         def ask(self, step, images, request, *, model):
             assert step == "studio_action"
-            assert "원본 촛불과 다른 연출이 보이지 않습니다" in request
+            assert observation in request
             return super().ask(step, images, request, model=model)
 
     resumed = studio.run_studio(Image.new("RGB", (100, 100)), fields, "", tmp_path / "resumed", Resume(),
