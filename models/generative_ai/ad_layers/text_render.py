@@ -65,6 +65,7 @@ def page_html(texts: list[dict], size: tuple[int, int]) -> str:
     return (f"<html><head><style>{faces} html, body {{ margin: 0; background: transparent; width: {size[0]}px; "
             f"height: {size[1]}px; }} .t {{ position: absolute; display: flex; align-items: center; "
             f"line-height: 1.15; overflow: hidden; }} .t span {{ max-width: 100%; word-break: keep-all; }}"
+            f".t[data-max-lines='2'] span {{ text-wrap: balance; }}"
             f"</style></head><body>{''.join(boxes)}</body></html>")
 
 

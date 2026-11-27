@@ -59,12 +59,13 @@ python -m models.generative_ai.ad_layers.make_ad --recompose outputs/ad_layers/�
 
 ## 포스터 구도를 먼저 정하기
 
-`scene_ad`는 상품 사진과 참고 포스터를 보고 강조점과 사진 영역, 색면, 문구별 배치를 한 번에 정합니다. 참고 포스터를 제공하면 실제로 합친 구도를 보여 주고 한 차례 검토합니다. 최종 생성에서는 Qwen이 사진 영역만 그립니다. 글자가 정해진 크기로 들어가는지 생성 전에 검사하고, 최종 장면에서는 실제 글자 화소가 제품을 가리는지 확인합니다.
+`scene_ad`는 상품 사진과 참고 포스터를 보고 강조점, 사진 영역, 문구별 배치를 정합니다. 필요하면 색면을 사용합니다. 참고 포스터를 제공하면 합친 시안을 먼저 검토합니다. Qwen이 사진 영역을 생성하면 완성 사진 위에서 글자 배치를 다시 검토합니다. 원래 배치와 수정 배치를 비교하고, 글자가 실제 제품을 가리지 않는 수정안을 채택합니다.
 
 ```bash
 # 원본 사진을 넣은 구도 시안. OpenAI 호출과 글자 렌더링을 사용합니다.
 python -m models.generative_ai.ad_layers.scene_ad photos/items.json photos outputs/poster_previews --preview --references 참고.png
-python -m models.generative_ai.ad_layers.scene_ad photos/items.json photos outputs/scene_ads --designs outputs/poster_previews
+python -m models.generative_ai.ad_layers.scene_ad photos/items.json photos outputs/scene_ads \
+    --designs outputs/poster_previews --references 참고.png
 python -m models.generative_ai.ad_layers.make_ad --recompose outputs/scene_ads/01_사진
 ```
 

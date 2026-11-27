@@ -8,7 +8,8 @@ from models.generative_ai.ad_layers import scene_ad
 from models.generative_ai.photo_retouch import product_mask
 
 
-def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkeypatch):
+@pytest.mark.parametrize("winner", [1, 2])
+def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkeypatch, winner):
     calls = []
     photo = Image.new("RGB", (70, 60), "orange")
     reference = Image.new("RGB", (70, 60), "white")
@@ -43,6 +44,12 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             if step == "ad_layout_review":
                 assert len(images) == 2 and images[0].shape == (1024, 1024, 3)
                 return '{"reason":"Type and photo are aligned", "revision":null}'
+            if step == "ad_final_layout":
+                assert len(images) == 3 and images[1][0, 0, 2] == 1
+                return '{"reason":"The color accent competes with the subject", "revision":{"accent":null}}'
+            if step == "ad_final_compare":
+                assert len(images) == 3
+                return json.dumps({"winner": winner, "reason": "Clearer product focus"})
             assert step == "ad_layout" and images[0][0, 0, 2] == 0 and len(images) == 2
             data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
             assert data["copy"] == {"headline": "부드러운 아침", "product_name": "수분 세럼", "price": "32,000원"}
@@ -69,7 +76,10 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     folder = tmp_path / "result"
     models = {"ai": Interpreter(), "generation": Model(), "mask": "mask"}
     layout = scene_ad.make_scene_ad(photo, fields, "", models, folder, references=[reference])
-    assert calls == ["ad_plan", "ad_direction", "ad_headline", "ad_layout", "ad_layout", "render", "ad_layout_review", "qwen"]
+    assert calls == ["ad_plan", "ad_direction", "ad_headline", "ad_layout", "ad_layout", "render", "ad_layout_review",
+                     "qwen", "ad_final_layout", "render", "ad_final_compare"]
+    assert (layout["design"]["accent"] is None) == (winner == 2)
+    assert layout["final_review_reason"] == ("Clearer product focus" if winner == 2 else None)
     assert {layer["text"] for layer in layout["texts"]} == {"부드러운 아침", "수분 세럼", "32,000원"}
     assert json.loads((folder / "layout.json").read_text(encoding="utf-8")) == layout
     with Image.open(folder / "ad.png") as ad:
@@ -82,21 +92,20 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     assert saved["design"] == layout["design"] and saved["texts"] == layout["texts"]
 
 
-def test_type_can_extend_over_photo_but_not_over_product(tmp_path, monkeypatch):
-    foreground = np.zeros((30, 30), dtype=np.float32)
-    foreground[10:20, 10:20] = 1
-    monkeypatch.setattr(product_mask, "product_mask", lambda model, pixels: foreground)
+def test_type_can_extend_over_photo_but_not_over_product(tmp_path):
+    foreground = np.zeros((30, 30), dtype=bool)
+    foreground[10:20, 10:20] = True
     scene = Image.new("RGB", (30, 30))
     layout = {"size": [30, 30], "artwork": {"x": 0, "y": 0},
               "texts": [{"role": "headline", "file": "text.png", "x": 0, "y": 0, "w": 30, "h": 30}]}
     ink = Image.new("RGBA", scene.size)
     ink.putpixel((5, 12), (255, 255, 255, 255))
     ink.save(tmp_path / "text.png")
-    scene_ad.check_artwork(scene, None, 0.5, layout, "preserve", tmp_path)
+    scene_ad.check_text_overlap(foreground, layout, tmp_path)
     ink.putpixel((12, 12), (255, 255, 255, 255))
     ink.save(tmp_path / "text.png")
     with pytest.raises(ValueError, match="실제 제품을 가립니다"):
-        scene_ad.check_artwork(scene, None, 0.5, layout, "preserve", tmp_path)
+        scene_ad.check_text_overlap(foreground, layout, tmp_path)
 
 
 def test_blended_photo_edges_keep_product_pixels_opaque():
@@ -106,3 +115,10 @@ def test_blended_photo_edges_keep_product_pixels_opaque():
     blended = scene_ad.blend_edges(photo, foreground)
     assert blended.getpixel((0, 0))[3] == 0
     assert blended.getpixel((15, 0)) == (*photo.getpixel((15, 0)), 255)
+
+
+def test_blend_only_fades_borders_inside_canvas():
+    photo = Image.new("RGB", (30, 30), "orange")
+    blended = scene_ad.blend_edges(photo, position=(4, 0), canvas_size=(34, 30))
+    assert blended.getpixel((0, 15))[3] == 0
+    assert blended.getpixel((29, 0))[3] == blended.getpixel((29, 29))[3] == 255

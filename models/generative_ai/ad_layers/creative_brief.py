@@ -27,9 +27,11 @@ when it serves that message. Describe the intended scene, leaving placement deci
 Return only JSON with one English string, "scene". Do not write ad copy."""
 
 COPY = f"""You write the headline. Express the agreed message as one short, natural Korean campaign line
-of at most {MAX_HEADLINE_LENGTH} characters including spaces. Give one memorable phrase or a short sentence.
-Keep claims grounded in the supplied information. The product name and price have their own lines.
-Keep the headline free of prices. Return only JSON with "headline"."""
+of at most {MAX_HEADLINE_LENGTH} characters including spaces. Aim for 7 to 13 characters if the message fits
+naturally. Convey one specific idea that pairs with the photograph. Avoid repeating the product name when it
+has its own line. Leave the full product description, usage instructions and price to the supporting copy.
+Keep claims grounded in the supplied information.
+Return only JSON with "headline"."""
 
 LAYOUT = """You handle layout. Use the supplied scene and exact copy. Decide where and at what scale the product,
 headline, product name and price appear. Return one JSON object with:
