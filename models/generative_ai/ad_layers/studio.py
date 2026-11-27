@@ -59,8 +59,11 @@ Use ready when the poster could serve this campaign as seen."""
 
 CAMPAIGN_CHECK = """Recheck the candidate against the actual source product and any design references.
 Image order: source product, finished candidate, candidate photograph without type, candidate at phone-feed size,
-then the pre-shoot composition if has_source_study is true, then reference posters. The source study is the
-original subject placed on a flat background with draft lettering. Judge the treatment and layout separately.
+then the pre-shoot composition if has_source_study is true, then reference posters. The source study shows
+the planned subject placement on a flat background with draft lettering. If staging_intent exists, the study
+uses actual source components in a new arrangement. Check that the moved component appears only once at its
+new location, with plausible contact and shadow. Report product_mismatch if the count changed, or catalog if
+the original arrangement survived without a new idea. Judge the treatment and layout separately.
 If there are reference posters, name one visible treatment that makes a reference's message work. Compare the
 candidate's execution at that level, allowing for its own category and mood. First compare the raw source, the source study if available,
 and the new photograph. Imagine the original subject, resized and placed at the candidate's scale, replacing
@@ -86,6 +89,14 @@ first glance from the advertised feature, flag the hierarchy. An offer can lead 
 Return JSON with reference_observation (one concrete Korean detail from a reference, or null without references), scene (treatment and
 observation), and layout (ready boolean and observation). Each observation is a concrete Korean sentence.
 State visible evidence for each separately. A strong photograph alone is insufficient to approve the layout."""
+
+STAGED_IDENTITY = """Compare the moved item in three images: the real source item isolated on gray, the newly
+photographed piece and its surroundings at close range, and the whole new photograph. Verify shape and
+construction of the advertised item, especially the small working parts identified in product_detail. A different
+angle, lighting, or physically expected traces of chosen use are allowed. Replacing a visible working part
+with a different material or shape is a mismatch even when its overall use and main silhouette look plausible.
+Return match (boolean) and observation (one concrete Korean sentence naming what the close images show)."""
+
 
 TREATMENTS = {
     "product_mismatch": "The shot materially changes the actual product, offer, or physically plausible use.",
@@ -124,7 +135,7 @@ Keep the exact wording. Return JSON with action, arguments (an object with only 
 and reason (Korean, briefly saying what will visibly change)."""
 
 FINDINGS = {"ready", "typography", "layout", "distraction", "product", "scene"}
-REVIEW_RULES = sha256((LOOK + CAMPAIGN_CHECK + json.dumps(TREATMENTS, sort_keys=True)).encode()).hexdigest()
+REVIEW_RULES = sha256((LOOK + CAMPAIGN_CHECK + STAGED_IDENTITY + json.dumps(TREATMENTS, sort_keys=True)).encode()).hexdigest()
 
 
 def read_image(path):
@@ -196,10 +207,30 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         scene = read_image(selected / candidate["artwork"]["file"])
         pre_shoot = selected / "composition.png"
         study = [to_float(read_image(pre_shoot))] if pre_shoot.is_file() else []
+        revision = candidate.get("revision", {})
+        if (box := revision.get("staged_piece_box")) is not None:
+            if (not isinstance(box, list) or len(box) != 4 or any(type(value) is not int for value in box)
+                    or not (0 <= box[0] < box[2] <= scene.width and 0 <= box[1] < box[3] <= scene.height)):
+                raise ValueError("옮긴 상품을 확대할 영역을 확인하지 못했습니다")
+            x0, y0, x1, y1 = box
+            margin = max(x1 - x0, y1 - y0) // 4
+            detail = scene.crop((max(0, x0 - margin), max(0, y0 - margin),
+                                 min(scene.width, x1 + margin), min(scene.height, y1 + margin)))
+            identity = ask_stage(ai, "studio_staged_identity", STAGED_IDENTITY, {
+                "product_detail": candidate.get("art_direction_plan", {}).get("evidence"),
+                "staging_intent": revision.get("staging_intent"),
+            }, [to_float(read_image(selected / "staged-piece.png")), to_float(detail), to_float(scene)])
+            match = identity.get("match")
+            if type(match) is not bool:
+                raise ValueError("옮긴 상품의 원본 대조 결과를 확인하지 못했습니다")
+            observation = required_text(identity, "observation", "옮긴 상품 검토")
+            record("staged_identity", version=name, match=match, observation=observation)
+            if not match:
+                return "product", observation
         check = ask_stage(ai, "studio_campaign_check", CAMPAIGN_CHECK, {
             "required_copy": required_copy, "rendered_text_bounds": rendered_text_bounds(candidate, selected),
             "has_source_study": bool(study), "treatments": TREATMENTS,
-            "planned_effect": candidate.get("revision", {}).get("visible_result"),
+            "planned_effect": revision.get("visible_result"), "staging_intent": revision.get("staging_intent"),
         }, [to_float(photo), to_float(poster), to_float(scene), to_float(phone_preview([poster])), *study, *sources])
         scene_review, layout_review = check.get("scene"), check.get("layout")
         treatment = scene_review.get("treatment") if isinstance(scene_review, dict) else None

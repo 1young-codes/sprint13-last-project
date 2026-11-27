@@ -159,18 +159,28 @@ def test_composition_edit_softens_the_edge_without_repainting(tmp_path, draft):
     ("scene", "원본 촛불과 다른 연출이 보이지 않습니다", False),
     ("scene", "원본 촛불과 다른 연출이 보이지 않습니다", True),
     ("layout", "제목과 가격이 서로 어긋나 별개로 읽힙니다", True),
+    ("product", "움직인 상품의 실제 구조가 바뀌었습니다", True),
 ])
 def test_campaign_comparison_can_block_selection(tmp_path, draft, finding, observation, has_reference):
     folder, fields = draft
     if finding == "scene":
         Image.new("RGB", (100, 100), "green").save(folder / "composition.png")
+    if finding == "product":
+        layout = load_layout(folder)
+        layout["revision"] = {"staged_piece_box": [20, 10, 60, 40], "staging_intent": "상품을 앞으로 옮깁니다"}
+        save_layout(layout, folder)
+        Image.new("RGB", (20, 20), "orange").save(folder / "staged-piece.png")
     references = [Image.new("RGB", (100, 100), "red")] if has_reference else []
 
     class Agent:
         def ask(self, step, images, request, *, model):
             if step == "studio_look":
                 return '{"version":"v01","finding":"ready","observation":"중앙 정렬이 깔끔합니다"}'
+            if step == "studio_staged_identity":
+                assert finding == "product" and len(images) == 3 and images[1].shape == (50, 60, 3)
+                return json.dumps({"match": False, "observation": observation})
             if step == "studio_campaign_check":
+                assert finding != "product"
                 has_study = finding == "scene"
                 assert len(images) == 4 + has_study + has_reference and images[1][10, 10].tolist() == [1, 1, 1]
                 assert images[2][10, 10].tolist() == [0, 0, 1]
@@ -221,7 +231,8 @@ def test_campaign_comparison_can_block_selection(tmp_path, draft, finding, obser
     studio.run_studio(Image.new("RGB", (100, 100)), fields, "", after_rule_change, Agent(), draft=held,
                       references=references, edit_limit=0)
     events = (after_rule_change / "events.jsonl").read_text(encoding="utf-8")
-    assert "campaign_check" in events and "resume_review" not in events
+    assert ("staged_identity" if finding == "product" else "campaign_check") in events
+    assert "resume_review" not in events
 
     held = after_rule_change / "versions/v01"
     with Image.open(held / "ad.png") as poster:

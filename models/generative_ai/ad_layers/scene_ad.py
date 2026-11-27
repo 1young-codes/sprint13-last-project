@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageOps
 from .art_direction import ANGLES, LIGHTING, SHOT_SCALES, THEMES, plan_art_direction
 from .creative_brief import LAYOUT_ROLES, TEXT_ROLES, ask_stage, plan_copy, required_text, validate_boxes
 from .layers import compose, cutout_product, load_layout, load_settings, save_layout, to_float
+from .staging import on_gray, source_parts, stage_subject
 from .text_render import minimum_font_size, render_texts
 from .viewpoint import available_viewpoints, camera_view, place_camera_view
 
@@ -292,11 +293,6 @@ def crop_subject(product, design):
 
 
 def choose_source_framing(ai, product, inputs, images):
-    def on_gray(subject):
-        canvas = Image.new("RGB", subject.size, "#808080")
-        canvas.paste(subject, mask=subject.getchannel("A"))
-        return canvas
-
     whole = on_gray(product)
     answer = ask_stage(ai, "ad_source_framing", SOURCE_FRAMING, inputs, [to_float(whole), *images])
     crop = answer.get("source_crop")
@@ -660,6 +656,11 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
     images = [to_float(photo), *map(to_float, references)]
     revision_info = {"requested_scene_change": feedback} if feedback else None
     design_images = images
+    mask_model = models.get("mask")
+    threshold = settings["product"]["mask_threshold"]
+    product, source_mask = None, None
+    parts = None
+    staging_intent = None
     if prior:
         if prior.get("preview"):
             raise ValueError("사진 생성이 끝난 광고만 개선에 사용할 수 있습니다")
@@ -676,6 +677,9 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         fields_to_keep = ("weakness", "hypothesis")
         campaign_viewpoints = {}
         if campaign_intent:
+            if mask_model is not None:
+                product, source_mask = extract_subject(photo, mask_model, threshold)
+                parts = source_parts(source_mask)
             inputs["editor_intent"] = campaign_intent
             critique_prompt += ("\nDesign one replacement campaign from editor_intent. The full composition may change. "
                                 "Do not salvage the old subject placement or type merely for continuity. In hypothesis, "
@@ -691,6 +695,12 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 critique_prompt += (" If the concept needs a visibly different camera position relative to the source, "
                                     "return viewpoint as one key from camera_viewpoints. This will move the actual camera "
                                     "reference. Return null when the scene does not need a new camera position.")
+            if parts is not None:
+                critique_prompt += (" If moving one clearly separable piece already visible in the original photo is "
+                                    "essential to the hypothesis, return staging_intent describing what moves, where, "
+                                    "and why. That piece will actually be moved in the reference without changing its size "
+                                    "or count. Use this only where the original exposes the whole visible silhouette. "
+                                    "Otherwise return null. Use at most one of viewpoint and staging_intent.")
         if rejected:
             discarded = load_layout(rejected)
             if discarded["fields"] != fields:
@@ -704,7 +714,10 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             critique_prompt += "\nThe last image is a rejected attempt. Address its weakness and avoid repeating it."
         criticism = ask_stage(ai, "ad_cycle_critique", critique_prompt, inputs, critique_images)
         revision_info = {key: required_text(criticism, key, "완성본 검토") for key in fields_to_keep}
-        if campaign_viewpoints and (camera_choice := criticism.get("viewpoint")) is not None:
+        if parts is not None and criticism.get("staging_intent") is not None:
+            staging_intent = required_text(criticism, "staging_intent", "완성본 검토")
+            revision_info["staging_intent"] = staging_intent
+        elif campaign_viewpoints and (camera_choice := criticism.get("viewpoint")) is not None:
             if not isinstance(camera_choice, str) or camera_choice not in campaign_viewpoints:
                 raise ValueError("새 연출에 사용할 촬영 시점을 확인하지 못했습니다")
             viewpoint = camera_choice
@@ -714,16 +727,24 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                             idea=idea, revision_feedback=revision_info)
     art_plan = proposal.get("art_direction_plan") if proposal else plan_art_direction(
         ai, fields, design_input["brief"] | {"headline": copy["headline"]}, idea, images, revision_info)
-    threshold = settings["product"]["mask_threshold"]
-    mask_model = models.get("mask")
-    product, source_mask = extract_subject(photo, mask_model, threshold) if mask_model is not None else (None, None)
+    if mask_model is not None and source_mask is None:
+        product, source_mask = extract_subject(photo, mask_model, threshold)
     moved_view = None
-    if viewpoint:
+    staged_view = None
+    if staging_intent:
+        if product is None:
+            raise ValueError("새 구도에 옮길 상품 영역을 찾지 못했습니다")
+        product, moved_piece, observation = stage_subject(ai, photo, source_mask, parts, staging_intent)
+        revision_info["staging_observation"] = observation
+        staged_view = to_float(on_gray(product))
+    elif viewpoint:
         if product is None:
             raise ValueError("새 시점에서 보여 줄 상품 영역을 찾지 못했습니다")
         moved_view = camera_view(photo, source_mask, viewpoint)
     source_framing = proposal.get("source_framing") if proposal else None
-    if moved_view is not None:
+    if staged_view is not None:
+        source_framing = {"source_crop": None, "reason": revision_info["staging_observation"]}
+    elif moved_view is not None:
         source_framing = {"source_crop": None, "reason": "새 촬영 시점에서 상품의 구성을 유지합니다"}
     elif not proposal and product is not None:
         framing_input = design_input | {"art_direction_plan": art_plan, "idea": idea}
@@ -764,7 +785,11 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             if campaign_intent:
                 design_task += (" Use layout_device and show visible_result. Draw the relationship in the actual layout "
                                 "through relative scale, overlap or direction; a separate caption above a catalog shot is insufficient.")
-        if moved_view is not None:
+        if staged_view is not None:
+            design_images = [*design_images, staged_view]
+            design_task += ("\nThe final image is the actual rearranged product. Use its new positions and physical "
+                            "shape when directing the layout. Gray is transparent.")
+        elif moved_view is not None:
             design_images = [*design_images, to_float(moved_view)]
             design_task += ("\nThe final image shows the requested camera viewpoint with unreconstructed regions. "
                             "Plan space for the visible subject and type around that view.")
@@ -818,7 +843,11 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                                        "Omit any instruction to keep the entire product in view.")
                 else:
                     direction_task += "\nDescribe the exact requested_scene_change and omit any conflicting design detail."
-            if moved_view is not None:
+            if staged_view is not None:
+                direction_images.append(staged_view)
+                direction_task += ("\nThe final image shows the actual product in its new arrangement. Keep its moved "
+                                   "piece exactly once there, give it realistic support, and rebuild the old location.")
+            elif moved_view is not None:
                 direction_input["viewpoint"] = viewpoint
                 direction_images.append(to_float(moved_view))
                 direction_task += ("\nThe last image is the requested viewpoint, with gray gaps to reconstruct. "
@@ -855,7 +884,13 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             prompt += " Keep all of the product in frame with space around its edges."
         if detail_shot:
             prompt += " Keep the same close framing of the product detail shown in the reference."
-        if moved_view is not None:
+        if staged_view is not None:
+            prompt = ("Make one finished commercial photograph. The first image defines product identity and details. "
+                      "The second image defines the new product arrangement, scale and positions. Keep each piece once. "
+                      "Do not restore moved pieces to their old positions. Replace gray and repair newly exposed "
+                      f"surfaces with physically plausible material, support and shadows. {answer['art_direction']} "
+                      "Preserve the actual product and packaging. Add no writing or graphics.")
+        elif moved_view is not None:
             prompt = ("Make one finished commercial photograph. The first image shows the original item and its details. "
                       "Use the second image's camera viewpoint and visible arrangement. Gray gaps are missing pixels: "
                       "complete them naturally with details consistent with the first image. Keep the changed angle. "
@@ -872,10 +907,18 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             model = models["generation"]
             model.use_lora(None, 0)
             generation = settings["generation"]
-            if moved_view is not None:
+            if staged_view is not None:
+                placement_area = subject_box or [8, 8, 84, 84]
+                guide = product_reference(photo, effective, picture_size, placement_area)
+                guide.save(result / "staging.png")
+                piece_box = frame_subject(moved_piece, picture_size, placement_area).getbbox()
+                revision_info["staged_piece_box"] = list(piece_box)
+                on_gray(moved_piece.crop(moved_piece.getbbox())).save(result / "staged-piece.png")
+            elif moved_view is not None:
                 placement_box = pixel_box(subject_box or [0, 0, 100, 100], picture_size)
                 guide = place_camera_view(moved_view, source_mask.getbbox(), photo.size, picture_size, placement_box)
                 guide.save(result / "viewpoint.png")
+            if staged_view is not None or moved_view is not None:
                 original = ImageOps.contain(photo, (640, 640), Image.Resampling.LANCZOS)
                 generated = model.edit_with_reference(original, guide, prompt, generation["seed"], generation["steps"])
             else:
