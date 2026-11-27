@@ -41,10 +41,10 @@ filled photograph; the second shows the same photograph with only stretched prev
 identifies the unmodified photo in whole canvas percentages, left, top, right, bottom. Only inspect regions
 outside those bounds. Subsequent images show each added side plus a narrow strip of adjacent original photo,
 in margin_sides order. Compare the material across that join. Look at the corners as well as seams.
-Reject a new object, glow, smear, or broken
-surface that draws the eye or interrupts a continuous edge. Check for flipped patterns or repeating grains
-away from the seam as well. A surface that turns into a different material is a defect even when the
-transition is gradual. Allow a naturally quiet extension. Return
+Reject a new object, glow, smear, or broken surface. Even a short strip can be wrong when wood grain or a
+cast shadow suddenly turns into parallel streaks at the join. Check for flipped patterns or repeating grains.
+Reject a surface that turns into a different material even when the transition is gradual. Allow a naturally
+quiet extension. Return
 ready (boolean), side (one of margin_sides if rejected, null if ready), and observation (one concrete Korean
 sentence naming what is visible and where)."""
 
@@ -59,12 +59,17 @@ Read the new photo before choosing positions. In a tall canvas, do not separate 
 unused stretch of background. Place the nearest title line beside or near the feature in the actual framing.
 In a wide canvas with no clear footer, keep the product name and price beside the headline or the product.
 When intent is provided, address that visible problem on the new photo without rewriting copy.
+In a same-size repair, preserve the approved type's reading order and legibility. When the focal feature is
+centered, start by looking for a shared axis around it. Move the offer to a separate corner only when a visible
+line, action or contrast connects it to the reading path. Keep the offer comfortably readable at phone size.
 placement_options holds exact boxes checked against the product mask using the approved text sizes. If one
 is available, start by choosing its key as placement. You may also return colors as a map from a text role
 to a #RRGGBB when needed for contrast, including headline_line_1 or headline_line_2 for a split heading.
 Keep the measured boxes and font_sizes when selecting an option. If the
 available options do not fit after rendering, return a custom layout using boxes and styles instead.
 On retry, look at why previous_placement or the rendered poster failed before choosing a placement again.
+For a margin error, first shift the affected text group inward with its alignment intact. Keep the approved
+alignment and size of the other copy unless the error explicitly names a broken reading path.
 Return a JSON object with boxes and styles keyed by headline, product_name and price. Each box is
 [left, top, width, height] in whole percentages of the poster. Keep them inside the poster and off one another.
 Each style has font, align (left, center, or right), color (#RRGGBB), size, and max_lines (1 or 2,
@@ -79,13 +84,18 @@ meets the visible product silhouette). Use the previous_layout and layout_error
 to repair failed boxes while keeping the parts that fit."""
 
 FORMAT_READING = """Compare the approved poster and the actual reframed poster in the first and second images.
-Judge the second at mobile size, using rendered_ink and product_bounds as evidence. Check the exact copy,
+Judge the second at mobile size, using rendered_ink and product_bounds as evidence. The third image is the
+same reframed poster at full size. Check whether a complete product has enough room at its nearest edge,
+including its contact shadow. Inspect the background there for a seam or stretched detail. Accept a clearly
+intentional detail crop when it serves the campaign. Check the exact copy,
 contrast, title line grouping, and how a viewer reaches the product and price. Check what draws the first
 glance. The price may lead when focus is price. Otherwise it should read clearly without taking attention
 from the intended focus. Quiet margins around the whole composition are allowed.
 A large empty band between the title and subject, with no visible photographic cue
 across it, breaks the reading path. A pair of title lines needs to read as one phrase before the viewer reaches
 the product. Also use outer_margins to inspect the actual space outside the product and all the lettering.
+An offer stranded apart from the headline and advertised detail is a layout defect even when every word is
+legible by itself. Give the specific gap or missing visual connection in the observation.
 If intent describes a same-size repair, check that the photographed feature is more legible and the
 unused region visibly shrank in the second image.
 Read the long axis from edge to edge. An enlarged stretch of featureless wall, floor or surface has no
@@ -121,8 +131,9 @@ class FormatPhotoIssue(ValueError):
         self.poster = poster
 
 
-def extend_edges(contained, size, placement):
-    left, top = int((size[0] - contained.width) * placement), int((size[1] - contained.height) * placement)
+def extend_edges(contained, size, placement, *, offset=None):
+    left, top = (offset if offset is not None else
+                 (int((size[0] - contained.width) * placement), int((size[1] - contained.height) * placement)))
     columns = (left, size[0] - contained.width - left)
     rows = (top, size[1] - contained.height - top)
     pixels = np.pad(np.asarray(contained), (rows, columns, (0, 0)), mode="edge")
@@ -175,7 +186,60 @@ def reflect_margin(filled, contained, product, placed, side):
     return result
 
 
-def frame_photo(photo, mask, size, expand=None, choose_position=None, check_margin=None):
+def fit_crop(photo, mask, box, size, keep_clearance, check_margin):
+    width, height = size
+    crop = mask.crop(box)
+    left, top, right, bottom = crop.getbbox()
+    gaps = (left * width / crop.width, (crop.width - right) * width / crop.width,
+            top * height / crop.height, (crop.height - bottom) * height / crop.height)
+
+    def original():
+        return photo.resize(size, Image.Resampling.LANCZOS, box=box), crop.resize(size, Image.Resampling.NEAREST)
+
+    clearance = round(min(size) * 0.06)
+    if not keep_clearance or min(gaps) == 0 or min(gaps) >= clearance:
+        return original()
+
+    # The scale must leave room for both clearances as well as the visible extent at either end.
+    scale = 1
+    for length, start, end in ((width, *gaps[:2]), (height, *gaps[2:])):
+        scale = min(scale, (length - 2 * clearance) / (length - start - end),
+                    (length - clearance) / (length - min(start, end)))
+    smaller = (max(1, int(width * scale)), max(1, int(height * scale)))
+    subject = crop.resize(smaller, Image.Resampling.NEAREST)
+    if (bounds := subject.getbbox()) is None:
+        raise ValueError("게시 규격에서 상품 영역이 너무 작습니다")
+    left, top, right, bottom = bounds
+    spare_x, spare_y = width - smaller[0], height - smaller[1]
+    x = min(spare_x, max(0, clearance - left, min(spare_x // 2, width - right - clearance)))
+    y = min(spare_y, max(0, clearance - top, min(spare_y // 2, height - bottom - clearance)))
+    dx, dy = crop.width / smaller[0], crop.height / smaller[1]
+    source_space = (box[0], box[1], photo.width - box[2], photo.height - box[3])
+    left, top, right, bottom = (min(gap, int(space / pixel)) for gap, space, pixel in
+                               zip((x, y, spare_x - x, spare_y - y), source_space, (dx, dy, dx, dy)))
+    original_box = (box[0] - left * dx, box[1] - top * dy, box[2] + right * dx, box[3] + bottom * dy)
+    original_size = (smaller[0] + left + right, smaller[1] + top + bottom)
+    origin = (x - left, y - top)
+    known = photo.resize(original_size, Image.Resampling.LANCZOS, box=original_box)
+    filled, placed = extend_edges(known, size, 0.5, offset=origin)
+    if placed != (0, 0, *size) and check_margin is not None:
+        known_subject = Image.new("L", original_size)
+        known_subject.paste(subject, (left, top))
+        preview = filled
+        for side, remaining in zip(("left", "top", "right", "bottom"),
+                                   (placed[0], placed[1], width - placed[2], height - placed[3])):
+            if remaining:
+                reflected = reflect_margin(filled, known, known_subject, placed, side)
+                if reflected is not None:
+                    filled = reflected
+        if check_margin(filled, preview, placed, "clearance") is not None:
+            return original()
+    visible = Image.new("L", size)
+    visible.paste(subject, (x, y))
+    return filled, visible
+
+
+def frame_photo(photo, mask, size, expand=None, choose_position=None, check_margin=None, *, keep_clearance=False):
     width, height = photo.size
     target_width, target_height = size
     ratio = target_width / target_height
@@ -191,9 +255,9 @@ def frame_photo(photo, mask, size, expand=None, choose_position=None, check_marg
     x = min(left, width - crop_width, max(0, right - crop_width, (width - crop_width) // 2))
     y = min(top, height - crop_height, max(0, bottom - crop_height, (height - crop_height) // 2))
     bounds = (x, y, x + crop_width, y + crop_height)
-    photo, mask = photo.crop(bounds), mask.crop(bounds)
     if fits:
-        return photo.resize(size, Image.Resampling.LANCZOS), mask.resize(size, Image.Resampling.NEAREST)
+        return fit_crop(photo, mask, bounds, size, keep_clearance, check_margin)
+    photo, mask = photo.crop(bounds), mask.crop(bounds)
     contained = ImageOps.contain(photo, size, Image.Resampling.LANCZOS)
     product = mask.resize(contained.size, Image.Resampling.NEAREST)
 
@@ -204,8 +268,15 @@ def frame_photo(photo, mask, size, expand=None, choose_position=None, check_marg
 
     extra_width, extra_height = size[0] - contained.width, size[1] - contained.height
     positions = ("left", "center", "right") if extra_width > extra_height else ("top", "center", "bottom")
+    pl, pt, pr, pb = mask.getbbox()
+    touches_start = (extra_width > 0 and pl == 0) or (extra_height > 0 and pt == 0)
+    touches_end = (extra_width > 0 and pr == mask.width) or (extra_height > 0 and pb == mask.height)
+    if touches_start and touches_end:
+        raise FormatPhotoIssue("잘린 상품이 양쪽 사진 가장자리에 닿아 있어 이 규격에 맞는 구도로 다시 촬영해야 합니다")
     framing = "center"
-    if choose_position is not None and max(extra_width, extra_height) >= min(size) * 0.06:
+    if touches_start or touches_end:
+        frame, placed = extend_edges(contained, size, 0 if touches_start else 1)
+    elif choose_position is not None and max(extra_width, extra_height) >= min(size) * 0.06:
         choices = {name: extend_edges(contained, size, fraction)
                    for name, fraction in zip(positions, (0.15, 0.5, 0.85), strict=True)}
         framing = choose_position({name: item[0] for name, item in choices.items()},
@@ -226,11 +297,13 @@ def frame_photo(photo, mask, size, expand=None, choose_position=None, check_marg
             frame = filled
             break
         if attempt:
-            raise ValueError("게시 규격에서 사진의 새 가장자리를 확정하지 못했습니다")
+            raise FormatPhotoIssue("게시 규격에서 사진의 새 가장자리를 확정하지 못했습니다")
         reflected = reflect_margin(filled, contained, product, placed, side)
         if reflected is not None and check_margin(reflected, frame, placed, "reflected") is None:
             frame = reflected
             break
+        if touches_start or touches_end:
+            raise FormatPhotoIssue("상품이 사진 가장자리에 닿아 있어 여백의 이음새를 피할 수 없습니다")
         fraction = 0 if side in ("left", "top") else 1
         frame, placed = extend_edges(contained, size, fraction)
     return frame, place_mask(placed)
@@ -296,9 +369,14 @@ def selected_placement(answer, options, design):
 def check_type_margin(size, ink):
     width, height = size
     clearance = min(size) / 40
-    for left, top, right, bottom in ink.values():
-        if min(min(left, 100 - right) * width, min(top, 100 - bottom) * height) < 100 * clearance:
-            raise ValueError("실제 글자가 포스터 가장자리에 너무 가깝습니다. 안쪽 여백을 남겨 다시 배치하세요")
+    for role, (left, top, right, bottom) in ink.items():
+        edges = {"왼쪽": left * width, "위쪽": top * height,
+                 "오른쪽": (100 - right) * width, "아래쪽": (100 - bottom) * height}
+        side = min(edges, key=edges.get)
+        if edges[side] < 100 * clearance:
+            shift = ceil(clearance - edges[side] / 100)
+            raise ValueError(f"{role} 글자가 포스터 {side} 가장자리에 너무 가깝습니다. "
+                             f"글자 묶음을 안쪽으로 {shift}픽셀 이상 옮겨 주세요")
 
 
 def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
@@ -368,9 +446,12 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
             raise FormatPhotoIssue(f"게시 규격에서 사진의 새 가장자리를 확정하지 못했습니다. {observation}")
         if method == "initial":
             position_info.update(margin_side=side, margin_rejection=observation)
+        if method == "clearance":
+            position_info.update(margin_side=side, margin_rejection=observation, margin_method="original_crop")
         return side
 
-    framing, framing_mask = frame_photo(photo, mask, size, expand, choose_position, check_margin)
+    framing, framing_mask = frame_photo(photo, mask, size, expand, choose_position, check_margin,
+                                        keep_clearance=design["crop"] == "preserve")
     foreground = np.asarray(framing_mask) > 128
     tint = Image.blend(framing, Image.new("RGB", size, "#d84458"), 0.6)
     protected = Image.composite(tint, framing, framing_mask)
@@ -419,7 +500,7 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                                {"copy": copy, "focus": design["focus"], "product_bounds": bounds, "rendered_ink": ink,
                                 "outer_margins": outer_margins(bounds, ink.values()),
                                 **({"intent": intent} if intent else {})},
-                               [reference, to_float(phone)])
+                               [reference, to_float(phone), to_float(poster)])
             reading = required_text(review, "observation", "게시 규격 검토")
             if type(review.get("ready")) is not bool:
                 raise ValueError("게시 규격의 글자와 상품 배치 판정을 확인하지 못했습니다")

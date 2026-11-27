@@ -82,7 +82,7 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft, monkey
                     updated["boxes"]["price"] = [10, 47, 45, 10]
                 return json.dumps(updated)
             if step == "studio_format_reading":
-                assert len(images) == 2 and data["copy"]["price"] == "18,000원"
+                assert len(images) == 3 and data["copy"]["price"] == "18,000원"
                 if stages.count(step) == 1:
                     return '{"ready":false,"observation":"판매 정보가 떨어져 보입니다"}'
                 return '{"ready":true,"observation":"판매 정보가 제목과 연결됩니다"}'
@@ -585,6 +585,41 @@ def test_crops_around_subject_and_pads_when_crop_would_cut_it():
     assert expanded.crop(known).tobytes() == padded.crop(known).tobytes()
 
 
+def test_fit_preserves_clearance_for_a_complete_subject_but_allows_intentional_crops():
+    photo = Image.new("RGB", (160, 100), "blue")
+    mask = Image.new("L", photo.size)
+    mask.paste(255, (50, 22, 110, 98))
+    photo.paste("red", (50, 22, 110, 98))
+    normal, bounds = studio_formats.frame_photo(photo, mask, (100, 100), keep_clearance=True)
+    left, top, right, bottom = bounds.getbbox()
+    assert bottom == 94 and right - left >= 55 and bottom - top >= 70
+    assert normal.getpixel((50, 50)) == (255, 0, 0)
+    assert normal.getpixel((50, 98))[2] > 245
+    intentional, original_bounds = studio_formats.frame_photo(photo, mask, (100, 100))
+    assert original_bounds.getbbox() == (20, 22, 80, 98)
+
+    def reject(filled, preview, placed, method):
+        assert placed == (0, 1, 100, 96) and method == "clearance"
+        return "bottom"
+
+    fallback, bounds = studio_formats.frame_photo(photo, mask, (100, 100), check_margin=reject, keep_clearance=True)
+    assert fallback.tobytes() == intentional.tobytes() and bounds.tobytes() == original_bounds.tobytes()
+
+
+def test_format_does_not_extend_a_cut_subject_into_blank_space():
+    photo = Image.new("RGB", (100, 50), "blue")
+    mask = Image.new("L", photo.size)
+    mask.paste(255, (15, 0, 85, 50))
+    with pytest.raises(studio_formats.FormatPhotoIssue, match="양쪽 사진 가장자리"):
+        studio_formats.frame_photo(photo, mask, (100, 100))
+
+    mask.paste(0, (0, 40, 100, 50))
+    _, bounds = studio_formats.frame_photo(photo, mask, (100, 100),
+                                           choose_position=lambda *_: pytest.fail("상품과 맞닿은 쪽에 여백을 둘 수 없습니다"))
+    _, top, _, bottom = bounds.getbbox()
+    assert top == 0 and bottom < 100
+
+
 def test_format_delegates_new_breaks_to_copy_review():
     styles = {"headline": {"max_lines": 2, "break_after": 1}, "product_name": {"max_lines": 2}}
     layers = [{"role": "headline", "text": "따뜻한 빛으로 저녁을 감싸요"},
@@ -603,7 +638,7 @@ def test_format_delegates_new_breaks_to_copy_review():
 
 def test_format_margin_checks_rendered_ink_in_proportion_to_the_short_side():
     studio_formats.check_type_margin((1080, 1920), {"headline": [3, 2, 50, 17]})
-    with pytest.raises(ValueError, match="가장자리에 너무 가깝습니다"):
+    with pytest.raises(ValueError, match="headline 글자가 포스터 위쪽 가장자리에.*11픽셀"):
         studio_formats.check_type_margin((864, 1080), {"headline": [10, 1, 50, 17]})
 
 
