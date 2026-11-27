@@ -54,13 +54,14 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft):
             data = json.loads(request.split("Input JSON follows:\n", 1)[1])
             if step == "studio_look":
                 if data["version_order"] == ["v01"]:
-                    assert images[2].shape == (768, 768, 3)
-                    assert images[2][400, 400].tolist() == [0, 0, 1]
+                    assert images[2].shape == (360, 360, 3)
+                    assert images[2][180, 180].tolist() == [0, 0, 1]
                     return '{"version":"v01","finding":"typography","observation":"제목이 어색합니다"}'
                 assert data["version_order"] == ["v01", "v02"]
                 assert images[1][10, 10].tolist() == [1, 1, 1]
                 assert images[2][10, 10].tolist() == [0, 0, 1]
-                assert images[3][400, 150].tolist() == images[3][400, 540].tolist() == [0, 0, 1]
+                assert images[3].shape == (360, 732, 3)
+                assert images[3][180, 180].tolist() == images[3][180, 552].tolist() == [0, 0, 1]
                 return '{"version":"v02","finding":"ready","observation":"제목을 다시 배치했습니다"}'
             if step == "studio_campaign_check":
                 assert len(images) == 4
@@ -173,7 +174,7 @@ def test_campaign_comparison_can_block_selection(tmp_path, draft, finding, obser
                 has_study = finding == "scene"
                 assert len(images) == 4 + has_study + has_reference and images[1][10, 10].tolist() == [1, 1, 1]
                 assert images[2][10, 10].tolist() == [0, 0, 1]
-                assert images[3].shape == (768, 768, 3)
+                assert images[3].shape == (360, 360, 3)
                 if has_study:
                     assert images[4][0, 0, 1] > 0 and images[4][0, 0, 0] == 0
                 if has_reference:

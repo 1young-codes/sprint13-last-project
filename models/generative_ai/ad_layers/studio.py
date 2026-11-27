@@ -28,7 +28,8 @@ JSON keys: route, instruction (specific creative suggestion), reason (Korean).""
 
 LOOK = """Look at the real poster images. The first image shows the source product. Then see the posters in
 version_order, followed by those same posters at phone-feed size from left to right. Any images after the
-phone preview are design references. Pick the better actual poster when there are two, and name the single most consequential visible
+phone preview are design references. In a paired phone preview, the narrow gap separates the two posters.
+Pick the better actual poster when there are two, and name the single most consequential visible
 problem of the chosen version. First check the actual product, count, shape, and whether displayed use is
 physically believable, including how the parts are held or supported. required_copy contains the exact strings
 used by the text renderer. Use it when similar Hangul glyphs are ambiguous in the preview. Judge visible cropping,
@@ -72,7 +73,7 @@ give the advertised feature new prominence relative to the rest of the product, 
 For other treatments, name the specific changed area, interaction, or contour and how it shows the message.
 For photo_type, require a visible interaction with a particular contour, action or material, beyond standard alignment.
 Allow quiet minimalism when the specific treatment adds a visual point that disappears in the substitution.
-In the phone preview, trace the actual reading path from the headline and its photographic subject to the product
+The phone preview contains only the poster at a smaller size. Trace the actual reading path from the headline and its photographic subject to the product
 name and price. Identify how the text groups relate by their visible edges, alignment, spacing or a shared
 element in the photograph. Use rendered_text_bounds (left, top, right, bottom percentages) to distinguish where
 the ink really is from where its invisible box ends. An intentional offset can lead the eye. Flag an arbitrary
@@ -127,14 +128,16 @@ def read_image(path):
 
 
 def phone_preview(posters):
-    sheet = Image.new("RGB", (768, 768), "#222222")
     tiles = [ImageOps.contain(poster, (360, 704), Image.Resampling.LANCZOS) for poster in posters]
     if len(tiles) == 1:
-        tile = tiles[0]
-        sheet.paste(tile, ((sheet.width - tile.width) // 2, (sheet.height - tile.height) // 2))
-    else:
-        for index, tile in enumerate(tiles):
-            sheet.paste(tile, (12 + index * 384 + (360 - tile.width) // 2, (sheet.height - tile.height) // 2))
+        return tiles[0]
+    gap = 12
+    sheet = Image.new("RGB", (sum(tile.width for tile in tiles) + gap * (len(tiles) - 1),
+                               max(tile.height for tile in tiles)), "#222222")
+    left = 0
+    for tile in tiles:
+        sheet.paste(tile, (left, (sheet.height - tile.height) // 2))
+        left += tile.width + gap
     return sheet
 
 
