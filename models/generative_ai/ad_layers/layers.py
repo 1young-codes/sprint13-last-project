@@ -31,15 +31,21 @@ def to_float(image: Image.Image) -> np.ndarray:
     return np.asarray(image.convert("RGB"), np.float32) / 255
 
 
-def place_product(photo: Image.Image, mask: np.ndarray, size: tuple[int, int], rule: dict) -> tuple[Image.Image, int, int]:
-    """사진에서 제품만 투명 PNG로 잘라 크기를 맞추고, 캔버스에 놓을 왼쪽 위 좌표를 정합니다."""
+def cutout_product(photo: Image.Image, mask: np.ndarray, threshold: float) -> Image.Image:
+    """제품 주변의 배경을 제거한 사진을 만듭니다."""
     alpha = Image.fromarray((mask.clip(0, 1) * 255).astype(np.uint8))
-    box = (mask > rule["mask_threshold"]).nonzero()
+    box = (mask > threshold).nonzero()
     if not len(box[0]):
         raise ValueError("사진에서 제품을 찾지 못했습니다")
     crop = (box[1].min(), box[0].min(), box[1].max() + 1, box[0].max() + 1)
     product = photo.convert("RGB").crop(crop)
     product.putalpha(alpha.crop(crop))
+    return product
+
+
+def place_product(photo: Image.Image, mask: np.ndarray, size: tuple[int, int], rule: dict) -> tuple[Image.Image, int, int]:
+    """사진에서 제품만 투명 PNG로 잘라 크기를 맞추고, 캔버스에 놓을 왼쪽 위 좌표를 정합니다."""
+    product = cutout_product(photo, mask, rule["mask_threshold"])
     width, height = size
     scale = min(rule["max_share"] * width / product.width, rule["max_share"] * height / product.height)
     product = product.resize((max(1, round(product.width * scale)), max(1, round(product.height * scale))),
@@ -94,6 +100,9 @@ def compose(layout: dict, folder: Path) -> Image.Image:
     artwork = layout.get("artwork")
     if artwork:
         paste_clipped(canvas, Image.open(folder / artwork["file"]).convert("RGBA"), artwork["x"], artwork["y"])
+    graphic = layout.get("graphic")
+    if graphic:
+        paste_clipped(canvas, Image.open(folder / graphic["file"]).convert("RGBA"), graphic["x"], graphic["y"])
     product = layout.get("product")
     if product:
         shadow = layout.get("shadow")

@@ -59,7 +59,7 @@ python -m models.generative_ai.ad_layers.make_ad --recompose outputs/ad_layers/�
 
 ## 포스터 구도를 먼저 정하기
 
-`scene_ad`는 상품 사진과 참고 포스터를 보고 강조점, 사진 영역, 문구별 배치를 정합니다. 필요하면 색면을 사용합니다. 참고 포스터를 제공하면 합친 시안을 먼저 검토합니다. Qwen이 사진 영역을 생성하면 완성 사진 위에서 글자 배치를 다시 검토합니다. 원래 배치와 수정 배치를 비교하고, 글자가 실제 제품을 가리지 않는 수정안을 채택합니다.
+`scene_ad`는 상품 사진과 참고 포스터를 보고 강조점, 사진 영역, 문구별 배치를 정합니다. 그 구도를 바탕으로 피사체의 위치, 조명, 글자용 여백을 촬영 지시로 작성합니다. 원래 배경을 제거한 상품을 계획한 위치와 크기에 놓아 Qwen의 참고 사진으로 전달합니다. Qwen이 새 장면을 만들면 글자나 색면이 실제 피사체를 가릴 때만 배치를 조정합니다. 조정이 적용되면 처음 배치한 포스터를 `before-typesetting.png`로 함께 저장합니다. 두 포스터를 원래 크기로 열어 상품의 형태와 문구가 한 화면에서 자연스럽게 읽히는지 비교할 수 있습니다.
 
 ```bash
 # 원본 사진을 넣은 구도 시안. OpenAI 호출과 글자 렌더링을 사용합니다.
@@ -69,7 +69,7 @@ python -m models.generative_ai.ad_layers.scene_ad photos/items.json photos outpu
 python -m models.generative_ai.ad_layers.make_ad --recompose outputs/scene_ads/01_사진
 ```
 
-입력 목록은 아래 모델 비교의 상품 목록 형식과 같습니다. 결과에는 색면이 있는 `background.png`, 정해진 영역에 놓이는 `scene.png`, 제목·상품명·가격 레이어, `layout.json`, 합친 `ad.png`가 저장됩니다. `layout.json`에서 문구와 위치를 수정한 뒤 글자 레이어를 다시 그릴 수 있습니다. 제품을 장면에서 분리해 이동할 때는 위의 `make_ad` 실행 경로를 사용합니다.
+입력 목록은 아래 모델 비교의 상품 목록 형식과 같습니다. 결과에는 `background.png`, 정해진 영역에 놓이는 `scene.png`, 제목·상품명·가격 레이어, `layout.json`, 합친 `ad.png`가 저장됩니다. 사진 위에 색면을 사용하면 `graphic.png`에 별도 레이어로 저장합니다. `layout.json`에서 문구와 위치를 수정한 뒤 글자 레이어를 다시 그릴 수 있습니다. 텍스트 레이어의 `break_after`에는 문구를 두 줄로 나눌 때 첫 줄에 들어가는 단어 수가 저장됩니다. 제품을 장면에서 분리해 이동할 때는 위의 `make_ad` 실행 경로를 사용합니다.
 
 ### 로컬에서 구도 반복 검토하기
 
@@ -81,7 +81,11 @@ python -m models.generative_ai.fast_image_generation.model_files
 python -m models.generative_ai.photo_retouch.download_models product_mask
 python -m models.generative_ai.ad_layers.scene_ad photos/items.json photos outputs/local_ads \
     --designs outputs/poster_previews --low-vram
+python -m models.generative_ai.ad_layers.scene_ad photos/items.json photos outputs/revised_ads \
+    --revise outputs/local_ads --references 참고.png --low-vram
 ```
+
+`--revise`는 기존 완성본과 원본 상품 사진을 보고 다음 연출에서 바꿀 점을 정합니다. 다음 기획은 상품 메시지와 사용자가 요청한 배경을 바탕으로 새 구도를 정합니다. 그 구도에서 제품의 위치와 글자에 필요한 여백을 촬영 지시로 만들어 Qwen에 전달합니다. `--rejected`에 보류한 후보를 전달하면 그 이미지도 다음 기획에서 참고합니다. 직접 보고 기록한 개선점이 있으면 각 후보의 `layout.json`에서 `revision.visual_review`에 적을 수 있습니다. 새 결과는 별도 폴더에 저장되므로 후보를 원래 크기에서 비교해 다음 개선에 사용할 완성본을 고를 수 있습니다.
 
 도커로 실행할 때는 `docker build --target ad-layers -t sprint13-ad-layers .`로 브라우저까지 설치한 이미지를 만듭니다. 컨테이너에 `--gpus all`을 주고, SSD의 캐시를 `/data/models/hf_cache`에 연결해 같은 가중치를 사용합니다.
 

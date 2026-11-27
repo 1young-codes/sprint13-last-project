@@ -5,31 +5,39 @@ from PIL import Image
 import pytest
 
 from models.generative_ai.ad_layers import scene_ad
+from models.generative_ai.ad_layers.text_render import page_html
 from models.generative_ai.photo_retouch import product_mask
 
 
-@pytest.mark.parametrize("winner", [1, 2])
-def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkeypatch, winner):
+def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkeypatch):
     calls = []
     photo = Image.new("RGB", (70, 60), "orange")
     reference = Image.new("RGB", (70, 60), "white")
     fields = {"product_name": "수분 세럼", "price_krw": 32000}
 
     def mask(model, pixels):
-        assert model == "mask" and pixels[0, 0, 2] == 1
+        assert model == "mask"
         foreground = np.zeros(pixels.shape[:2], np.float32)
-        foreground[20:75, 15:47] = 1
+        if pixels.shape[:2] == (60, 70):
+            foreground[18:46, 20:50] = 1
+        else:
+            assert pixels[0, 0, 2] == 1
+            foreground[20:75, 15:47] = 1
         return foreground
 
     class Model:
         def use_lora(self, weights, strength):
             assert weights is None and strength == 0
 
-        def edit_with_reference(self, original, canvas, prompt, seed, steps):
-            assert original is photo and canvas.size == (512, 1024)
-            assert "Amber reflections" in prompt and "부드러운 아침" not in prompt
+        def edit(self, reference, prompt, seed, steps, *, size):
+            assert reference.size == size == (512, 1024)
+            assert reference.getpixel((0, 0)) == (128, 128, 128)
+            assert reference.getpixel((243, 460)) == photo.getpixel((30, 28))
+            is_revision = "ad_cycle_critique" in calls
+            assert ("Narrow studio beam" if is_revision else "Amber reflections") in prompt
+            assert "부드러운 아침" not in prompt
             calls.append("qwen")
-            return Image.new("RGB", canvas.size, "blue")
+            return Image.new("RGB", size, (160, 40, 255) if is_revision else (0, 0, 255))
 
     class Interpreter:
         def ask(self, step, images, prompt, *, model):
@@ -41,45 +49,59 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 return '{"scene":"Soft window light"}'
             if step == "ad_headline":
                 return '{"headline":"부드러운 아침"}'
-            if step == "ad_layout_review":
-                assert len(images) == 2 and images[0].shape == (1024, 1024, 3)
-                return '{"reason":"Type and photo are aligned", "revision":null}'
+            if step == "ad_cycle_critique":
+                assert len(images) == 4 and images[0][20, 15, 2] == 1
+                assert "병의 하단이 잘렸습니다" in prompt
+                return '{"weakness":"평평한 조명", "hypothesis":"A narrow beam through the glass"}'
+            if step == "ad_scene_direction":
+                data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
+                assert data["design"]["artwork_box"] == [0, 0, 50, 100]
+                assert len(images) == 1 and "previous_art_direction" not in data
+                if "hypothesis" in data:
+                    assert data["hypothesis"] == "A narrow beam through the glass" and data["idea"] == "가벼운 아침 연출"
+                    return '{"scene":"Narrow studio beam"}'
+                return '{"scene":"Amber reflections"}'
             if step == "ad_final_layout":
                 assert len(images) == 3 and images[1][0, 0, 2] == 1
-                return '{"reason":"The color accent competes with the subject", "revision":{"accent":null}}'
-            if step == "ad_final_compare":
-                assert len(images) == 3
-                return json.dumps({"winner": winner, "reason": "Clearer product focus"})
+                assert "product_name 글자 레이어가 실제 제품을 가립니다" in prompt
+                boxes = {"headline": [55, 10, 40, 30], "product_name": [55, 45, 40, 15], "price": [55, 65, 40, 15]}
+                return json.dumps({"reason": "상품명을 제품 옆으로 이동", "revision": {"boxes": boxes, "accent": None}})
             assert step == "ad_layout" and images[0][0, 0, 2] == 0 and len(images) == 2
             data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
             assert data["copy"] == {"headline": "부드러운 아침", "product_name": "수분 세럼", "price": "32,000원"}
-            boxes = {"headline": [55, 10, 40, 30], "product_name": [55, 45, 40, 15], "price": [55, 65, 40, 15]}
+            if "revision_feedback" in data:
+                assert "scene" not in data["brief"] and data["idea"] == "가벼운 아침 연출"
+            boxes = {"headline": [55, 10, 40, 30], "product_name": [2, 2, 40, 15], "price": [55, 65, 40, 15]}
             if "layout_error" not in data:
-                boxes["headline"] = [55, 15, 40, 40]
+                boxes["headline"] = [55, 30, 40, 40]
             else:
                 assert "겹쳤습니다" in data["layout_error"]
             style = {"font": "noto_sans_kr", "align": "left", "color": "#ffffff", "size": 5, "max_lines": 1}
             return json.dumps({"concept": "Light joins image and type", "focus": "headline", "background": "#251d16",
                                "accent": {"shape": "ellipse", "box": [35, 10, 55, 55], "color": "#9e6c4b"},
-                               "artwork_box": [0, 0, 50, 100], "crop": "preserve", "edge": "framed",
+                               "artwork_box": [0, 0, 50, 100], "subject_box": [10, 20, 75, 50],
+                               "crop": "preserve", "edge": "framed",
                                "art_direction": "Amber reflections",
                                "boxes": boxes, "styles": {role: style for role in boxes}})
 
     def render(texts, size, folder):
         calls.append("render")
-        assert size == (1024, 1024) and [text["x"] for text in texts] == [563, 563, 563]
+        assert size == (1024, 1024)
         for text in texts:
-            Image.new("RGBA", (text["w"], text["h"]), "white").save(folder / text["file"])
+            ink = Image.new("RGBA", (text["w"], text["h"]))
+            ink.paste("white", (0, 0, 8, 8))
+            ink.save(folder / text["file"])
 
     monkeypatch.setattr(product_mask, "product_mask", mask)
     monkeypatch.setattr(scene_ad, "render_texts", render)
     folder = tmp_path / "result"
     models = {"ai": Interpreter(), "generation": Model(), "mask": "mask"}
     layout = scene_ad.make_scene_ad(photo, fields, "", models, folder, references=[reference])
-    assert calls == ["ad_plan", "ad_direction", "ad_headline", "ad_layout", "ad_layout", "render", "ad_layout_review",
-                     "qwen", "ad_final_layout", "render", "ad_final_compare"]
-    assert (layout["design"]["accent"] is None) == (winner == 2)
-    assert layout["final_review_reason"] == ("Clearer product focus" if winner == 2 else None)
+    assert calls == ["ad_plan", "ad_direction", "ad_headline", "ad_layout", "ad_layout", "render",
+                     "ad_scene_direction", "qwen", "ad_final_layout", "render"]
+    assert layout["design"]["accent"] is None
+    assert layout["final_review_reason"] == "상품명을 제품 옆으로 이동"
+    assert (folder / "before-typesetting.png").is_file()
     assert {layer["text"] for layer in layout["texts"]} == {"부드러운 아침", "수분 세럼", "32,000원"}
     assert json.loads((folder / "layout.json").read_text(encoding="utf-8")) == layout
     with Image.open(folder / "ad.png") as ad:
@@ -90,6 +112,24 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                                    preview=True, proposal=layout)
     assert calls == ["render"]
     assert saved["design"] == layout["design"] and saved["texts"] == layout["texts"]
+    calls.clear()
+    accepted = scene_ad.make_scene_ad(photo, fields, "", models, tmp_path / "accepted",
+                                      references=[reference], proposal=layout)
+    assert calls == ["render", "qwen"]
+    assert accepted["design"] == layout["design"] and accepted["final_review_reason"] is None
+    calls.clear()
+    rejected = tmp_path / "rejected"
+    rejected.mkdir()
+    (rejected / "ad.png").write_bytes((folder / "ad.png").read_bytes())
+    rejected_layout = layout | {"revision": {"visual_review": "병의 하단이 잘렸습니다"}}
+    (rejected / "layout.json").write_text(json.dumps(rejected_layout), encoding="utf-8")
+    revision = scene_ad.make_scene_ad(photo, fields, "가벼운 아침 연출", models, tmp_path / "revision", references=[reference],
+                                      previous=folder, rejected=rejected)
+    assert calls == ["ad_cycle_critique", "ad_layout", "ad_layout", "render", "ad_scene_direction",
+                     "qwen", "ad_final_layout", "render"]
+    assert revision["revision"]["weakness"] == "평평한 조명"
+    assert revision["design"]["art_direction"] == "Narrow studio beam"
+    assert revision["brief"]["headline"] == layout["brief"]["headline"]
 
 
 def test_type_can_extend_over_photo_but_not_over_product(tmp_path):
@@ -106,6 +146,57 @@ def test_type_can_extend_over_photo_but_not_over_product(tmp_path):
     ink.save(tmp_path / "text.png")
     with pytest.raises(ValueError, match="실제 제품을 가립니다"):
         scene_ad.check_text_overlap(foreground, layout, tmp_path)
+
+
+def test_foreground_can_include_a_hand_touching_the_frame(monkeypatch):
+    mask = np.zeros((30, 30), dtype=np.float32)
+    mask[0:8, 21:30] = 1  # 제품을 보여 주는 손
+    mask[12:25, 14:20] = 1  # 화면 안쪽에 있는 제품
+    monkeypatch.setattr(product_mask, "product_mask", lambda *_: mask)
+    assert np.array_equal(scene_ad.find_foreground(Image.new("RGB", (30, 30)), None, 0.5), mask > 0.5)
+
+
+def test_graphic_goes_between_full_bleed_photo_and_type(tmp_path, monkeypatch):
+    def render(texts, size, folder):
+        for text in texts:
+            Image.new("RGBA", (text["w"], text["h"]), "white").save(folder / text["file"])
+
+    monkeypatch.setattr(scene_ad, "render_texts", render)
+    boxes = {"headline": [20, 20, 10, 10], "product_name": [50, 40, 10, 10], "price": [50, 60, 10, 10]}
+    style = {"font": "noto_sans_kr", "align": "left", "color": "#ffffff", "size": 5, "max_lines": 1}
+    answer = {"concept": "Extend a color from the photo", "art_direction": "Warm window light",
+              "focus": "product", "crop": "preserve", "edge": "framed", "background": "#ffffff",
+              "artwork_box": [0, 0, 100, 100], "accent": {"shape": "rectangle", "layer": "overlay",
+              "box": [10, 10, 25, 25], "color": "#ff0000"}, "boxes": boxes,
+              "styles": dict.fromkeys(boxes, style)}
+    layout = scene_ad.design_layers(answer, dict.fromkeys(boxes, "광고"), (100, 100), ["noto_sans_kr"], tmp_path)
+    Image.new("RGB", (100, 100), "blue").save(tmp_path / "scene.png")
+    poster = scene_ad.compose(layout, tmp_path)
+    assert poster.getpixel((5, 5)) == (0, 0, 255)
+    assert poster.getpixel((15, 15)) == (255, 0, 0)
+    assert poster.getpixel((25, 25)) == (255, 255, 255)
+    foreground = np.zeros((100, 100), dtype=bool)
+    scene_ad.check_text_overlap(foreground, layout, tmp_path)
+    foreground[15, 15] = True
+    with pytest.raises(ValueError, match="색면 레이어가 실제 제품을 가립니다"):
+        scene_ad.check_text_overlap(foreground, layout, tmp_path)
+
+
+def test_designed_line_break_reaches_html_renderer():
+    boxes = {"headline": [0, 0, 50, 40], "product_name": [0, 50, 50, 15], "price": [0, 70, 50, 15]}
+    style = {"font": "noto_sans_kr", "align": "left", "color": "#ffffff", "size": 5, "max_lines": 2,
+             "break_after": 3}
+    copy = {"headline": "패티 두 장이면 든든 <맛>", "product_name": "햄버거", "price": "3,000원"}
+    support = {key: value for key, value in style.items() if key != "break_after"} | {"max_lines": 1}
+    styles = {"headline": style, "product_name": support, "price": support}
+    layer = scene_ad.layout_texts({"boxes": boxes, "styles": styles}, copy, (1024, 1024), ["noto_sans_kr"])
+    assert layer[0]["text"] == copy["headline"]
+    assert "패티 두 장이면<br>든든 &lt;맛&gt;" in page_html(layer, (1024, 1024))
+    layer[0]["text"] = "새 제목"
+    assert "<span>새 제목</span>" in page_html(layer, (1024, 1024))
+    style["break_after"] = 5
+    with pytest.raises(ValueError, match="줄바꿈 위치"):
+        scene_ad.layout_texts({"boxes": boxes, "styles": styles}, copy, (1024, 1024), ["noto_sans_kr"])
 
 
 def test_blended_photo_edges_keep_product_pixels_opaque():
