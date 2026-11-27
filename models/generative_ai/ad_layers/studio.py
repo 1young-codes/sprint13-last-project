@@ -64,7 +64,8 @@ Use ready when the poster could serve this campaign as seen."""
 
 CAMPAIGN_CHECK = """Recheck the candidate against the actual source product and any design references.
 Image order: source product, finished candidate, candidate photograph without type, candidate at phone-feed size,
-then the pre-shoot composition if has_source_study is true, then reference posters. The source study shows
+then the enlarged offer panel if offer_panel is supplied, then the pre-shoot composition if has_source_study
+is true, then reference posters. The source study shows
 the planned subject placement on a flat background with draft lettering. If staging_intent exists, the study
 uses actual source components in a new arrangement. Check that the moved component appears only once at its
 new location, with plausible contact and shadow. Report product_mismatch if the count changed, or catalog if
@@ -94,6 +95,12 @@ in the photo and how the lettering draws attention to it through position, empha
 connection from the plan can work, including quiet negative space that draws attention to the detail. Shared
 color or a shared margin alone cannot establish the relationship when the letters and the feature are far apart.
 Name what actually connects them or what prevents the connection in layout.observation.
+When offer_panel is supplied, inspect the enlarged region from the product through the photo edge to the name
+and price. Return layout.offer_connection as connected or detached. An unused flat field or transition can
+interrupt that path even when the price and name are aligned and legible. Matching colors or a shared margin
+across an empty strip do not connect them. Accept a separate panel when it is compact or a visible
+compositional device gives the separation a purpose. Describe the connection or break in layout.observation.
+Check this independently of layout.ready.
 Name the first focal point in the preview. If a high-contrast graphic housing secondary information steals the
 first glance from the advertised feature, flag the hierarchy. An offer can lead when the campaign is about it.
 Check any concrete requested edit in idea against the actual candidate, including the space outside photo_box.
@@ -132,7 +139,8 @@ When the photo works but a hard edge or empty strip separates it from the headli
 Also use edit_composition when the headline and offer need to move together to repair their relationship to
 the photo, or when a colored panel competes with the subject. Use edit_text for local fixes to individual blocks.
 Use reframe_photo when the existing photograph would work larger and a flat region outside its frame is the
-visible defect. Choose it over moving type alone when the photo itself is too small within the poster.
+visible defect. Choose it over moving type alone when an outside panel disconnects the offer and needs to
+shrink, or when the photo itself is too small within the poster.
 Check design.boxes for placement limits:
 the visible ink can occupy only part of a box, and text boxes cannot overlap.
 Use the rendered text and foreground bounds to judge the visible gap after moving the headline. Both use left,
@@ -147,6 +155,31 @@ REVIEW_RULES = sha256((LOOK + CAMPAIGN_CHECK + STAGED_IDENTITY + json.dumps(TREA
 def read_image(path):
     with Image.open(path) as image:
         return ImageOps.exif_transpose(image).convert("RGB")
+
+
+def offer_panel_detail(poster, artwork, ink):
+    if not {"product_name", "price"} <= ink.keys():
+        return None
+    left, top = artwork["x"], artwork["y"]
+    right, bottom = left + artwork["w"], top + artwork["h"]
+    width, height = poster.size
+    context = min(poster.size) // 3
+    minimum_panel = min(poster.size) / 8
+    offer = [ink[role] for role in ("product_name", "price")]
+    regions = (
+        ("left", left, all(box[2] * width <= left * 100 for box in offer),
+         (0, 0, min(width, left + context), height)),
+        ("top", top, all(box[3] * height <= top * 100 for box in offer),
+         (0, 0, width, min(height, top + context))),
+        ("right", width - right, all(box[0] * width >= right * 100 for box in offer),
+         (max(0, right - context), 0, width, height)),
+        ("bottom", height - bottom, all(box[1] * height >= bottom * 100 for box in offer),
+         (0, max(0, bottom - context), width, height)),
+    )
+    for side, depth, contains_offer, crop in regions:
+        if depth >= minimum_panel and contains_offer:
+            return side, poster.crop(crop)
+    return None
 
 
 def phone_preview(posters):
@@ -211,6 +244,8 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         selected = versions / name
         candidate = load_layout(selected)
         scene = read_image(selected / candidate["artwork"]["file"])
+        ink = rendered_text_bounds(candidate, selected)
+        panel = offer_panel_detail(poster, candidate["artwork"], ink)
         pre_shoot = selected / "composition.png"
         study = [to_float(read_image(pre_shoot))] if pre_shoot.is_file() else []
         revision = candidate.get("revision", {})
@@ -221,12 +256,14 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
             if not match:
                 return "product", observation
         check = ask_stage(ai, "studio_campaign_check", CAMPAIGN_CHECK, {
-            "required_copy": required_copy, "rendered_text_bounds": rendered_text_bounds(candidate, selected),
+            "required_copy": required_copy, "rendered_text_bounds": ink,
             "idea": idea, "photo_box": candidate["design"].get("artwork_box"),
             "has_source_study": bool(study), "treatments": TREATMENTS,
             "planned_effect": revision.get("visible_result"), "staging_intent": revision.get("staging_intent"),
             "planned_layout": planned_layout,
-        }, [to_float(photo), to_float(poster), to_float(scene), to_float(phone_preview([poster])), *study, *sources])
+            **({"offer_panel": panel[0]} if panel else {}),
+        }, [to_float(photo), to_float(poster), to_float(scene), to_float(phone_preview([poster])),
+            *([to_float(panel[1])] if panel else []), *study, *sources])
         scene_review, layout_review = check.get("scene"), check.get("layout")
         treatment = scene_review.get("treatment") if isinstance(scene_review, dict) else None
         if (not isinstance(treatment, str) or treatment not in TREATMENTS
@@ -235,17 +272,21 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         connection = layout_review.get("connection")
         if planned_layout and connection not in ("visible", "missing"):
             raise ValueError("사진과 문구의 관계를 확인하지 못했습니다")
+        offer_connection = layout_review.get("offer_connection") if panel else None
+        if panel and offer_connection not in ("connected", "detached"):
+            raise ValueError("사진과 사진 밖의 판매 정보가 이어지는지 확인하지 못했습니다")
         photo_evidence = required_text(scene_review, "observation", "참고 포스터 비교")
         layout_evidence = required_text(layout_review, "observation", "참고 포스터 비교")
         finding = {"product_mismatch": "product", "catalog": "scene"}.get(treatment)
         if finding is None:
-            connected = not planned_layout or connection == "visible"
+            connected = (not planned_layout or connection == "visible") and offer_connection != "detached"
             finding = "ready" if layout_review["ready"] and connected else "layout"
         observation = {"product": photo_evidence, "scene": photo_evidence, "layout": layout_evidence,
                        "ready": f"{photo_evidence} {layout_evidence}"}[finding]
         record("campaign_check", version=name, finding=finding, observation=observation, treatment=treatment,
                scene_observation=photo_evidence, layout_observation=layout_evidence,
                reference_observation=required_text(check, "reference_observation", "참고 포스터 비교") if sources else None,
+               **({"offer_connection": offer_connection} if panel else {}),
                **({"layout_connection": connection} if planned_layout else {}))
         return finding, observation
 

@@ -353,7 +353,10 @@ def test_composition_edit_softens_the_edge_without_repainting(tmp_path, draft):
                     return '{"version":"v01","finding":"layout","observation":"사진 경계가 글자와 제품을 갈라놓습니다"}'
                 return '{"version":"v02","finding":"ready","observation":"제품과 제목이 이어집니다"}'
             if step == "studio_campaign_check":
-                return CAMPAIGN_READY
+                assert data["offer_panel"] == "left"
+                approved = json.loads(CAMPAIGN_READY)
+                approved["layout"]["offer_connection"] = "connected"
+                return json.dumps(approved)
             if step == "ad_final_composition_compare":
                 assert data["original_ink"]["headline"][0] == 10 and data["revision_ink"]["headline"][0] == 27
                 assert data["original_outer_space"] == data["revision_outer_space"] == {
@@ -433,6 +436,42 @@ def test_studio_can_reframe_an_inset_photo_without_loading_a_generator(tmp_path,
                                draft=folder, edit_limit=2)
     assert result["version"] == "v02"
     assert load_layout(result["image"].parent)["texts"] == layout["texts"]
+
+
+@pytest.mark.parametrize("offer_connection", ["connected", "detached"])
+def test_campaign_checks_large_offer_panel_before_selection(tmp_path, draft, offer_connection):
+    folder, fields = draft
+    layout = load_layout(folder)
+    layout["artwork"]["h"] = 60
+    layout["design"]["artwork_box"] = [0, 0, 100, 60]
+    for text in layout["texts"]:
+        if text["role"] in ("product_name", "price"):
+            text["y"] += 35
+            layout["design"]["boxes"][text["role"]][1] = text["y"]
+    Image.new("RGB", (100, 60), "blue").save(folder / "scene.png")
+    compose(layout, folder).save(folder / "ad.png")
+    save_layout(layout, folder)
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            data = json.loads(request.split("Input JSON follows:\n", 1)[1])
+            if step == "studio_look":
+                return '{"version":"v01","finding":"ready","observation":"문구를 읽을 수 있습니다"}'
+            if step == "studio_campaign_check":
+                assert data["offer_panel"] == "bottom"
+                assert images[4].shape == (73, 100, 3)
+                assert images[4][0, 0].tolist() == [0, 0, 1]
+                return json.dumps({"scene": {"treatment": "lighting", "observation": "조명이 보입니다"},
+                                   "layout": {"ready": True, "offer_connection": offer_connection,
+                                              "observation": "상품 정보와 사진의 관계를 확인했습니다"}})
+            assert step == "studio_action"
+            action = "select" if offer_connection == "connected" else "hold"
+            assert ("select" in data["actions"]) == (action == "select")
+            return json.dumps({"action": action, "arguments": {}, "reason": "판매 정보 배치를 확인했습니다"})
+
+    output = tmp_path / "panel-review"
+    result = studio.run_studio(Image.new("RGB", (100, 100)), fields, "", output, Agent(), draft=folder, edit_limit=0)
+    assert result["status"] == ("complete" if offer_connection == "connected" else "needs_review")
 
 
 @pytest.mark.parametrize(("finding", "observation", "has_reference", "planned_layout"), [
@@ -643,6 +682,20 @@ def test_cue_crop_compares_positions_but_keeps_the_visible_cue_protected():
     assert visible.getbbox() == (55, 25, 90, 85)
 
 
+def test_wide_context_is_kept_when_the_complete_product_must_remain_visible():
+    photo = Image.new("RGB", (160, 100), "blue")
+    photo.paste("red", (40, 32, 76, 79))
+    photo.paste("yellow", (144, 21, 158, 48))
+    mask = Image.new("L", photo.size)
+    mask.paste(255, (40, 32, 76, 79))
+    old, _ = studio_formats.frame_photo(photo, mask, (100, 100), keep_clearance=True)
+    protected, visible = studio_formats.frame_photo(photo, mask, (100, 100), keep_clearance=True,
+                                                     protected_box=(40, 21, 158, 79))
+    assert (255, 255, 0) not in old.get_flattened_data()
+    assert (255, 255, 0) in protected.get_flattened_data()
+    assert visible.getbbox() and (255, 0, 0) in protected.get_flattened_data()
+
+
 def test_fit_preserves_clearance_for_a_complete_subject_but_allows_intentional_crops():
     photo = Image.new("RGB", (160, 100), "blue")
     mask = Image.new("L", photo.size)
@@ -727,6 +780,38 @@ def test_small_format_margin_repair_moves_the_entire_copy_without_changing_type(
     assert moved["boxes"]["price"] == [10, 24, 80, 4]
     assert moved["styles"]["headline"]["lines"][1] == {"box": [10, 10, 80, 7], "size": 6}
     assert moved["styles"]["price"] == design["styles"]["price"]
+
+
+@pytest.mark.parametrize("price_background, expected_price", [("#F8DEAE", "#4C2D1E"), ("#3C2010", "#F3E7D6")])
+def test_offer_contrast_uses_actual_ink_on_the_new_photo(draft, price_background, expected_price):
+    folder, _ = draft
+    layout = load_layout(folder)
+    design = layout["design"]
+    design["styles"]["headline"]["color"] = "#F3E7D6"
+    backdrop = Image.new("RGB", (100, 100), "#3C2010")
+    backdrop.paste(price_background, (0, 45, 100, 100))
+    layers = {layer["role"]: layer for layer in layout["texts"]}
+    for role in ("product_name", "price"):
+        layers[role]["color"] = "#4C2D1E"
+        design["styles"][role]["color"] = "#4C2D1E"
+        path = folder / layers[role]["file"]
+        with Image.open(path) as image:
+            ink = Image.new("RGBA", image.size, "#4C2D1E")
+            ink.putalpha(image.getchannel("A"))
+        ink.save(path)
+    name_path = folder / layers["product_name"]["file"]
+    price_path = folder / layers["price"]["file"]
+    before_price = price_path.read_bytes()
+    with Image.open(name_path) as image:
+        before_alpha = image.getchannel("A").tobytes()
+
+    revised, candidate = studio_formats.readable_offer_colors(design, layout, backdrop, folder)
+    assert revised["styles"]["product_name"]["color"] == candidate["texts"][1]["color"] == "#F3E7D6"
+    assert revised["styles"]["price"]["color"] == expected_price
+    assert (price_path.read_bytes() == before_price) == (expected_price == "#4C2D1E")
+    assert [text["text"] for text in candidate["texts"]] == [text["text"] for text in layout["texts"]]
+    with Image.open(name_path) as image:
+        assert image.getchannel("A").tobytes() == before_alpha
 
 
 def test_copy_position_comparison_keeps_the_shared_center_axis(draft):

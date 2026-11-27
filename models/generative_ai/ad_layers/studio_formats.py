@@ -5,9 +5,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageColor, ImageFilter, ImageOps
 from scipy.ndimage import distance_transform_edt
 
+from ..photo_retouch.adjustments import luminance, srgb_to_linear
 from .creative_brief import TEXT_ROLES, ask_stage, required_text, validate_boxes
 from .format_layout import (format_measurements, format_type_hierarchy, measured_styles, outer_margins, position_options,
                             preview_placement)
@@ -37,6 +38,7 @@ an already simple part of the scene over extending furniture, hard edges, or imp
 Keep every visible product and retain the campaign's visual focus. Return JSON with position from
 position_order and reason as one concrete Korean sentence about the intended composition. When photo_cue is
 provided, keep the complete physical action and the part of any hand or support making contact visible.
+Keep context_feature recognizable when it is supplied, with enough space for the photographed evidence.
 In a same-size repair, prefer a framing that makes the actual product more prominent and leaves coherent
 space for the headline and offer near the advertised feature."""
 
@@ -44,9 +46,12 @@ CUE_CROP = """The first image is the actual photograph and the second is its cur
 smallest rectangle containing all visible parts of the merchandise and the complete physical action in
 photo_cue. Include the contact and support that make the action believable, such as fingers where they grip.
 Exclude empty background or an incidental limb beyond its supporting contact. Preserve the actual product's
-silhouette, label, and parts that already appear in the photograph. Return JSON with protected_box as
+silhouette, label, and parts that already appear in the photograph. If exact copy names a visibly present
+object or setting detail that makes the message concrete, include enough of that detail to remain recognizable.
+Omit incidental props whose loss would leave the message unchanged. Return JSON with protected_box as
 [left, top, width, height] in whole percentages of the first image, or null if there is no removable perimeter,
-and observation as one Korean sentence naming what must remain visible."""
+context_feature as one short visible description of that copy-related detail or null, and observation as one
+Korean sentence naming what must remain visible."""
 
 MARGIN_CHECK = """Review the newly filled margins of a reframed product photo. The first image is the actual
 filled photograph; the second shows the same photograph with only stretched preview margins. photo_bounds
@@ -128,6 +133,8 @@ copy hugs the top while the focal detail sits farther down and the side space be
 for placement closer to that detail when the image provides enough clear space.
 If photo_cue is provided, find that physical relationship or effect in the reframed photo. Use photo when
 the crop has removed it and a new composition is required to show it again.
+If context_feature is provided, check that enough of that original scene detail remains recognizable and
+still connects to the actual copy. Report photo if it vanished or is reduced to an unrecognizable sliver.
 Read the long axis from edge to edge. An enlarged stretch of featureless wall, floor or surface has no
 photographic purpose merely because it balances a matching empty stretch at the other end. Check whether
 the subject itself meaningfully fills the long axis and directs the eye. If the scene was originally arranged
@@ -325,7 +332,7 @@ def frame_photo(photo, mask, size, expand=None, choose_position=None, check_marg
     right, bottom = min(width, right + padding), min(height, bottom + padding)
     fits = right - left <= crop_width and bottom - top <= crop_height
     if not fits:
-        if protected_box is not None:
+        if protected_box is not None and not keep_clearance:
             return frame_photo(photo, mask, size, expand, choose_position, check_margin, keep_clearance=keep_clearance)
         crop_width = max(crop_width, right - left)
         crop_height = max(crop_height, bottom - top)
@@ -343,7 +350,7 @@ def frame_photo(photo, mask, size, expand=None, choose_position=None, check_marg
                 for name, (px, py) in origins.items():
                     if (px, py) not in seen:
                         crop = (px, py, px + crop_width, py + crop_height)
-                        choices[name] = fit_crop(photo, mask, crop, size, False, check_margin)
+                        choices[name] = fit_crop(photo, mask, crop, size, keep_clearance, check_margin)
                         seen.add((px, py))
                 selected = choose_position({name: pair[0] for name, pair in choices.items()},
                                            {name: pair[1] for name, pair in choices.items()})
@@ -719,6 +726,55 @@ def offer_preview(poster, ink):
     return paired_preview(poster, offer_detail(poster, ink))
 
 
+def readable_offer_colors(design, layout, backdrop, folder):
+    roles = ("product_name", "price")
+    headline = design["styles"]["headline"]
+    palette = [headline["color"], *(line.get("color", headline["color"]) for line in headline.get("lines") or [])]
+    offer = [text for text in layout["texts"] if text["role"] in roles]
+    colors = list(dict.fromkeys([*(text["color"] for text in offer), *palette, "#000000", "#FFFFFF"]))
+    lightness = {color: luminance(srgb_to_linear(np.asarray(ImageColor.getrgb(color)) / 255)) + 0.05
+                 for color in colors}
+    masks, contrasts = {}, {}
+    for text in offer:
+        x, y, w, h = (text[key] for key in ("x", "y", "w", "h"))
+        with Image.open(folder / text["file"]) as layer:
+            alpha = layer.getchannel("A")
+        pixels = to_float(backdrop.crop((x, y, x + w, y + h)))[np.asarray(alpha) >= 128]
+        if pixels.size:
+            background = luminance(srgb_to_linear(pixels)) + 0.05
+            masks[text["role"]] = alpha
+            contrasts[text["role"]] = {
+                color: np.quantile(np.maximum(value, background) / np.minimum(value, background), 0.1)
+                for color, value in lightness.items()
+            }
+    minimum = 4.5
+    low = {text["role"] for text in offer if text["role"] in contrasts
+           and contrasts[text["role"]][text["color"]] < minimum}
+    if not low:
+        return design, layout
+
+    common = next((color for color in colors if all(scores[color] >= minimum for scores in contrasts.values())), None)
+    styles = design["styles"].copy()
+    texts = []
+    for text in layout["texts"]:
+        role = text["role"]
+        current = text["color"]
+        if role in contrasts and (common is not None or role in low):
+            scores = contrasts[role]
+            color = common or next((color for color in palette if scores[color] >= minimum), None)
+            if color is None:
+                color = max((current, "#000000", "#FFFFFF"), key=scores.__getitem__)
+            if color != current:
+                alpha = masks[role]
+                recolored = Image.new("RGBA", alpha.size, color)
+                recolored.putalpha(alpha)
+                recolored.save(folder / text["file"])
+                styles[role] = styles[role] | {"color": color}
+                text = text | {"color": color}
+        texts.append(text)
+    return design | {"styles": styles}, layout | {"texts": texts}
+
+
 def copy_position_details(inks, foreground):
     height, width = foreground.shape
     size = (width, height)
@@ -781,10 +837,14 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
     dimensions = format_measurements(layout, size)
     photo_cue = layout.get("photo_cue")
     protected_box = None
+    context_feature = layout.get("context_feature")
+    keep_clearance = design["crop"] == "preserve"
     needs_crop = photo.width * size[1] != photo.height * size[0]
-    if needs_crop and photo_cue and design["crop"] == "intentional":
+    if needs_crop and photo_cue:
         plan = ask_stage(ai, "studio_format_cue_crop", CUE_CROP,
-                         {"photo_cue": photo_cue, "intent": intent, "size": size}, [to_float(photo), reference])
+                         {"photo_cue": photo_cue, "copy": copy, "intent": intent, "size": size,
+                          "context_feature": context_feature},
+                         [to_float(photo), reference])
         bounds = round_box_edges(plan.get("protected_box"))
         try:
             bounds = validate_boxes({"photo": bounds}, ("photo",))["photo"]
@@ -793,7 +853,14 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
         else:
             x, y, width, height = pixel_box(bounds, photo.size)
             if mask.crop((x, y, x + width, y + height)).getbbox():
-                protected_box = (x, y, x + width, y + height)
+                shared = plan.get("context_feature")
+                if isinstance(shared, str) and shared.strip():
+                    context_feature = shared.strip()
+                if not keep_clearance or context_feature:
+                    protected_box = (x, y, x + width, y + height)
+                    if keep_clearance:
+                        left, top, right, bottom = mask.getbbox()
+                        protected_box = (min(x, left), min(y, top), max(x + width, right), max(y + height, bottom))
 
     def available(mask):
         bounds = [round(100 * edge / length) for edge, length in zip(mask.getbbox(), size * 2, strict=True)]
@@ -814,6 +881,7 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
         answer = ask_stage(ai, "studio_format_position", POSITION,
                            {"size": size, "copy": copy, "position_order": list(previews), "placement_notes": notes,
                             **({"photo_cue": photo_cue} if photo_cue else {}),
+                            **({"context_feature": context_feature} if context_feature else {}),
                             **({"intent": intent} if intent else {})},
                            [reference, *pictures])
         position_info.update(position=answer.get("position"), reason=required_text(answer, "reason", "사진 배치"))
@@ -852,7 +920,7 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
         return side
 
     framing, framing_mask = frame_photo(photo, mask, size, expand, choose_position, check_margin,
-                                        keep_clearance=design["crop"] == "preserve", protected_box=protected_box)
+                                        keep_clearance=keep_clearance, protected_box=protected_box)
     foreground = np.asarray(framing_mask) > 128
     tint = Image.blend(framing, Image.new("RGB", size, "#d84458"), 0.6)
     protected = Image.composite(tint, framing, framing_mask)
@@ -950,6 +1018,8 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                             {"photo_cue": photo_cue, "intent": intent, "copy": copy})
                 tried_offers = {tuple(revised["boxes"][role][axis]
                                       for role in ("product_name", "price") for axis in (0, 1))}
+            backdrop = compose(candidate | {"texts": []}, stage) if candidate.get("graphic") else framing
+            revised, candidate = readable_offer_colors(revised, candidate, backdrop, stage)
             poster = compose(candidate, stage)
             phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
             review = ask_stage(ai, "studio_format_reading", FORMAT_READING,
@@ -957,6 +1027,7 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                                 "outer_margins": outer_margins(bounds, ink.values()),
                                 "headline_behind_subject": headline_behind_subject,
                                 **({"photo_cue": layout["photo_cue"]} if layout.get("photo_cue") else {}),
+                                **({"context_feature": context_feature} if context_feature else {}),
                                 **({"intent": intent} if intent else {})},
                                [reference, to_float(phone), to_float(poster), to_float(offer_detail(poster, ink)),
                                 to_float(text_detail(poster, (ink["headline"],))),
@@ -988,6 +1059,8 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                 candidate["art_direction_plan"] = layout["art_direction_plan"]
             if "photo_cue" in layout:
                 candidate["photo_cue"] = layout["photo_cue"]
+            if context_feature:
+                candidate["context_feature"] = context_feature
             if position_info:
                 candidate["framing"] = position_info
             save_layout(candidate, stage)
