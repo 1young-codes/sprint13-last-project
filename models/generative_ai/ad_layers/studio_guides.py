@@ -31,7 +31,9 @@ ACTION_GUIDES = {
     "revise_scene": {
         "findings": ("scene", "product", "layout", "distraction"),
         "guide": "Rebuild the scene if the pose, product, light, or space for type fails across a large area. "
-                 "Name one visible improvement. The product facts and exact previously chosen copy stay fixed.",
+                 "Name a concrete camera, light, or staging change and where its effect should appear. "
+                 "When a small detail is the selling point, consider a close crop of the actual detail and say "
+                 "which other parts must remain identifiable. The product facts and exact copy stay fixed.",
         "arguments": {"instruction": "The visible problem and the specific photographic change to try."},
     },
     "select": {

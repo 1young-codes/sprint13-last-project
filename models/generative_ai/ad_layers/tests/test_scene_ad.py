@@ -41,6 +41,9 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             assert ("Narrow studio beam" if is_revision else "Amber reflections") in prompt
             assert "Shoot near the subject's height" in prompt and "Show the amber edge in side light." in prompt
             assert (correction in prompt) == expect_correction
+            assert ("Keep the same close framing" in prompt) == expect_correction
+            if expect_correction:
+                assert reference.getpixel((100, 460)) == (128, 128, 128)
             assert "부드러운 아침" not in prompt
             calls.append("qwen")
             return Image.new("RGB", size, (160, 40, 255) if is_revision else (0, 0, 255))
@@ -72,6 +75,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 assert len(images) == 2 and images[1].shape == (1024, 1024, 3) and "previous_art_direction" not in data
                 if expect_correction:
                     assert data["requested_scene_change"] == correction
+                    assert "deliberate detail crop" in data["framing_guide"]
                 if "hypothesis" in data:
                     assert data["hypothesis"] == "A narrow beam through the glass" and data["idea"] == "가벼운 아침 연출"
                     return '{"scene":"Narrow studio beam"}'
@@ -112,10 +116,11 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             else:
                 assert "겹쳤습니다" in data["layout_error"]
             style = {"font": "noto_sans_kr", "align": "left", "color": "#ffffff", "size": 5, "max_lines": 1}
+            crop = {"crop": "intentional", "source_crop": [33, 10, 40, 80]} if expect_correction else {"crop": "preserve"}
             return json.dumps({"concept": "Light joins image and type", "focus": "headline", "background": "#251d16",
                                "accent": {"shape": "ellipse", "box": [35, 10, 55, 55], "color": "#9e6c4b"},
                                "artwork_box": [0, 0, 50, 100], "subject_box": [10, 20, 75, 50],
-                               "crop": "preserve", "edge": "framed",
+                               "edge": "framed", **crop,
                                "art_direction": "Amber reflections",
                                "boxes": boxes, "styles": {role: style for role in boxes}})
 

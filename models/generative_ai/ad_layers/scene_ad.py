@@ -39,6 +39,9 @@ Use the blended edge for a calm photo perimeter that can merge into a plain grap
 align a deliberate crop with the type or cover the whole canvas.
 Use preserve for a complete product by default. Choose intentional only when a motivated crop emphasizes a real
 detail and the shopper can still identify the product and any important label.
+For an intentional detail shot include source_crop as [left, top, width, height] in whole percentages of the
+tight product bounds in the original image. Select the specific detail the headline is about. Space around the
+product in the original photo is outside these bounds. Use null or omit source_crop for a complete product.
 If there is a quiet area for type over the artwork, say where it is and describe its light and texture in art_direction.
 Include "boxes" and "styles", both keyed by headline, product_name and price.
 All boxes are [left, top, width, height]. Use whole percentages of the poster from its top-left, except subject_box,
@@ -170,6 +173,10 @@ def design_layers(answer, copy, size, fonts, folder):
     validate_boxes({"artwork": answer.get("artwork_box")}, ("artwork",))
     if "subject_box" in answer:
         validate_boxes({"subject": answer["subject_box"]}, ("subject",))
+    if answer.get("source_crop") is not None:
+        if answer["crop"] != "intentional":
+            raise ValueError("원본 일부를 확대하려면 의도한 잘림으로 지정하세요")
+        validate_boxes({"source_crop": answer["source_crop"]}, ("source_crop",))
     x, y, w, h = pixel_box(answer["artwork_box"], size)
     if min(answer["artwork_box"][2:]) < 35:
         raise ValueError("상품 사진을 보여 줄 영역이 너무 작습니다")
@@ -211,6 +218,16 @@ def extract_subject(photo, mask_model, threshold):
     return cutout_product(photo, mask, threshold) if (mask > threshold).any() else None
 
 
+def crop_subject(product, design):
+    if product is None or design.get("source_crop") is None:
+        return product
+    x, y, width, height = pixel_box(design["source_crop"], product.size)
+    detail = product.crop((x, y, x + width, y + height))
+    if not detail.getchannel("A").getbbox():
+        raise ValueError("확대할 부분에 원본 상품이 없습니다")
+    return detail
+
+
 def frame_subject(product, picture_size, subject_box):
     x, y, width, height = pixel_box(subject_box, picture_size)
     contained = ImageOps.contain(product, (width, height), Image.Resampling.LANCZOS)
@@ -236,7 +253,7 @@ def product_reference(photo, product, picture_size, subject_box):
 def composition_preview(product, design, layout, folder):
     artwork = layout["artwork"]
     size = (artwork["w"], artwork["h"])
-    subject = frame_subject(product, size, design.get("subject_box", [8, 8, 84, 84]))
+    subject = frame_subject(crop_subject(product, design), size, design.get("subject_box", [8, 8, 84, 84]))
     image = Image.new("RGBA", size, design["background"])
     image.alpha_composite(subject)
     image.save(folder / artwork["file"])
@@ -262,7 +279,7 @@ def review_composition_plan(ai, product, design, layout, folder, inputs, images)
         revision = review.get("revision")
         if not isinstance(revision, dict):
             break
-        editable = {"concept", "focus", "background", "accent", "artwork_box", "subject_box", "crop",
+        editable = {"concept", "focus", "background", "accent", "artwork_box", "subject_box", "crop", "source_crop",
                     "edge", "boxes", "styles"}
         changed = design | {key: revision[key] for key in editable & revision.keys()}
         if changed == design:
@@ -526,17 +543,24 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         answer = proposal["design"] if proposal else ask_stage(ai, "ad_layout", design_task, design_input, design_images)
         try:
             layout = design_layers(answer, copy, size, settings["fonts"], result)
+            effective = crop_subject(product, answer)
         except ValueError as error:
             if proposal:
                 raise
             retry = design_input | {"previous_design": answer, "layout_error": str(error)}
             answer = ask_stage(ai, "ad_layout", design_task, retry, design_images)
             layout = design_layers(answer, copy, size, settings["fonts"], result)
+            effective = crop_subject(product, answer)
 
         composition_reason = proposal.get("composition_reason") if proposal else None
         if product is not None and not proposal:
             answer, layout, composition_reason = review_composition_plan(
                 ai, product, answer, layout, result, design_input, images)
+            effective = crop_subject(product, answer)
+        detail_shot = product is not None and answer.get("source_crop") is not None
+        if detail_shot and art_plan:
+            art_plan = art_plan | {"shot_scale": "detail"}
+            design_input["art_direction_plan"]["shot_scale"] = "detail"
         if not proposal:
             direction_input = {"message": brief["message"], "idea": idea, "design": answer}
             angle, scale = ANGLES[art_plan["angle"]], SHOT_SCALES[art_plan["shot_scale"]]
@@ -548,6 +572,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             if revision_info:
                 direction_input.update(revision_info)
             direction_task = PHOTO_DIRECTION + "\nKeep the selected angle, framing, and photo_device in the scene."
+            if detail_shot:
+                direction_task += "\nThe approved composition uses a detail crop. Keep that magnification in the photograph."
             direction_images = images[:1]
             if (result / "composition.png").is_file():
                 with Image.open(result / "composition.png") as proof:
@@ -578,6 +604,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             prompt += f" Keep the outer background low-detail and close to the surrounding {answer['background']} color."
         if answer["crop"] == "preserve":
             prompt += " Keep all of the product in frame with space around its edges."
+        if detail_shot:
+            prompt += " Keep the same close framing of the product detail shown in the reference."
         if preview:
             if (result / artwork["file"]).is_file():
                 with Image.open(result / artwork["file"]) as planned:
@@ -589,7 +617,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             model = models["generation"]
             model.use_lora(None, 0)
             generation = settings["generation"]
-            reference = product_reference(photo, product, picture_size, subject_box)
+            reference = product_reference(photo, effective, picture_size, subject_box)
             generated = model.edit(reference, prompt, generation["seed"], generation["steps"], size=picture_size)
             scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
             foreground = find_foreground(scene, models["mask"], threshold)
