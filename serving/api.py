@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from models.generative_ai.llm.hashtags import generate_hashtags  # noqa: E402
 from models.generative_ai.llm.product_captions import generate_product_captions  # noqa: E402
+from models.generative_ai.llm.usage_suggestions import generate_usage_suggestions  # noqa: E402
 
 PRESETS_FILE = ROOT / "models/generative_ai/camera_angle_presets/angle_presets.toml"
 OUTPUT_DIR = Path(os.environ.get("API_OUTPUT_DIR", "/data/outputs/jobs"))
@@ -267,6 +268,13 @@ def create_app() -> FastAPI:
     @app.get("/presets")
     def presets():
         return PRESETS
+
+    @app.get("/usage-suggestions")
+    def usage_suggestions(product_name: str = ""):
+        # 그래픽 카드를 쓰지 않는다. 실패하면 빈 목록을 돌려준다(화면은 직접 입력만 보여 준다).
+        if not product_name.strip():
+            bad("품목 이름을 입력해 주세요.")
+        return {"suggestions": generate_usage_suggestions(product_name)}
 
     return app
 
