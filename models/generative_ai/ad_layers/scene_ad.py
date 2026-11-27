@@ -57,7 +57,10 @@ headline or product_name, 1 for price). If two lines are intentional, set "break
 space-separated words on the first line. Keep Korean phrases, quantities and product names intact at the
 break. For the headline only, optionally set "depth" to "behind_subject" when the contour of the foreground
 can deliberately cross a small outer part of a large headline. Every word must stay readable. Leave out
-depth when the type belongs in clear space. If a prior design failed, address the reported issue."""
+depth when the type belongs in clear space. For the headline only, optional emphasis is an object with phrase
+(an exact contiguous phrase from the headline) and color (#RRGGBB). Use one accent when a visible color from
+the photograph draws attention to the corresponding words. Keep sufficient contrast. Use null to omit it.
+If a prior design failed, address the reported issue."""
 
 BLOCKING = """Review the first image as a full poster made from the real product silhouette and the exact
 rendered typography. The flat background is a placeholder; judge placement, scale, spacing and how the
@@ -107,6 +110,10 @@ the product rather than letting all the type drift into a distant corner.
 When the approved image and headline still feel like separate columns, consider whether one larger headline
 can share the subject's axis or tuck behind a small part of its outline. Use depth only when it adds that relation.
 Match the lettering to the visual mood and keep any confirmed line breaks. Use the supplied wording exactly.
+When the photograph clearly supports one specific phrase, consider highlighting that exact phrase in the
+headline with a color sampled visually from the relevant feature. Use style emphasis with phrase and color.
+Use a single treatment and keep the accent legible against the actual background.
+If the same bright color on supporting information competes with the headline, reduce its emphasis.
 If a hard photo boundary runs behind the words and splits their background for no clear reason, set edge to
 blend so only the photo's outer surroundings fade into the canvas. Keep framed when a distinct image panel
 improves the composition. This affects the surroundings, leaving the subject intact.
@@ -180,6 +187,15 @@ def layout_texts(answer, copy, canvas_size, fonts):
             if max_lines != 2 or type(break_after) is not int or not 0 < break_after < len(text.split()):
                 raise ValueError(f"{role} 줄바꿈 위치가 올바르지 않습니다")
             layer["break_after"] = break_after
+        emphasis = style.get("emphasis")
+        if emphasis is not None:
+            phrase = emphasis.get("phrase") if isinstance(emphasis, dict) else None
+            if (role != "headline" or not isinstance(phrase, str) or not phrase or phrase.strip() != phrase
+                    or text.count(phrase) != 1
+                    or re.search(r"(?<!\S)" + re.escape(phrase) + r"(?!\S)", text) is None
+                    or phrase == text or not is_color(emphasis.get("color"))):
+                raise ValueError("강조는 제목에 한 번 나오는 일부 어절과 올바른 색을 지정해야 합니다")
+            layer["emphasis"] = {"phrase": phrase, "color": emphasis["color"]}
         texts.append(layer)
     return texts
 
@@ -469,6 +485,8 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                 if isinstance(style, dict) and original:
                     style = {key: value for key, value in style.items() if key not in ("max_lines", "break_after")}
                     style.update({key: original[key] for key in ("max_lines", "break_after") if key in original})
+                    if "emphasis" in original:
+                        style.setdefault("emphasis", original["emphasis"])
                 styles[role] = style
             revised["styles"] = styles
         if revised == answer:

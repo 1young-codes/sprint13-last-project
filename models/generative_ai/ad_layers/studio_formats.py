@@ -130,15 +130,18 @@ def format_styles(ai, styles, layers, first_lines):
     revised = styles.copy()
     for layer in layers:
         role = layer["role"]
-        if role not in first_lines or not isinstance(styles.get(role), dict):
+        if not isinstance(styles.get(role), dict):
             continue
         style = styles[role].copy()
-        style.pop("break_after", None)
-        if style.get("max_lines") == 2:
-            if first_lines[role] is None:
-                style["max_lines"] = 1
-            else:
-                style["break_after"] = line_break_after(layer["text"], first_lines[role])
+        if "emphasis" in layer:
+            style.setdefault("emphasis", layer["emphasis"])
+        if role in first_lines:
+            style.pop("break_after", None)
+            if style.get("max_lines") == 2:
+                if first_lines[role] is None:
+                    style["max_lines"] = 1
+                else:
+                    style["break_after"] = line_break_after(layer["text"], first_lines[role])
         revised[role] = style
     return revised
 

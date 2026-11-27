@@ -311,6 +311,14 @@ def test_designed_line_break_reaches_html_renderer():
     assert "패티 두 장이면<br>든든 &lt;맛&gt;" in page_html(layer, (1024, 1024))
     layer[0]["text"] = "새 제목"
     assert "<span>새 제목</span>" in page_html(layer, (1024, 1024))
+    style["emphasis"] = {"phrase": "장이면 든든", "color": "#ffa040"}
+    layer = scene_ad.layout_texts({"boxes": boxes, "styles": styles}, copy, (1024, 1024), ["noto_sans_kr"])
+    assert layer[0]["text"] == copy["headline"]
+    assert ('패티 두 <span style="color:#ffa040">장이면</span><br>'
+            '<span style="color:#ffa040">든든</span> &lt;맛&gt;') in page_html(layer, (1024, 1024))
+    style["emphasis"] = {"phrase": "장이", "color": "#ffa040"}
+    with pytest.raises(ValueError, match="강조는 제목"):
+        scene_ad.layout_texts({"boxes": boxes, "styles": styles}, copy, (1024, 1024), ["noto_sans_kr"])
     style["break_after"] = 5
     with pytest.raises(ValueError, match="줄바꿈 위치"):
         scene_ad.layout_texts({"boxes": boxes, "styles": styles}, copy, (1024, 1024), ["noto_sans_kr"])

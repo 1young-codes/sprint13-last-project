@@ -38,8 +38,8 @@ def change_text(stage, layout, changes):
     copy = {text["role"]: text["text"] for text in layout["texts"]}
     for role, change in changes.items():
         if (not isinstance(change, dict) or not change
-                or change.keys() - {"box", "font", "align", "color", "size", "max_lines", "first_line", "depth"}):
-            raise ValueError("글자에 설정할 수 있는 항목은 위치, 글꼴, 정렬, 색, 크기, 줄바꿈과 깊이입니다")
+                or change.keys() - {"box", "font", "align", "color", "size", "max_lines", "first_line", "depth", "emphasis"}):
+            raise ValueError("글자에 설정할 수 있는 항목은 위치, 글꼴, 정렬, 색, 크기, 줄바꿈, 깊이와 제목 강조입니다")
         if "box" in change:
             boxes[role] = change["box"]
         style = styles[role] | {key: value for key, value in change.items() if key not in ("box", "first_line")}

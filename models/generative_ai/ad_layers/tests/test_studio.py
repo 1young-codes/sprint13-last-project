@@ -69,7 +69,8 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft):
             if "edit_text" in data["actions"]:
                 assert set(data["actions"]) == {"edit_text", "hold"}
                 return json.dumps({"action": "edit_text", "arguments": {"changes": {"headline": {
-                    "box": [20, 20, 45, 10], "first_line": "포근한 겨울"}}}, "reason": "제목 이동"})
+                    "box": [20, 20, 45, 10], "first_line": "포근한 겨울",
+                    "emphasis": {"phrase": "포근한 겨울", "color": "#FFAA33"}}}}, "reason": "제목 이동"})
             assert set(data["actions"]) == {"select", "hold"}
             edit = data["earlier_edits"][0]
             assert (edit["action"], edit["candidate"], edit["preferred_version"], edit["remaining_finding"]) == (
@@ -86,6 +87,8 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft):
     assert next(layer["text"] for layer in load_layout(output / "final")["texts"] if layer["role"] == "price") == "18,000원"
     assert load_layout(output / "final")["design"]["styles"]["headline"]["break_after"] == 2
     assert load_layout(output / "formats/thumbnail")["design"]["styles"]["headline"]["break_after"] == 2
+    assert load_layout(output / "formats/thumbnail")["design"]["styles"]["headline"]["emphasis"] == {
+        "phrase": "포근한 겨울", "color": "#FFAA33"}
     assert (output / "versions/v01/ad.png").read_bytes() == (folder / "ad.png").read_bytes()
     with Image.open(result["formats"]["thumbnail"]) as poster:
         assert poster.size == (600, 600)

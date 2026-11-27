@@ -22,7 +22,8 @@ FIT_SCRIPT = """() => {
     const text = document.createRange();
     text.selectNodeContents(el.firstElementChild);
     const fits = () => text.getBoundingClientRect().width <= w && el.scrollHeight <= h &&
-      Array.from(text.getClientRects()).filter(rect => rect.width > 0).length <= Number(el.dataset.maxLines);
+      new Set(Array.from(text.getClientRects()).filter(rect => rect.width > 0).map(rect => rect.top)).size <=
+      Number(el.dataset.maxLines);
     let size = Math.min(Math.floor(h * 0.9), Number(el.dataset.maxFontSize));
     el.style.fontSize = size + 'px';
     while (!fits() && size > minSize) {
@@ -50,6 +51,22 @@ def font_file(name: str) -> Path:
     return path
 
 
+def phrase_html(text, parts, emphasis):
+    if not emphasis or (marked := text.find(emphasis["phrase"])) < 0:
+        return "<br>".join(html.escape(text[start:end]) for start, end in parts)
+    marked_end = marked + len(emphasis["phrase"])
+    color = html.escape(emphasis["color"], quote=True)
+    lines = []
+    for start, end in parts:
+        left, right = max(start, marked), min(end, marked_end)
+        if left < right:
+            lines.append(html.escape(text[start:left]) + f'<span style="color:{color}">'
+                         + html.escape(text[left:right]) + "</span>" + html.escape(text[right:end]))
+        else:
+            lines.append(html.escape(text[start:end]))
+    return "<br>".join(lines)
+
+
 def page_html(texts: list[dict], size: tuple[int, int]) -> str:
     fonts = load_settings()["fonts"]
     faces = "".join(f"@font-face {{ font-family: '{font['file']}'; src: url('{FONT_HOST}{font['file']}'); "
@@ -62,13 +79,15 @@ def page_html(texts: list[dict], size: tuple[int, int]) -> str:
         max_lines = t.get("max_lines", 1)
         break_after = t.get("break_after")
         flow = "nowrap" if max_lines == 1 else "normal"
-        copy = html.escape(t["text"])
+        text = t["text"]
+        parts = [(0, len(text))]
         if max_lines == 2 and type(break_after) is int:
-            words = list(re.finditer(r"\S+", t["text"]))
+            words = list(re.finditer(r"\S+", text))
             if 0 < break_after < len(words):
                 end, start = words[break_after - 1].end(), words[break_after].start()
-                copy = html.escape(t["text"][:end]) + "<br>" + html.escape(t["text"][start:])
+                parts = [(0, end), (start, len(text))]
                 flow = "nowrap"
+        copy = phrase_html(text, parts, t.get("emphasis"))
         boxes.append(
             f"<div class='t' id='t{i}' data-max-font-size='{t.get('max_font_size', t['h'])}' "
             f"data-min-font-size='{t.get('min_font_size', '')}' data-max-lines='{max_lines}' "
@@ -78,8 +97,8 @@ def page_html(texts: list[dict], size: tuple[int, int]) -> str:
             f"<span>{copy}</span></div>")
     return (f"<html><head><style>{faces} html, body {{ margin: 0; background: transparent; width: {size[0]}px; "
             f"height: {size[1]}px; }} .t {{ position: absolute; display: flex; align-items: center; "
-            f"line-height: {LINE_HEIGHT}; overflow: hidden; }} .t span {{ max-width: 100%; word-break: keep-all; }}"
-            f".t[data-max-lines='2'] span {{ text-wrap: balance; }}"
+            f"line-height: {LINE_HEIGHT}; overflow: hidden; }} .t > span {{ max-width: 100%; word-break: keep-all; }}"
+            f".t[data-max-lines='2'] > span {{ text-wrap: balance; }}"
             f"</style></head><body>{''.join(boxes)}</body></html>")
 
 

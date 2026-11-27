@@ -18,6 +18,7 @@ ACTION_GUIDES = {
                                  "color, size (integer percent), max_lines, first_line (exact words for line 1, or null "
                                  "to clear a forced break). For headline only, depth can be behind_subject or null. "
                                  "Use it only for a small intentional overlap that leaves the words readable. "
+                                 "Headline emphasis is optional: {phrase: exact words, color: #RRGGBB}, or null to clear. "
                                  "Example: {\"changes\":{\"headline\":{\"size\":6,"
                                  "\"first_line\":\"<exact first line>\"}}}."},
     },
