@@ -42,6 +42,7 @@ detail and the shopper can still identify the product and any important label.
 For an intentional detail shot include source_crop as [left, top, width, height] in whole percentages of the
 tight product bounds in the original image. Select the specific detail the headline is about. Space around the
 product in the original photo is outside these bounds. Use null or omit source_crop for a complete product.
+Place intentional cut edges against a photo edge rather than leaving a sliced product floating inside open space.
 If there is a quiet area for type over the artwork, say where it is and describe its light and texture in art_direction.
 Include "boxes" and "styles", both keyed by headline, product_name and price.
 All boxes are [left, top, width, height]. Use whole percentages of the poster from its top-left, except subject_box,
@@ -228,20 +229,32 @@ def crop_subject(product, design):
     return detail
 
 
-def frame_subject(product, picture_size, subject_box):
+def frame_subject(product, picture_size, subject_box, source_crop=None):
     x, y, width, height = pixel_box(subject_box, picture_size)
     contained = ImageOps.contain(product, (width, height), Image.Resampling.LANCZOS)
+    extra_width, extra_height = width - contained.width, height - contained.height
+    offset_x, offset_y = extra_width // 2, extra_height // 2
+    if source_crop:
+        left, top, crop_width, crop_height = source_crop
+        if left > 0 and left + crop_width == 100:
+            offset_x = 0
+        elif left == 0 and crop_width < 100:
+            offset_x = extra_width
+        if top > 0 and top + crop_height == 100:
+            offset_y = 0
+        elif top == 0 and crop_height < 100:
+            offset_y = extra_height
     frame = Image.new("RGBA", picture_size)
-    frame.alpha_composite(contained, (x + (width - contained.width) // 2, y + (height - contained.height) // 2))
+    frame.alpha_composite(contained, (x + offset_x, y + offset_y))
     return frame
 
 
-def product_reference(photo, product, picture_size, subject_box):
+def product_reference(photo, product, picture_size, subject_box, source_crop=None):
     if product is None:
         return photo
     if subject_box:
         reference = Image.new("RGB", picture_size, "#808080")
-        framed = frame_subject(product, picture_size, subject_box)
+        framed = frame_subject(product, picture_size, subject_box, source_crop)
         reference.paste(framed, mask=framed.getchannel("A"))
         return reference
     margin = round(max(product.size) / 10)
@@ -253,7 +266,8 @@ def product_reference(photo, product, picture_size, subject_box):
 def composition_preview(product, design, layout, folder):
     artwork = layout["artwork"]
     size = (artwork["w"], artwork["h"])
-    subject = frame_subject(crop_subject(product, design), size, design.get("subject_box", [8, 8, 84, 84]))
+    subject = frame_subject(crop_subject(product, design), size, design.get("subject_box", [8, 8, 84, 84]),
+                            design.get("source_crop"))
     image = Image.new("RGBA", size, design["background"])
     image.alpha_composite(subject)
     image.save(folder / artwork["file"])
@@ -617,7 +631,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             model = models["generation"]
             model.use_lora(None, 0)
             generation = settings["generation"]
-            reference = product_reference(photo, effective, picture_size, subject_box)
+            reference = product_reference(photo, effective, picture_size, subject_box, answer.get("source_crop"))
             generated = model.edit(reference, prompt, generation["seed"], generation["steps"], size=picture_size)
             scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
             foreground = find_foreground(scene, models["mask"], threshold)

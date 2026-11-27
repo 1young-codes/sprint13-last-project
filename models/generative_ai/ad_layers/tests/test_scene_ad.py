@@ -189,6 +189,20 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     assert headline["max_font_size"] == 65 and "depth" not in headline
 
 
+def test_cropped_side_stays_at_the_photo_edge_in_model_reference():
+    product = Image.new("RGBA", (20, 40), "orange")
+    crop = [0, 50, 100, 50]
+    detail = scene_ad.crop_subject(product, {"source_crop": crop})
+    picture_size = (40, 80)
+    subject_box = [0, 0, 100, 100]
+
+    assert scene_ad.frame_subject(product, picture_size, subject_box).getbbox() == (0, 0, 40, 80)
+    assert scene_ad.frame_subject(detail, picture_size, subject_box, crop).getbbox() == (0, 0, 40, 40)
+    reference = scene_ad.product_reference(product, detail, picture_size, subject_box, crop)
+    assert reference.getpixel((10, 0)) == (255, 165, 0)
+    assert reference.getpixel((10, 79)) == (128, 128, 128)
+
+
 def test_type_can_extend_over_photo_but_not_over_product(tmp_path):
     foreground = np.zeros((30, 30), dtype=bool)
     foreground[10:20, 10:20] = True
