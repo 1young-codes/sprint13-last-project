@@ -29,7 +29,10 @@ LOOK = """Look at the real poster images. The first image shows the source produ
 version_order, followed by those same posters at phone-feed size from left to right. Any images after the
 phone preview are design references. Pick the better actual poster when there are two, and name the single most consequential visible
 problem of the chosen version. First check the actual product, count, shape, and whether displayed use is
-physically believable, including how the parts are held or supported. Check the required Korean copy exactly.
+physically believable, including how the parts are held or supported. required_copy contains the exact strings
+used by the text renderer. Use it when similar Hangul glyphs are ambiguous in the preview. Judge visible cropping,
+overlap, contrast and any stray text baked into the photograph. For a legibility defect, name the actual obstruction
+or missing strokes in the full poster, rather than proposing an alternate transcription of the rendered words.
 Product facts are background evidence. Omitted optional product facts such as volume or weight are allowed
 unless the poster makes a misleading offer. Then inspect visual focus, visual idea, the scale and hierarchy of
 the headline, and how the photo and type relate. Evaluate the poster against the remaining design references.
@@ -52,14 +55,20 @@ Do not approve based on legibility alone. Give no score. Return JSON with versio
 finding (one of ready, typography, layout, distraction, product, scene), and observation (a concrete Korean sentence).
 Use ready when the poster could serve this campaign as seen."""
 
-CAMPAIGN_CHECK = """Recheck the candidate against the actual design references and the actual source product.
+CAMPAIGN_CHECK = """Recheck the candidate against the actual source product and any design references.
 Image order: source product, finished candidate, candidate photograph without type, candidate at phone-feed size,
-then reference posters. Judge the photograph and the layout independently.
-Name one visible treatment that makes a reference's message work. Compare the candidate's execution at that
-level, allowing for its own category and mood. A centered product, readable type and a visible feature already
-clear in the source do not by themselves establish a campaign idea. Compare the source and the candidate
-photograph before attributing a product feature to the new lighting, view or crop. A crop that visibly magnifies
-and separates the advertised detail is a photographic treatment. Allow quiet minimalism with a visible purpose.
+then the pre-shoot composition if has_source_study is true, then reference posters. The source study is the
+original subject placed on a flat background with draft lettering. Judge the treatment and layout separately.
+If there are reference posters, name one visible treatment that makes a reference's message work. Compare the
+candidate's execution at that level, allowing for its own category and mood. First compare the raw source, the source study if available,
+and the new photograph. Imagine the original subject, resized and placed at the candidate's scale, replacing
+the new shot. If that substitution would make substantially the same visual point, report catalog.
+Return the treatment actually visible using one key from treatments. Enlarging the entire unchanged subject,
+changing the background tone, or making the same arrangement crisper counts as catalog. Detail framing must
+give the advertised feature new prominence relative to the rest of the product, or reveal a useful view of it.
+For other treatments, name the specific changed area, interaction, or contour and how it shows the message.
+For photo_type, require a visible interaction with a particular contour, action or material, beyond standard alignment.
+Allow quiet minimalism when the specific treatment adds a visual point that disappears in the substitution.
 In the phone preview, trace the actual reading path from the headline and its photographic subject to the product
 name and price. Identify how the text groups relate by their visible edges, alignment, spacing or a shared
 element in the photograph. Use rendered_text_bounds (left, top, right, bottom percentages) to distinguish where
@@ -67,9 +76,17 @@ the ink really is from where its invisible box ends. An intentional offset can l
 offset that leaves the headline and offer floating as unrelated groups even when the artwork is effective.
 Name the first focal point in the preview. If a high-contrast graphic housing secondary information steals the
 first glance from the advertised feature, flag the hierarchy. An offer can lead when the campaign is about it.
-Return JSON with reference_observation (one concrete Korean detail from a reference), scene and layout. Both
-scene and layout are objects with ready (boolean) and observation (one concrete Korean sentence). State the
-visible evidence for each decision separately. A strong photograph alone is insufficient to approve the layout."""
+Return JSON with reference_observation (one concrete Korean detail from a reference, or null without references), scene (treatment and
+observation), and layout (ready boolean and observation). Each observation is a concrete Korean sentence.
+State visible evidence for each separately. A strong photograph alone is insufficient to approve the layout."""
+
+TREATMENTS = {
+    "catalog": "The same visual message survives replacing the shot with a resized source in the same placement.",
+    "feature_framing": "A close-up or viewpoint makes the advertised detail substantially more prominent or visible.",
+    "lighting": "Directed light, transmission or reflection reveals or singles out a specific selling detail.",
+    "staging": "A credible action, setting, or arrangement shows a benefit or use absent from the source.",
+    "photo_type": "The lettering interacts with a distinct contour, movement or material and carries the visual idea.",
+}
 
 ACT = """Use the evidence in observation and the actual chosen poster (first image) to pick one action.
 The second image is the source photo. Ground any framing or staging change in a specific feature visible there.
@@ -77,6 +94,9 @@ Use only a tool in actions and follow its guide. Choose the smallest change that
 When the finding is scene because a selling detail does not stand out, name the detail the next photograph must
 show more clearly and how it should read. Let the framing step compare the whole and close views. Keep a full
 view only when the owner requires it or the message depends on the complete shape, packaging or arrangement.
+When the earlier photograph merely enlarged the original subject, describe what could actually change in angle,
+light or placement to make the exact headline visible. If a full arrangement matters, keep it recognizable
+while changing its angle, foreground-to-background depth, or the way it is lit or used.
 Read the earlier edits and what remained visible after each comparison. If moving or enlarging the words
 left the same photo-and-copy disconnect, choose a different composition action or revise the photography
 when available. Do not repeat an earlier edit that left the same issue.
@@ -200,25 +220,32 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         if visible not in order or not isinstance(finding, str) or finding not in FINDINGS:
             raise ValueError("비교할 시안이나 수정 이유를 확인하지 못했습니다")
         observation = required_text(review, "observation", "시안 검토")
-        if finding == "ready" and sources:
+        if finding == "ready":
             selected = versions / visible
             candidate = load_layout(selected)
             scene = read_image(selected / candidate["artwork"]["file"])
+            pre_shoot = selected / "composition.png"
+            study = [to_float(read_image(pre_shoot))] if pre_shoot.is_file() else []
             check = ask_stage(ai, "studio_campaign_check", CAMPAIGN_CHECK, {
                 "required_copy": required_copy, "rendered_text_bounds": rendered_text_bounds(candidate, selected),
+                "has_source_study": bool(study), "treatments": TREATMENTS,
             }, [to_float(photo), pictures[visible], to_float(scene),
-                to_float(phone_preview([posters[order.index(visible)]])), *sources])
-            assessments = {role: check.get(role) for role in ("scene", "layout")}
-            if any(not isinstance(item, dict) or type(item.get("ready")) is not bool
-                   for item in assessments.values()):
+                to_float(phone_preview([posters[order.index(visible)]])), *study, *sources])
+            scene_review, layout_review = check.get("scene"), check.get("layout")
+            treatment = scene_review.get("treatment") if isinstance(scene_review, dict) else None
+            if (not isinstance(treatment, str) or treatment not in TREATMENTS
+                    or not isinstance(layout_review, dict) or type(layout_review.get("ready")) is not bool):
                 raise ValueError("참고 포스터와 비교한 결과를 확인하지 못했습니다")
-            evidence = {role: required_text(item, "observation", "참고 포스터 비교")
-                        for role, item in assessments.items()}
-            finding = next((role for role, item in assessments.items() if not item["ready"]), "ready")
-            observation = evidence[finding] if finding != "ready" else " ".join(evidence.values())
+            photo_evidence = required_text(scene_review, "observation", "참고 포스터 비교")
+            layout_evidence = required_text(layout_review, "observation", "참고 포스터 비교")
+            finding = "ready" if layout_review["ready"] else "layout"
+            if treatment == "catalog":
+                finding = "scene"
+            observation = {"scene": photo_evidence, "layout": layout_evidence,
+                           "ready": f"{photo_evidence} {layout_evidence}"}[finding]
             record("campaign_check", version=visible, finding=finding, observation=observation,
-                   scene_observation=evidence["scene"], layout_observation=evidence["layout"],
-                   reference_observation=required_text(check, "reference_observation", "참고 포스터 비교"))
+                   treatment=treatment, scene_observation=photo_evidence, layout_observation=layout_evidence,
+                   reference_observation=required_text(check, "reference_observation", "참고 포스터 비교") if sources else None)
         record("look", versions=order, version=visible, finding=finding, observation=observation)
         if pending:
             attempts[-1].update(preferred_version=visible, remaining_finding=finding, observation=observation)

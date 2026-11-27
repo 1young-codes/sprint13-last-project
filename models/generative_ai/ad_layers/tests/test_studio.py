@@ -8,6 +8,10 @@ from models.generative_ai.ad_layers import scene_ad, studio, studio_edits, studi
 from models.generative_ai.ad_layers.layers import compose, load_layout, save_layout
 
 
+CAMPAIGN_READY = ('{"scene":{"treatment":"staging","observation":"촛불을 밝혀 저녁을 표현합니다"},'
+                  '"layout":{"ready":true,"observation":"촛불과 문구가 한 축에 보입니다"}}')
+
+
 @pytest.fixture
 def draft(tmp_path, monkeypatch):
     def render(texts, size, folder):
@@ -58,6 +62,9 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft):
                 assert images[2][10, 10].tolist() == [0, 0, 1]
                 assert images[3][400, 150].tolist() == images[3][400, 540].tolist() == [0, 0, 1]
                 return '{"version":"v02","finding":"ready","observation":"제목을 다시 배치했습니다"}'
+            if step == "studio_campaign_check":
+                assert len(images) == 4
+                return CAMPAIGN_READY
             if step == "studio_reframe":
                 assert data["size"] == [600, 600]
                 assert data["approved_design"]["boxes"]["headline"] == [20, 20, 45, 10]
@@ -80,7 +87,7 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft):
     output = tmp_path / "output"
     result = studio.run_studio(Image.new("RGB", (100, 100)), fields, "", output, Agent(), draft=folder,
                                formats=("thumbnail",))
-    assert stages == ["studio_look", "studio_action", "studio_look", "studio_action", "studio_reframe"]
+    assert stages == ["studio_look", "studio_action", "studio_look", "studio_campaign_check", "studio_action", "studio_reframe"]
     assert result["status"] == "complete" and result["version"] == "v02"
     assert (output / "final" / "scene.png").read_bytes() == (folder / "scene.png").read_bytes()
     assert (output / "final" / "text_price.png").read_bytes() == (folder / "text_price.png").read_bytes()
@@ -115,6 +122,8 @@ def test_composition_edit_softens_the_edge_without_repainting(tmp_path, draft):
                 if data["version_order"] == ["v01"]:
                     return '{"version":"v01","finding":"layout","observation":"사진 경계가 글자와 제품을 갈라놓습니다"}'
                 return '{"version":"v02","finding":"ready","observation":"제품과 제목이 이어집니다"}'
+            if step == "studio_campaign_check":
+                return CAMPAIGN_READY
             if step == "ad_final_layout":
                 assert data["composition_issue"] == "제목과 제품 사이의 세로 경계를 부드럽게 이어 주세요"
                 if data["layout_error"] is None:
@@ -145,28 +154,39 @@ def test_composition_edit_softens_the_edge_without_repainting(tmp_path, draft):
         assert image.convert("RGB").tobytes() == scene.convert("RGB").tobytes()
 
 
-@pytest.mark.parametrize(("finding", "observation"), [
-    ("scene", "원본 촛불과 다른 연출이 보이지 않습니다"),
-    ("layout", "제목과 가격이 서로 어긋나 별개로 읽힙니다"),
+@pytest.mark.parametrize(("finding", "observation", "has_reference"), [
+    ("scene", "원본 촛불과 다른 연출이 보이지 않습니다", False),
+    ("scene", "원본 촛불과 다른 연출이 보이지 않습니다", True),
+    ("layout", "제목과 가격이 서로 어긋나 별개로 읽힙니다", True),
 ])
-def test_reference_comparison_can_block_selection(tmp_path, draft, finding, observation):
+def test_campaign_comparison_can_block_selection(tmp_path, draft, finding, observation, has_reference):
     folder, fields = draft
+    if finding == "scene":
+        Image.new("RGB", (100, 100), "green").save(folder / "composition.png")
+    references = [Image.new("RGB", (100, 100), "red")] if has_reference else []
 
     class Agent:
         def ask(self, step, images, request, *, model):
             if step == "studio_look":
                 return '{"version":"v01","finding":"ready","observation":"중앙 정렬이 깔끔합니다"}'
             if step == "studio_campaign_check":
-                assert len(images) == 5 and images[1][10, 10].tolist() == [1, 1, 1]
+                has_study = finding == "scene"
+                assert len(images) == 4 + has_study + has_reference and images[1][10, 10].tolist() == [1, 1, 1]
                 assert images[2][10, 10].tolist() == [0, 0, 1]
                 assert images[3].shape == (768, 768, 3)
+                if has_study:
+                    assert images[4][0, 0, 1] > 0 and images[4][0, 0, 0] == 0
+                if has_reference:
+                    assert images[-1][0, 0].tolist() == [1, 0, 0]
                 data = json.loads(request.split("Input JSON follows:\n", 1)[1])
+                assert data["has_source_study"] == has_study
                 assert data["rendered_text_bounds"]["headline"] == [10, 10, 13, 13]
                 assert "포근한 겨울 저녁" in request
                 return json.dumps({
-                    "scene": {"ready": finding != "scene", "observation": observation if finding == "scene" else "촛불이 잘 보입니다"},
+                    "scene": {"treatment": "catalog" if finding == "scene" else "lighting",
+                              "observation": observation if finding == "scene" else "촛불이 잘 보입니다"},
                     "layout": {"ready": finding != "layout", "observation": observation if finding == "layout" else "문구가 연결됩니다"},
-                    "reference_observation": "참고작의 그림자가 불빛의 위치를 드러냅니다",
+                    "reference_observation": "참고작의 그림자가 불빛의 위치를 드러냅니다" if has_reference else None,
                 })
             assert step == "studio_action"
             assert len(images) == 2 and images[0][10, 10].tolist() == [1, 1, 1]
@@ -178,7 +198,7 @@ def test_reference_comparison_can_block_selection(tmp_path, draft, finding, obse
 
     output = tmp_path / "output"
     result = studio.run_studio(Image.new("RGB", (100, 100)), fields, "", output, Agent(), draft=folder,
-                               references=[Image.new("RGB", (100, 100), "red")], edit_limit=0)
+                               references=references, edit_limit=0)
     assert result["status"] == "needs_review" and not (output / "final").exists()
     held = result["image"].parent
     assert load_layout(held)["pending_review"]["finding"] == finding
@@ -199,7 +219,7 @@ def test_reference_comparison_can_block_selection(tmp_path, draft, finding, obse
     changed.save(held / "ad.png")
     fresh = tmp_path / "fresh-review"
     studio.run_studio(Image.new("RGB", (100, 100)), fields, "", fresh, Agent(), draft=held,
-                      references=[Image.new("RGB", (100, 100), "red")], edit_limit=0)
+                      references=references, edit_limit=0)
     assert "resume_review" not in (fresh / "events.jsonl").read_text(encoding="utf-8")
 
 
@@ -337,6 +357,8 @@ def test_studio_creates_the_first_draft_with_the_selected_route(tmp_path, draft,
                 return '{"route":"product_shoot","instruction":"Show the candle wax in warm light","reason":"재질 강조"}'
             if step == "studio_look":
                 return '{"version":"v01","finding":"ready","observation":"제품의 촛농 질감이 자연스럽습니다"}'
+            if step == "studio_campaign_check":
+                return CAMPAIGN_READY
             return '{"action":"select","arguments":{},"reason":"촛농과 제품을 잘 보여 줍니다"}'
 
     ai = Agent()
