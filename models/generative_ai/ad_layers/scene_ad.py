@@ -204,15 +204,23 @@ message. For a demonstration, name the relative position and direction of the mo
 presence. The cue must be directly observable in the photograph without reading the headline."""
 
 PHOTO_CUE_CHECK = """Compare the original product (first image) and the rendered photograph without type
-(second image). Verify photo_cue from the actual pixels in the second image. For a gesture or motion, locate
+(second image). If has_approved_detail is true, the third image shows the selected source detail against
+gray. Independently check product identity in the second image. Compare the actual shape, proportions,
+materials, visible layers, genuine packaging marks and product variants. With the whole product requested,
+check that all sold pieces or visible variants are still represented, without duplicates or substitutions.
+Use the approved detail when provided to decide what can be outside the frame. Allow the expected effects of
+lighting, angle and an agreed close crop. Allow ordinary scene props that do not look like other sold products.
+Report a concrete visible difference before marking identity_matches false.
+Verify photo_cue from the actual pixels in the second image. For a gesture or motion, locate
 the two relevant points and check their relative positions and direction. For light or material, locate the
 specified surface and check the actual highlight, shadow, or transmission there. Visible parts alone do not
 prove a relationship. If a planned action would physically miss its destination or appears suspended without
-plausible support, report it. Return JSON with visible (boolean), observation (one concrete Korean sentence
-describing what is actually visible), and correction (one precise English photographic instruction if false,
-null if true). If false, also return reposition (boolean, true when the correction must change the relative
-position or orientation of product parts). For that case give a self-contained physical arrangement, including
-what supports the moving part and where it points. Keep the product identity, scale and quiet area for lettering."""
+plausible support, report it. Return JSON with identity_matches and visible (separate booleans),
+identity_observation and observation (one concrete Korean sentence for each finding), and correction
+(one precise English photographic instruction if either finding is false, otherwise null). If either is false,
+also return reposition (boolean, true when the correction must change the relative position or orientation
+of product parts). Correct the failed findings while keeping anything that already works. Describe a physically
+complete arrangement when repositioning. Preserve the intended product scale and quiet area for lettering."""
 
 FORMAT_STAGING = """The first image is the source product, the second the approved campaign, and the
 third the isolated original product. Choose whether to physically move one already visible, independently
@@ -1349,21 +1357,29 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 def photograph(instruction):
                     return model.edit(reference, instruction, generation["seed"], generation["steps"], size=render_size)
 
+            approved_detail = on_gray(effective) if detail_shot and effective is not None else None
             for attempt in range(2):
                 generated = photograph(prompt)
                 scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
                 if not photo_cue:
                     break
-                check = ask_stage(ai, "ad_photo_cue_check", PHOTO_CUE_CHECK, {"photo_cue": photo_cue},
-                                  [images[0], to_float(scene)])
+                check = ask_stage(ai, "ad_photo_cue_check", PHOTO_CUE_CHECK,
+                                  {"photo_cue": photo_cue, "has_approved_detail": approved_detail is not None,
+                                   "crop": answer["crop"], "product_facts": fields},
+                                  [images[0], to_float(scene), *([to_float(approved_detail)] if approved_detail else [])])
                 observation = required_text(check, "observation", "촬영 결과 검토")
+                identity = check.get("identity_matches")
+                identity_observation = required_text(check, "identity_observation", "촬영 결과 검토")
                 visible = check.get("visible")
-                if type(visible) is not bool:
+                if type(visible) is not bool or type(identity) is not bool:
                     raise ValueError("촬영한 사진에서 연출을 확인하지 못했습니다")
-                photo_checks.append({"visible": visible, "observation": observation})
-                if visible:
+                photo_checks.append({"visible": visible, "observation": observation, "identity_matches": identity,
+                                     "identity_observation": identity_observation})
+                if visible and identity:
                     break
                 if attempt:
+                    if not identity:
+                        raise ValueError(f"촬영한 사진의 상품이 원본과 다릅니다. {identity_observation}")
                     raise ValueError(f"사진에 의도한 연출이 보이지 않습니다. {observation}")
                 correction = required_text(check, "correction", "촬영 결과 검토")
                 reposition = check.get("reposition")

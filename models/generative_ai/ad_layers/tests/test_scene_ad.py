@@ -21,6 +21,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     cue_correction = "Move the side light to reveal the near glass edge."
     exercise_cue_retry = True
     reject_cue = False
+    reject_identity = False
     campaign_intent = "빛줄기와 제목을 같은 방향으로 연결합니다"
     expect_correction = False
     delegated_framing = False
@@ -61,6 +62,8 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             assert "부드러운 아침" not in prompt
             if exercise_cue_retry and "ad_photo_cue_check" in calls:
                 assert prompt.startswith(f"Priority reshoot correction, replacing any conflicting placement instruction: {cue_correction}")
+            if reject_identity and "ad_photo_cue_check" in calls:
+                assert "Restore the original amber glass bottle." in prompt
             assert cue in prompt
             calls.append("qwen")
             return Image.new("RGB", size, (160, 40, 255) if is_revision else (0, 0, 255))
@@ -118,11 +121,20 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                     return json.dumps({"scene": "Narrow studio beam", "photo_cue": cue})
                 return json.dumps({"scene": "Amber reflections", "photo_cue": cue})
             if step == "ad_photo_cue_check":
-                assert cue in prompt and len(images) == 2 and images[1].shape == (1024, 512, 3)
+                data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
+                assert data["photo_cue"] == cue and images[1].shape == (1024, 512, 3)
+                assert data["has_approved_detail"] is expect_correction and len(images) == (3 if expect_correction else 2)
+                identity = {"identity_matches": not reject_identity,
+                            "identity_observation": "병이 검정색입니다" if reject_identity else "같은 앰버색 병입니다"}
+                if reject_identity:
+                    return json.dumps(identity | {"visible": True, "observation": "빛이 보입니다",
+                                                  "correction": "Restore the original amber glass bottle.",
+                                                  "reposition": False})
                 if reject_cue or exercise_cue_retry and calls.count(step) == 1:
-                    return json.dumps({"visible": False, "observation": "병 가장자리에 빛이 없습니다",
-                                       "correction": cue_correction, "reposition": reject_cue})
-                return '{"visible":true,"observation":"유리 가장자리에 빛이 보입니다","correction":null}'
+                    return json.dumps(identity | {"visible": False, "observation": "병 가장자리에 빛이 없습니다",
+                                                  "correction": cue_correction, "reposition": reject_cue})
+                return json.dumps(identity | {"visible": True, "observation": "유리 가장자리에 빛이 보입니다",
+                                              "correction": None})
             if step == "ad_composition":
                 assert len(images) == 3 and images[0].shape == (1024, 1024, 3)
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
@@ -217,6 +229,14 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     assert calls == ["render", "qwen", "ad_photo_cue_check", "qwen", "ad_photo_cue_check"]
     assert not unapproved.exists()
     reject_cue = False
+    reject_identity = True
+    calls.clear()
+    wrong_product = tmp_path / "wrong_product"
+    with pytest.raises(ValueError, match="촬영한 사진의 상품이 원본과 다릅니다. 병이 검정색입니다"):
+        scene_ad.make_scene_ad(photo, fields, "", models, wrong_product, proposal=layout)
+    assert calls == ["render", "qwen", "ad_photo_cue_check", "qwen", "ad_photo_cue_check"]
+    assert not wrong_product.exists()
+    reject_identity = False
     calls.clear()
     rejected = tmp_path / "rejected"
     rejected.mkdir()
