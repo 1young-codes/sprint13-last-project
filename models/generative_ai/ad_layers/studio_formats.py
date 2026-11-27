@@ -578,7 +578,7 @@ def copy_position_options(design, layout, ink, foreground, stage):
         left, right = (min(room, nudge) for room in rooms[cross_axis])
         sidesteps = dict.fromkeys((0, -left, right))
         for direction, room in zip((-1, 1), rooms[axis], strict=True):
-            for distance in sorted({min(room, round(ratio * short_edge / side)) for ratio in (12, 20, 30)}):
+            for distance in sorted({min(room, round(ratio * short_edge / side)) for ratio in (6, 12, 20, 30)}):
                 if distance * side < 6 * short_edge:
                     continue
                 offset = [0, 0]
@@ -784,6 +784,7 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
         offer_repair = False
         tried_offers = set()
         copy_position_review = None
+        layout_attempts = offer_attempts = 0
 
         def render_copy(design):
             candidate = design_layers(design, copy, size, fonts, stage)
@@ -795,23 +796,31 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
             check_offer_spacing(ink, size)
             return candidate, ink, headline_behind_subject
 
-        for attempt in range(3):
-            if attempt == 2 and not offer_repair:
-                break
+        for attempt in range(4):
+            joint_repair = False
             if offer_repair:
-                options = offer_position_options(revised, candidate, foreground, stage, tried_offers)
-                if not options:
+                options = (offer_position_options(revised, candidate, foreground, stage, tried_offers)
+                           if offer_attempts < 2 else {})
+                offer_repair = False
+                if options:
+                    offer_attempts += 1
+                    previews = [offer_preview(compose(option[1], stage), option[2]) for option in options.values()]
+                    choice = ask_stage(ai, "studio_format_offer", OFFER_POSITION,
+                                       {"position_order": list(options), "observation": reading, "copy": copy},
+                                       [to_float(offer_preview(poster, ink)), *map(to_float, previews)])
+                    position = choice.get("position")
+                    if isinstance(position, str) and position in options:
+                        revised, candidate, ink, key = options[position]
+                        tried_offers.add(key)
+                        offer_repair = True
+                if not offer_repair:
+                    joint_repair = True
+                    inputs["layout_error"] = (f"{reading} 상품명과 가격만 옮겨도 문제가 남습니다. "
+                                              "사진과 확정 문구는 유지하고 제목까지 함께 재배치하세요.")
+            if not offer_repair:
+                if layout_attempts == 2:
                     break
-                previews = [offer_preview(compose(option[1], stage), option[2]) for option in options.values()]
-                choice = ask_stage(ai, "studio_format_offer", OFFER_POSITION,
-                                   {"position_order": list(options), "observation": reading, "copy": copy},
-                                   [to_float(offer_preview(poster, ink)), *map(to_float, previews)])
-                position = choice.get("position")
-                if not isinstance(position, str) or position not in options:
-                    break
-                revised, candidate, ink, key = options[position]
-                tried_offers.add(key)
-            else:
+                layout_attempts += 1
                 answer = ask_stage(ai, "studio_reframe", REFRAME, inputs | {"preferred_first_lines": first_lines}, images)
                 if placements and not intent and "layout_error" not in inputs and answer.get("placement") is None:
                     answer = {"placement": next(iter(placements))}
@@ -839,7 +848,7 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                 framing.save(stage / candidate["artwork"]["file"])
                 framing_mask.save(stage / "foreground.png")
                 copy_position_review = None
-                if not attempt and (photo_cue or intent):
+                if joint_repair or (not attempt and (photo_cue or intent)):
                     options = copy_position_options(revised, candidate, ink, foreground, stage)
                     if options:
                         previews = [compose(candidate, stage), *(compose(item[1], stage) for item in options.values())]
