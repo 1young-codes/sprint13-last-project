@@ -11,8 +11,8 @@ from .creative_brief import ask_stage, required_text
 from .format_layout import format_measurements, measured_styles, outer_margins, position_options, preview_placement
 from .layers import compose, load_layout, load_settings, save_layout, to_float
 from .scene_ad import check_text_overlap, design_layers, make_scene_ad, rendered_text_bounds, touches_photo_edge
-from .staging import staged_evidence
-from .studio_edits import foreground_mask, line_break_after
+from .staging import check_staged_identity
+from .studio_edits import foreground_mask, line_break_after, repair_staged_detail
 from .text_render import LINE_HEIGHT, minimum_font_size
 
 
@@ -90,9 +90,7 @@ ready is false and the photograph's arrangement or empty filled edges require a 
 
 NATIVE_REVIEW = """Review a poster newly photographed for one publishing ratio. Image 1 is the original product
 photograph, image 2 is the approved poster, image 3 is the attempted resize when present, and the last
-two images are the new finished poster and its phone preview. If has_moved_piece is true, the two images
-immediately before the finished poster show the actual moved piece from the source and the new photo detail
-at that location. Compare its shape and material closely and verify it appears once.
+two images are the new finished poster and its phone preview.
 If has_staged_group is true, the image immediately before the finished poster shows the planned group
 made from real product pixels. Compare count, colors, materials and the new depth ordering with that guide.
 Check product identity, including the exact visible versions, essential details, visible packaging and component
@@ -433,6 +431,25 @@ def adapt_format(source, output, format_name, ai, expand=None):
     raise ValueError(inputs["layout_error"])
 
 
+def restore_format_detail(folder, layout, ai, models):
+    def assess():
+        with Image.open(folder / layout["artwork"]["file"]) as scene:
+            return check_staged_identity(ai, folder, layout, scene)
+
+    match, observation = assess()
+    if match:
+        return None
+    try:
+        repair_staged_detail(folder, layout, {"instruction": observation}, lambda: models, ai)
+    except ValueError as error:
+        raise ValueError(f"게시 규격에서 강조한 상품이 원본과 다릅니다. {observation} {error}") from error
+    match, observation = assess()
+    if not match:
+        raise ValueError(f"게시 규격에서 강조한 상품이 원본과 다릅니다. {observation}")
+    compose(layout, folder).save(folder / "ad.png")
+    return observation
+
+
 def rebuild_format(source, output, format_name, photo, fields, idea, ai, models, references, issue):
     size = FORMATS[format_name]
     approved = load_layout(source)
@@ -447,28 +464,27 @@ def rebuild_format(source, output, format_name, photo, fields, idea, ai, models,
         if layout["design"]["crop"] == "preserve" and touches_photo_edge(foreground_mask(folder, layout)):
             raise ValueError("새 게시용 사진에서 전체를 보여 줄 상품이 사진 가장자리에 닿습니다")
         check_type_margin(size, rendered_text_bounds(layout, folder))
+        revision = layout.get("revision", {})
+        restored = None
+        if revision.get("staged_piece_box") is not None:
+            restored = restore_format_detail(folder, layout, ai, models)
         with Image.open(source / "ad.png") as reference, Image.open(folder / "ad.png") as poster:
             phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
             before = [to_float(issue.poster)] if issue.poster is not None else []
             details = []
-            revision = layout.get("revision", {})
-            has_moved_piece = revision.get("staged_piece_box") is not None
-            if has_moved_piece:
-                with Image.open(folder / layout["artwork"]["file"]) as scene:
-                    piece, box = staged_evidence(folder, layout, scene)
-                    details = [to_float(piece), to_float(scene.crop(box))]
-            elif revision.get("staged_group"):
+            if revision.get("staged_group"):
                 with Image.open(folder / "staging.png") as guide:
                     details = [to_float(guide)]
             review = ask_stage(ai, "studio_format_native_review", NATIVE_REVIEW,
                                {"size": size, "format_issue": str(issue), "copy": copy,
-                                "has_attempted_resize": bool(before), "has_moved_piece": has_moved_piece,
-                                "has_staged_group": revision.get("staged_group", False)},
+                                "has_attempted_resize": bool(before), "has_staged_group": bool(details)},
                                [to_float(photo), to_float(reference), *before, *details, to_float(poster), to_float(phone)])
         observation = required_text(review, "observation", "새 게시 규격 검토")
         if review.get("ready") is not True:
             raise ValueError(f"게시 규격의 새 구도를 확정하지 못했습니다. {observation}")
         framing = {"method": "native", "resize_issue": str(issue), "review": observation}
+        if restored:
+            framing["detail_restoration"] = restored
         save_layout(layout | {"format": format_name, "framing": framing}, folder)
         folder.rename(output)
     return framing

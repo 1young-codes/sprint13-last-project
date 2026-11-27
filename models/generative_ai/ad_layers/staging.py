@@ -42,6 +42,13 @@ readable. Gray is a placeholder for the setting. Reject a cramped grid of unrela
 that cannot realistically be moved, and layouts that merely repeat the original line of pieces.
 Return choice as a key from option_order or null, and one visible reason in Korean."""
 
+STAGED_IDENTITY = """Compare the moved item in three images: the real source item isolated on gray, the newly
+photographed piece and its surroundings at close range, and the whole new photograph. Verify shape and
+construction of the advertised item, especially the small working parts identified in product_detail. A different
+angle, lighting, or physically expected traces of chosen use are allowed. Replacing a visible working part
+with a different material or shape is a mismatch even when its overall use and main silhouette look plausible.
+Return match (boolean) and observation (one concrete Korean sentence naming what the close images show)."""
+
 
 def source_parts(mask):
     if mask is None:
@@ -55,20 +62,25 @@ def source_parts(mask):
     return np.where(np.isin(labels, visible), labels, 0)
 
 
-def arrange_rows(rows, gap, *, stagger):
+def arrange_rows(rows, gap, hero):
     widths = [sum(piece.width for piece in row) + gap * (len(row) - 1) for row in rows]
     heights = [max(piece.height for piece in row) for row in rows]
     width = max(widths)
     result = Image.new("RGBA", (width, sum(heights) + gap * (len(rows) - 1)))
+    highlight = Image.new("RGBA", result.size) if hero is not None else None
     y = 0
     for index, (row, row_width, height) in enumerate(zip(rows, widths, heights, strict=True)):
         slack = width - row_width
-        x = round(slack * (0.25 if index % 2 == 0 else 0.75)) if stagger else slack // 2
+        x = round(slack * (0.25 if index % 2 == 0 else 0.75)) if hero is not None else slack // 2
         for piece in row:
-            result.alpha_composite(piece, (x, y + height - piece.height))
+            position = x, y + height - piece.height
+            result.alpha_composite(piece, position)
+            if piece is hero:
+                highlight.paste(piece, position)
             x += piece.width + gap
         y += height + gap
-    return result.crop(result.getbbox())
+    box = result.getbbox()
+    return result.crop(box), highlight.crop(box) if highlight is not None else None
 
 
 def stage_group(ai, photo, parts, size, approved, issue, copy):
@@ -109,9 +121,9 @@ def stage_group(ai, photo, parts, size, approved, issue, copy):
             rows.append(pieces[-1:])
         if len(rows) == 1 and size[1] > size[0]:
             continue
-        options[f"columns_{columns}"] = arrange_rows(rows, gap, stagger=hero is not None)
+        options[f"columns_{columns}"] = arrange_rows(rows, gap, pieces[-1] if hero is not None else None)
     previews = []
-    for group in options.values():
+    for group, _ in options.values():
         canvas = Image.new("RGB", size, "#808080")
         fitted = ImageOps.contain(group, (round(size[0] * 0.88), round(size[1] * 0.70)), Image.Resampling.LANCZOS)
         canvas.paste(fitted, ((size[0] - fitted.width) // 2, size[1] * 4 // 5 - fitted.height),
@@ -124,7 +136,8 @@ def stage_group(ai, photo, parts, size, approved, issue, copy):
         return None
     if not isinstance(choice, str) or choice not in options:
         raise ValueError("게시 규격에 맞춰 상품군을 놓을 방식을 확인하지 못했습니다")
-    return options[choice], required_text(answer, "reason", "상품군 재배치 검토")
+    group, highlight = options[choice]
+    return group, highlight, required_text(answer, "reason", "상품군 재배치 검토")
 
 
 def padded_box(box, margin, size):
@@ -133,14 +146,27 @@ def padded_box(box, margin, size):
 
 
 def staged_evidence(folder, layout, scene):
-    box = layout.get("revision", {}).get("staged_piece_box")
+    revision = layout.get("revision", {})
+    box = revision.get("staged_piece_box")
     if (not isinstance(box, list) or len(box) != 4 or any(type(value) is not int for value in box)
             or not (0 <= box[0] < box[2] <= scene.width and 0 <= box[1] < box[3] <= scene.height)):
         raise ValueError("옮긴 상품을 확대할 영역을 확인하지 못했습니다")
     with Image.open(folder / "staged-piece.png") as image:
         original = image.convert("RGB")
-    margin = max(box[2] - box[0], box[3] - box[1]) // 4
+    # A photographed group can shift relative to its multi-piece guide.
+    margin = max(box[2] - box[0], box[3] - box[1]) // (2 if revision.get("staged_group") else 4)
     return original, padded_box(box, margin, scene.size)
+
+
+def check_staged_identity(ai, folder, layout, scene):
+    original, bounds = staged_evidence(folder, layout, scene)
+    identity = ask_stage(ai, "studio_staged_identity", STAGED_IDENTITY, {
+        "product_detail": layout.get("art_direction_plan", {}).get("evidence"),
+        "staging_intent": layout.get("revision", {}).get("staging_intent"),
+    }, [to_float(original), to_float(scene.crop(bounds)), to_float(scene)])
+    if type(identity.get("match")) is not bool:
+        raise ValueError("옮긴 상품의 원본 대조 결과를 확인하지 못했습니다")
+    return identity["match"], required_text(identity, "observation", "옮긴 상품 검토")
 
 
 def on_gray(subject):

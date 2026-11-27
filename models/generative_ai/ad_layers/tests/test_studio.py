@@ -115,8 +115,9 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft, monkey
         assert poster.size == (600, 600)
 
 
-@pytest.mark.parametrize(("staged", "ready"), [(True, True), (False, False)])
-def test_native_format_reuses_approved_copy_and_publishes_only_after_review(tmp_path, draft, monkeypatch, staged, ready):
+@pytest.mark.parametrize(("staged", "ready", "same_piece"), [(True, True, True), (False, False, True), (True, True, False)])
+def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
+        tmp_path, draft, monkeypatch, staged, ready, same_piece):
     folder, fields = draft
     approved = load_layout(folder)
     approved["brief"] = {"headline": "다듬기 전 제목", "message": "포근한 겨울 저녁을 보여 줍니다"}
@@ -185,9 +186,14 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(tmp_
                 return '{"scene":"Warm lamp light guides the eye from the vessel."}'
             if step == "ad_final_layout":
                 return '{"revision":null}'
+            if step == "studio_staged_identity":
+                assert len(images) == 3 and data["product_detail"] == "실제 용기"
+                return json.dumps({"match": same_piece, "observation": "가까이서 상품 구조를 확인했습니다"})
+            if step == "studio_repair_detail":
+                return '{"target_box":null}'
             assert step == "studio_format_native_review"
             assert data["copy"]["price"] == "18,000원" and data["has_attempted_resize"]
-            assert data["has_moved_piece"] == staged and len(images) == (7 if staged else 5)
+            assert not data["has_staged_group"] and len(images) == 5
             assert images[-2].shape[:2] == (1920, 1080)
             assert images[-1].shape[:2] == (640, 360)
             return json.dumps({"ready": ready, "observation": "세로로 이어지는 빛을 확인했습니다"})
@@ -203,8 +209,9 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(tmp_
     monkeypatch.setattr(segmentation, "product_mask", product_mask)
     monkeypatch.setattr(format_layout, "measure_texts", lambda probes, _: {row["role"]: (100, 35) for row in probes})
     output = tmp_path / "native"
-    if not ready:
-        with pytest.raises(ValueError, match="새 구도를 확정하지"):
+    if not ready or not same_piece:
+        reason = "새 구도를 확정하지" if same_piece else "강조한 상품이 원본과 다릅니다"
+        with pytest.raises(ValueError, match=reason):
             studio_formats.rebuild_format(folder, output, "9:16", photo, fields, "", Agent(),
                                           {"mask": "mask", "generation": Model()}, (), issue)
         assert not output.exists()
@@ -218,8 +225,31 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(tmp_
     stages = ["ad_format_staging", "ad_staging", "ad_staging_check"] if staged else []
     plans = ["ad_layout", "ad_layout"] if staged else ["ad_layout"]
     measured = ["ad_format_measured_layout"] if staged else []
+    review = (["studio_staged_identity"] if staged else [])
+    review += ["studio_format_native_review"] if same_piece else ["studio_repair_detail"]
     assert calls == [*stages, *plans, "ad_composition", "ad_composition", *measured, "ad_scene_direction", "photo",
-                     "ad_final_layout", "studio_format_native_review"]
+                     "ad_final_layout", *review]
+
+
+def test_native_detail_repair_recomposes_after_source_identity_passes(draft, monkeypatch):
+    folder, _ = draft
+    layout = load_layout(folder)
+    comparisons = iter([(False, "상품의 작은 구조가 달라졌습니다"), (True, "원래 모양으로 돌아왔습니다")])
+    monkeypatch.setattr(studio_formats, "check_staged_identity", lambda *args: next(comparisons))
+
+    def repair(stage, plan, arguments, generation, ai):
+        assert arguments["instruction"] == "상품의 작은 구조가 달라졌습니다"
+        path = stage / plan["artwork"]["file"]
+        with Image.open(path) as photo:
+            fixed = photo.copy()
+        fixed.paste("orange", (70, 70, 74, 74))
+        fixed.save(path)
+
+    monkeypatch.setattr(studio_formats, "repair_staged_detail", repair)
+    assert studio_formats.restore_format_detail(folder, layout, None, {}) == "원래 모양으로 돌아왔습니다"
+    with Image.open(folder / "ad.png") as image:
+        assert image.getpixel((71, 71)) == (255, 165, 0)
+        assert image.getpixel((75, 75)) == (0, 0, 255)
 
 
 def test_detail_repair_keeps_photo_pixels_and_lettering_outside_the_box(tmp_path, draft):

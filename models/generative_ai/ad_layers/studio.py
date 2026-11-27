@@ -13,7 +13,7 @@ from .art_direction import THEMES
 from .creative_brief import ask_stage, required_text
 from .layers import load_layout, load_settings, save_layout, to_float
 from .scene_ad import make_scene_ad, rendered_text_bounds
-from .staging import staged_evidence
+from .staging import STAGED_IDENTITY, check_staged_identity
 from .studio_edits import edit_version, foreground_mask
 from .studio_formats import FORMATS, FormatPhotoIssue, adapt_format, fill_margin, rebuild_format
 from .studio_guides import START_GUIDES, find_actions
@@ -95,14 +95,6 @@ first glance from the advertised feature, flag the hierarchy. An offer can lead 
 Return JSON with reference_observation (one concrete Korean detail from a reference, or null without references), scene (treatment and
 observation), and layout (ready boolean and observation). Each observation is a concrete Korean sentence.
 State visible evidence for each separately. A strong photograph alone is insufficient to approve the layout."""
-
-STAGED_IDENTITY = """Compare the moved item in three images: the real source item isolated on gray, the newly
-photographed piece and its surroundings at close range, and the whole new photograph. Verify shape and
-construction of the advertised item, especially the small working parts identified in product_detail. A different
-angle, lighting, or physically expected traces of chosen use are allowed. Replacing a visible working part
-with a different material or shape is a mismatch even when its overall use and main silhouette look plausible.
-Return match (boolean) and observation (one concrete Korean sentence naming what the close images show)."""
-
 
 TREATMENTS = {
     "product_mismatch": "The shot materially changes the actual product, offer, or physically plausible use.",
@@ -216,15 +208,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         revision = candidate.get("revision", {})
         planned_layout = revision.get("layout_device")
         if revision.get("staged_piece_box") is not None:
-            original, bounds = staged_evidence(selected, candidate, scene)
-            identity = ask_stage(ai, "studio_staged_identity", STAGED_IDENTITY, {
-                "product_detail": candidate.get("art_direction_plan", {}).get("evidence"),
-                "staging_intent": revision.get("staging_intent"),
-            }, [to_float(original), to_float(scene.crop(bounds)), to_float(scene)])
-            match = identity.get("match")
-            if type(match) is not bool:
-                raise ValueError("옮긴 상품의 원본 대조 결과를 확인하지 못했습니다")
-            observation = required_text(identity, "observation", "옮긴 상품 검토")
+            match, observation = check_staged_identity(ai, selected, candidate, scene)
             record("staged_identity", version=name, match=match, observation=observation)
             if not match:
                 return "product", observation

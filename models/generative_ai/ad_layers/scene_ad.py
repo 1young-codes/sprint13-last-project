@@ -964,7 +964,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
     staged_view = None
     moved_piece = None
     if group is not None:
-        product, observation = group
+        product, moved_piece, observation = group
         revision_info.update(staged_group=True, staging_observation=observation)
         staged_view = to_float(on_gray(product))
     elif staging_intent:

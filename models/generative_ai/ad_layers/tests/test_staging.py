@@ -74,10 +74,11 @@ def test_group_staging_places_every_source_component_once_without_resizing():
             assert all(image.shape[:2] == (180, 100) for image in images[2:])
             return '{"choice":"columns_2","reason":"세 번째 상품이 앞쪽에서 분명히 보입니다"}'
 
-    result, _ = stage_group(Reviewer(), photo, source_parts(mask), (100, 180), to_float(photo), "가로 배열", {})
+    result, highlight, _ = stage_group(Reviewer(), photo, source_parts(mask), (100, 180), to_float(photo), "가로 배열", {})
     assert result.height > result.width
     pixels = np.asarray(result)
     for color in colors:
         assert (pixels == (*color, 255)).all(axis=2).sum() == 18 * 31
     assert (pixels[-1] == (*colors[2], 255)).all(axis=1).any()
+    assert np.array_equal(np.asarray(highlight.getchannel("A")) > 0, (pixels == (*colors[2], 255)).all(axis=2))
     assert calls == ["ad_format_group_hero", "ad_format_group_check"]
