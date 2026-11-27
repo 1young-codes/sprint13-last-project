@@ -93,6 +93,8 @@ python -m models.generative_ai.ad_layers.scene_ad photos/items.json photos outpu
 
 `studio`는 [마케팅 스튜디오에서 조사한 흐름](marketing_studio_workflow.md)을 로컬 광고 도구로 연결합니다. 상품 정보와 사진을 받아 시안을 만들거나 기존 시안을 엽니다. `gpt-6-luna`가 시안의 사진과 글자를 보고 관찰 내용을 작성합니다. 문제와 사용 가능한 작업으로 가이드를 찾은 뒤, 글자 편집, 사진 영역 편집, 장면 재생성 중 필요한 동작을 실행합니다. 전후를 나란히 보고 다음 작업의 기준으로 쓸 버전을 고릅니다.
 
+[사진과 포스터 연출 가이드](art_direction_guides.md)는 상품에서 보여 줄 특징을 먼저 고르는 근거를 기록합니다. 촬영 각도와 거리, 광고 목적에 따른 글자 위계를 정한 뒤 렌더링 결과를 봅니다. 다음 수정에는 앞서 바꿔 본 내용과 그 뒤에도 남아 있는 문제를 함께 전달합니다.
+
 ```bash
 python -m models.generative_ai.ad_layers.studio 사진.png 상품.json outputs/studio \
     --references 참고.png --formats 4:5 9:16 16:9 thumbnail --low-vram
