@@ -17,6 +17,8 @@ MAX_HEADLINE_LENGTH = 24
 
 PLANNING = """You handle the ad strategy. Decide on one message for this product.
 Use the photo, supplied facts and owner's idea to choose one appeal the ad can demonstrate visually.
+An editor_suggestion, if supplied, is optional creative direction. Check its details against the photo and
+the owner's input. Do not infer visible contents, variants or varieties from a broad product name.
 Return JSON with "message" (one Korean sentence about what viewers should take away) and "evidence"
 (a Korean sentence identifying the exact supplied or visible fact supporting it). Do not write ad copy yet."""
 
@@ -24,6 +26,8 @@ DIRECTION = """You handle photographic direction. Keep the supplied strategy and
 Use the photo to identify the product features to retain and emphasize. Choose the setting, camera viewpoint,
 lighting direction, palette and product detail that makes the agreed message visible. Change the background
 when it serves that message. Describe the intended scene, leaving placement decisions to the layout stage.
+Use editor_suggestion only if it serves the strategy without changing what product is shown. Any prop should
+read as a setting element and never as another included product.
 Return only JSON with one English string, "scene". Do not write ad copy."""
 
 COPY = f"""You write the headline. Express the agreed message as one short, natural Korean campaign line
@@ -84,13 +88,14 @@ def layout_boxes(answer):
     return {"boxes": boxes, "reading_order": order, "typography": required_text(answer, "typography", "레이아웃")}
 
 
-def plan_copy(ai, photo, fields, idea):
+def plan_copy(ai, photo, fields, idea, *, start_direction=None):
     inputs = {key: fields[key] for key in ("product_name", "unit", "usage_example", "notes") if key in fields}
+    direction_inputs = inputs | ({"editor_suggestion": start_direction} if start_direction else {})
     photo_inputs = [to_float(photo)]
-    strategy = ask_stage(ai, "ad_plan", PLANNING, inputs | {"owner_idea": idea}, photo_inputs)
+    strategy = ask_stage(ai, "ad_plan", PLANNING, direction_inputs | {"owner_idea": idea}, photo_inputs)
     plan = {key: required_text(strategy, key, "기획") for key in ("message", "evidence")}
 
-    direction = ask_stage(ai, "ad_direction", DIRECTION, inputs | {"idea": idea, "plan": plan}, photo_inputs)
+    direction = ask_stage(ai, "ad_direction", DIRECTION, direction_inputs | {"idea": idea, "plan": plan}, photo_inputs)
     scene = required_text(direction, "scene", "연출")
 
     if "headline" in fields:

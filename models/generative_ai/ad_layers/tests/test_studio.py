@@ -338,8 +338,9 @@ def test_studio_creates_the_first_draft_with_the_selected_route(tmp_path, draft,
 
     ai = Agent()
 
-    def make(photo, facts, idea, models, output, *, references):
-        assert facts == fields and "Show the candle wax" in idea
+    def make(photo, facts, idea, models, output, *, references, start_direction):
+        assert facts == fields and idea == "재질 강조"
+        assert "Show the candle wax" in start_direction
         assert not references and models["ai"] is ai
         shutil.copytree(folder, output)
 

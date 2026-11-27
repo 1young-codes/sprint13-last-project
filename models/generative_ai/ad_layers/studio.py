@@ -20,7 +20,10 @@ from .studio_guides import START_GUIDES, find_actions
 
 START = """Choose how to start one Korean product poster. Select one route from routes.
 The first image shows the product. Remaining images are optional composition references.
-Use the product facts and the owner's idea. JSON keys: route, instruction (specific direction), reason (Korean)."""
+Use the product facts and the owner's idea. Describe the items actually visible. A broad product name does not
+show that other varieties, variants or components are included. Keep recommendations about the photograph and
+layout, and leave the exact product identity and offer to the supplied data.
+JSON keys: route, instruction (specific creative suggestion), reason (Korean)."""
 
 LOOK = """Look at the real poster images. The first image shows the source product. Then see the posters in
 version_order, followed by those same posters at phone-feed size from left to right. Any images after the
@@ -162,8 +165,8 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
             raise ValueError("광고를 시작할 작업을 고르지 못했습니다")
         instruction = required_text(start, "instruction", "광고 시작")
         record("start", route=route, reason=required_text(start, "reason", "광고 시작"), instruction=instruction)
-        make_scene_ad(photo, fields, f"{idea}\n{routes[route]} {instruction}", generation() | {"ai": ai}, first,
-                      references=references)
+        make_scene_ad(photo, fields, idea, generation() | {"ai": ai}, first, references=references,
+                      start_direction=f"{routes[route]} {instruction}")
     record("poster", version=current, image=(first / "ad.png").relative_to(output).as_posix())
 
     pending = None

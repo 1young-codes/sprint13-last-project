@@ -86,6 +86,29 @@ def test_briefs_flow_from_distinct_product_inputs_to_generation(tmp_path, monkey
     assert all((output / ad["file"]).is_file() for ad in plan["ads"])
 
 
+def test_editor_suggestion_is_separate_from_owner_input_and_copy():
+    stages = []
+
+    class Interpreter:
+        def ask(self, step, images, text, *, model):
+            stages.append(step)
+            data = json.loads(text.split("Input JSON follows:\n", 1)[1])
+            if step == "ad_plan":
+                assert data["owner_idea"] == "표면의 질감을 강조"
+                assert data["editor_suggestion"] == "두 가지 변형을 배치"
+                return '{"message":"표면의 질감","evidence":"사진에서 한 종류만 보임"}'
+            if step == "ad_direction":
+                assert data["idea"] == "표면의 질감을 강조"
+                assert data["plan"]["evidence"] == "사진에서 한 종류만 보임"
+                return '{"scene":"Light the visible surface from the side"}'
+            assert "editor_suggestion" not in data
+            return '{"headline":"표면을 따라 흐르는 빛"}'
+
+    creative_brief.plan_copy(Interpreter(), Image.new("RGB", (20, 12)), {"product_name": "계절 상품"},
+                            "표면의 질감을 강조", start_direction="두 가지 변형을 배치")
+    assert stages == ["ad_plan", "ad_direction", "ad_headline"]
+
+
 def test_brainstorm_stops_when_earlier_stage_is_incomplete():
     class Interpreter:
         def ask(self, step, images, text, *, model):

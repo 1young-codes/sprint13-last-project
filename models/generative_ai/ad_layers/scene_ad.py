@@ -139,6 +139,8 @@ Use the approved artwork box and copy positions to describe the subject and quie
 Describe the camera framing, the exact visible effect, and how its light, material or gesture leads towards the
 planned type. Translate the selected lighting into visible highlights and shadows on named parts of the product.
 Keep the product prominent and recognizable, with its visible details, packaging and labels.
+Describe the actual foreground item and its visible contents concretely. Preserve the visible kinds of items.
+If the product name is broader than the photograph, do not fill in other items, varieties or components.
 When there is a product demonstration, describe exactly what supports each object and the physical relationship
 of the moving parts. Use surroundings and props only where they serve this particular image or the owner's
 request. Follow the agreed crop. State only what the generated photograph should show. Include no ad text,
@@ -591,7 +593,7 @@ def preview_artwork(photo, artwork, canvas_size, design):
 
 
 def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview=False, proposal=None, previous=None,
-                  rejected=None, feedback=None, scene_issue=None):
+                  rejected=None, feedback=None, scene_issue=None, start_direction=None):
 
     if folder.exists():
         raise FileExistsError(folder)
@@ -607,7 +609,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
     kept = prior or proposal
     if kept and kept["fields"] != fields:
         raise ValueError("시안의 상품 정보가 현재 입력과 다릅니다")
-    brief = kept["brief"] if kept else plan_copy(ai, photo, fields, idea)
+    brief = kept["brief"] if kept else plan_copy(ai, photo, fields, idea, start_direction=start_direction)
     copy = {"headline": brief["headline"], "product_name": fields["product_name"],
             "price": f"{fields['price_krw']:,}원"}
     canvas = settings["canvas"]
@@ -753,7 +755,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             guide += f"{art_plan['photo_device']} "
         prompt = ("Make a new commissioned photograph with a newly built setting and lighting. "
                   f"{correction}{placement}{guide}Replace the surroundings with the requested setting. "
-                  "Keep the product shape, material and details. "
+                  "Keep the product shape, material, visible components and varieties shown in the reference. "
+                  "Do not introduce additional products or interchangeable variants. "
                   f"{answer['art_direction']} Preserve the recognizable product details and genuine packaging labels. "
                   "Keep surroundings, props and surfaces free of stray lettering, numbers and logos. "
                   "Add no advertising text or overlays.")
