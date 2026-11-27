@@ -115,6 +115,110 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft, monkey
         assert poster.size == (600, 600)
 
 
+@pytest.mark.parametrize(("staged", "ready"), [(True, True), (False, False)])
+def test_native_format_reuses_approved_copy_and_publishes_only_after_review(tmp_path, draft, monkeypatch, staged, ready):
+    folder, fields = draft
+    approved = load_layout(folder)
+    approved["brief"] = {"headline": "다듬기 전 제목", "message": "포근한 겨울 저녁을 보여 줍니다"}
+    approved["source_framing"] = {"source_crop": None, "reason": "용기까지 보여 줍니다"}
+    approved["art_direction_plan"] = {"theme": "lifestyle", "angle": "three_quarter", "shot_scale": "whole",
+                                      "lighting": "motivated", "evidence": "실제 용기", "photo_device": "Warm lamp light"}
+    save_layout(approved, folder)
+    photo = Image.new("RGB", (100, 100), "orange")
+    calls = []
+    issue = studio_formats.FormatPhotoIssue("세로 축에 사진의 단서가 없습니다", Image.new("RGB", (1080, 1920)))
+
+    class Model:
+        def use_lora(self, *_):
+            pass
+
+        def edit(self, reference, prompt, seed, steps, *, size):
+            assert reference.size == size == (768, 1365)
+            assert prompt.startswith("Compose for this vertical photograph")
+            assert "Warm lamp light" in prompt
+            calls.append("photo")
+            return Image.new("RGB", size, "orange")
+
+        def edit_with_reference(self, original, guide, prompt, seed, steps):
+            assert original.size == (640, 640) and original.getpixel((0, 0)) == photo.getpixel((0, 0))
+            assert "Keep each piece once" in prompt
+            return self.edit(guide, prompt, seed, steps, size=guide.size)
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            calls.append(step)
+            data = json.loads(request.split("Input JSON follows:\n", 1)[1])
+            if step == "ad_format_staging":
+                assert data["target_canvas"] == [1080, 1920] and len(images) == 3
+                return '{"move":"분리된 작은 용기를 같은 탁자의 앞쪽으로 옮깁니다"}'
+            if step == "ad_staging":
+                return '{"source_point":[25,40],"target_base":[40,90],"reason":"실제 앞쪽으로 이동합니다"}'
+            if step == "ad_staging_check":
+                return '{"ready":true,"observation":"앞쪽 위치에서 실루엣이 온전히 보입니다"}'
+            if step == "ad_layout":
+                assert data["canvas_size"] == [1080, 1920]
+                assert data["copy"]["headline"] == "포근한 겨울 저녁"
+                assert data["revision_feedback"]["format_issue"] == str(issue)
+                assert len(images) == (3 if staged else 2)
+                answer = approved["design"] | {"subject_box": [67, 32, 20, 50]}
+                if staged:
+                    answer["boxes"] = answer["boxes"] | {"product_name": answer["boxes"]["headline"]}
+                return json.dumps(answer)
+            if step == "ad_composition":
+                if calls.count(step) == 1:
+                    return '{"ready":false,"reason":"위쪽이 무의미하게 비어 있습니다","revision":null}'
+                assert data["layout_error"] == "위쪽이 무의미하게 비어 있습니다"
+                if staged:
+                    return '{"ready":false,"reason":"제품명과 가격이 여전히 떨어져 있습니다","revision":null}'
+                return '{"ready":true,"reason":"제목과 용기가 같은 축에 보입니다","revision":null}'
+            if step == "ad_format_measured_layout":
+                assert data["layout_error"] == "제품명과 가격이 여전히 떨어져 있습니다"
+                assert len(images) == len(data["option_order"]) + 1
+                return json.dumps({"placement": data["option_order"][0], "reason": "상품 옆에서 문구가 이어집니다"})
+            if step == "ad_scene_direction":
+                assert data["target_photo_aspect"] == [1080, 1920]
+                assert "approved_design" not in data
+                assert len(images) == (4 if staged else 3)
+                return '{"scene":"Warm lamp light guides the eye from the vessel."}'
+            if step == "ad_final_layout":
+                return '{"revision":null}'
+            assert step == "studio_format_native_review"
+            assert data["copy"]["price"] == "18,000원" and data["has_attempted_resize"]
+            assert data["has_moved_piece"] == staged and len(images) == (7 if staged else 5)
+            assert images[-2].shape[:2] == (1920, 1080)
+            assert images[-1].shape[:2] == (640, 360)
+            return json.dumps({"ready": ready, "observation": "세로로 이어지는 빛을 확인했습니다"})
+
+    def product_mask(_, pixels):
+        result = np.zeros(pixels.shape[:2], np.float32)
+        result[30:80, 65:92] = 1
+        if staged and pixels.shape[:2] == (100, 100):
+            result[30:56, 15:32] = 1
+        return result
+
+    from models.generative_ai.photo_retouch import product_mask as segmentation
+    monkeypatch.setattr(segmentation, "product_mask", product_mask)
+    monkeypatch.setattr(format_layout, "measure_texts", lambda probes, _: {row["role"]: (100, 35) for row in probes})
+    output = tmp_path / "native"
+    if not ready:
+        with pytest.raises(ValueError, match="새 구도를 확정하지"):
+            studio_formats.rebuild_format(folder, output, "9:16", photo, fields, "", Agent(),
+                                          {"mask": "mask", "generation": Model()}, (), issue)
+        assert not output.exists()
+    else:
+        framing = studio_formats.rebuild_format(folder, output, "9:16", photo, fields, "", Agent(),
+                                                {"mask": "mask", "generation": Model()}, (), issue)
+        assert framing["method"] == "native"
+        assert load_layout(output)["format"] == "9:16"
+        assert (output / "ad.png").exists()
+        assert (output / "staging.png").exists() == staged
+    stages = ["ad_format_staging", "ad_staging", "ad_staging_check"] if staged else []
+    plans = ["ad_layout", "ad_layout"] if staged else ["ad_layout"]
+    measured = ["ad_format_measured_layout"] if staged else []
+    assert calls == [*stages, *plans, "ad_composition", "ad_composition", *measured, "ad_scene_direction", "photo",
+                     "ad_final_layout", "studio_format_native_review"]
+
+
 def test_detail_repair_keeps_photo_pixels_and_lettering_outside_the_box(tmp_path, draft):
     folder, _ = draft
     layout = load_layout(folder)

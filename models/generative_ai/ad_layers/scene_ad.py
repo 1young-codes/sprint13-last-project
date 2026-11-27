@@ -3,6 +3,7 @@
 import argparse
 import json
 import re
+from math import sqrt
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -67,7 +68,8 @@ depth when the type belongs in clear space. For the headline only, optional emph
 the photograph draws attention to the corresponding words. Keep sufficient contrast. Use null to omit it.
 For a deliberately two-line headline, optional styles.headline.lines contains two objects in reading order.
 Each has a non-overlapping box inside the headline's outer box, in whole poster percentages, and may override
-size, align, color, font or depth. Use break_after to choose the exact words on each line. Set distinct positions
+size, align, color, font or depth. For an override, depth can be only front or behind_subject. Use break_after
+to choose the exact words on each line. Set distinct positions
 or scales only when each clause has a visible role, such as a quiet lead-in and a short line near the subject.
 If a prior design failed, address the reported issue."""
 
@@ -190,6 +192,16 @@ When there is a product demonstration, describe exactly what supports each objec
 of the moving parts. Use surroundings and props only where they serve this particular image or the owner's
 request. Follow the agreed crop. State only what the generated photograph should show. Include no ad text,
 graphics, coordinates or layout markup. Return JSON with one string, 'scene'."""
+
+FORMAT_STAGING = """The first image is the source product, the second the approved campaign, and the
+third the isolated original product. Choose whether to physically move one already visible, independently
+movable piece in the source to create a better reading path for target_canvas. Look at how the current
+group runs across the source. If it sits on the wrong axis, consider pulling one real piece forward or
+sliding it sideways on the same surface to give the group depth or direction. Preserve all product
+variants, count, proportions and the campaign's visible motif. Do not propose moving an attached part
+or changing size, camera angle, or the surface. Return {"move": "name the actual piece, new location and
+desired visible geometry in one staging instruction"} or {"move": null} if the existing arrangement fits
+or a safe move cannot resolve format_issue."""
 
 
 def is_color(value):
@@ -452,24 +464,77 @@ def composition_preview(product, design, layout, folder):
     return compose(layout, folder), foreground
 
 
+def touches_photo_edge(mask):
+    return mask[[0, -1], :].any() or mask[:, [0, -1]].any()
+
+
+def measured_format_composition(ai, design, layout, folder, foreground, first, inputs):
+    from .format_layout import format_measurements, measured_styles, position_options, preview_placement
+
+    size = tuple(layout["size"])
+    artwork = layout["artwork"]
+    x, y, w, h = (artwork[key] for key in ("x", "y", "w", "h"))
+    mask = np.zeros((size[1], size[0]), bool)
+    mask[y:y + h, x:x + w] = foreground
+    box = Image.fromarray(mask).getbbox()
+    if box is None:
+        return None
+    bounds = [round(100 * edge / limit) for edge, limit in zip(box, size * 2, strict=True)]
+    measured = layout | {"design": design}
+    options = position_options(measured, size, mask, bounds, format_measurements(measured, size))
+    if not options:
+        return None
+    artwork_only = compose(layout | {"texts": [], "graphic": None}, folder)
+    previews = [to_float(preview_placement(artwork_only, layout, folder, plan)) for plan in options.values()]
+    answer = ask_stage(ai, "ad_format_measured_layout",
+                       "Image 1 is the rejected native layout. The remaining images use the same actual subject "
+                       "and exact legible words, placed near its silhouette in option_order. Choose the one that "
+                       "visibly resolves format_issue and layout_error. Consider both the lines of the headline "
+                       "and the product name and price as groups. Check the full frame on the long axis. "
+                       "Return placement as one option key or null if none works, and reason in Korean.",
+                       {"option_order": list(options), "format_issue": inputs["revision_feedback"]["format_issue"],
+                        "layout_error": inputs.get("layout_error"), "copy": inputs["copy"]},
+                       [to_float(first), *previews])
+    placement = answer.get("placement")
+    if not isinstance(placement, str) or placement not in options:
+        return None
+    plan = options[placement]
+    revised = design | {"boxes": plan["boxes"], "styles": measured_styles(design, plan), "accent": None}
+    return revised, required_text(answer, "reason", "게시 규격의 실제 글자 배치")
+
+
 def review_composition_plan(ai, product, design, layout, folder, inputs, images):
     first, foreground = composition_preview(product, design, layout, folder)
     photo_input = [to_float(first), *images]
     review_input = inputs | {"design": design, "rendered_text_bounds": rendered_text_bounds(layout, folder)}
     task = BLOCKING + "\n" + DESIGN_SCHEMA
+    format_issue = inputs.get("revision_feedback", {}).get("format_issue")
+    if format_issue:
+        task += ("\nThe draft is for the target canvas_size. Check the visible geometry against format_issue. "
+                 "If the same gap or disconnected offer remains, revise the shared geometry, including the "
+                 "first focal point and negative space. Future lighting alone is not a geometry change. "
+                 "When crop is preserve, keep a clear edge around the actual silhouette. Increase its span "
+                 "along the long axis using composition, not stretching or squeezing every edge. "
+                 "When returning revision null, also return ready true only if the actual draft resolves the issue.")
     if "layout_device" in inputs.get("revision_feedback", {}):
         task += ("\nTest how revision_feedback.layout_device appears in the rendered draft. "
                  "If it only exists in the written plan, move or resize the artwork, lettering or graphic "
                  "until the visible relationship is present. Judge the intended effect at a small size.")
     if "source_framing" in inputs:
         task += "\nKeep the chosen source_framing. Adjust placement, scale and type around that photographed view."
+
+    def check_draft(mask, plan, candidate_layout, candidate_folder):
+        check_text_overlap(mask, candidate_layout, candidate_folder)
+        if format_issue and plan["crop"] == "preserve" and touches_photo_edge(mask):
+            raise ValueError("전체를 보여 줄 상품이 사진 가장자리에 닿습니다")
+
     editable = {"concept", "focus", "background", "accent", "artwork_box", "subject_box", "crop", "source_crop",
                 "edge", "boxes", "styles"}
     if "source_framing" in inputs:
         editable -= {"crop", "source_crop"}
     original_valid = True
     try:
-        check_text_overlap(foreground, layout, folder)
+        check_draft(foreground, design, layout, folder)
     except ValueError as error:
         original_valid = False
         review_input["layout_error"] = str(error)
@@ -479,25 +544,45 @@ def review_composition_plan(ai, product, design, layout, folder, inputs, images)
         review = ask_stage(ai, "ad_composition", task, review_input, photo_input)
         revision = review.get("revision")
         if not isinstance(revision, dict):
+            if format_issue:
+                observation = required_text(review, "reason", "게시 규격 촬영 전 검토")
+                if review.get("ready") is not True or not original_valid:
+                    review_input["layout_error"] = observation
+                    continue
+                kept_reason = observation
             break
         changed = design | {key: revision[key] for key in editable & revision.keys()}
         if changed == design:
+            if format_issue:
+                review_input["layout_error"] = "현재 배열에서 달라진 항목이 없습니다"
+                continue
             break
         with TemporaryDirectory(dir=folder) as temporary:
             candidate = Path(temporary)
             try:
                 revised = design_layers(changed, inputs["copy"], tuple(layout["size"]), inputs["fonts"], candidate)
                 rendered, foreground = composition_preview(product, changed, revised, candidate)
-                check_text_overlap(foreground, revised, candidate)
+                check_draft(foreground, changed, revised, candidate)
             except ValueError as error:
                 review_input.update(rejected_design=changed, layout_error=str(error))
                 continue
             reason = required_text(review, "reason", "촬영 전 구도 검토")
             if original_valid:
-                comparison = ask_stage(ai, "ad_composition_compare", BLOCKING_COMPARE,
-                                       {"proposed_change": reason, "copy": inputs["copy"]},
+                compare_task = BLOCKING_COMPARE
+                compare_inputs = {"proposed_change": reason, "copy": inputs["copy"]}
+                if format_issue:
+                    compare_task += (" Return choice neither if both drafts repeat format_issue or only change "
+                                     "position without visibly solving the reading path.")
+                    compare_inputs["format_issue"] = format_issue
+                comparison = ask_stage(ai, "ad_composition_compare", compare_task, compare_inputs,
                                        [to_float(first), to_float(rendered), *images[1:]])
                 choice = comparison.get("choice")
+                if choice == "neither" and format_issue:
+                    review_input["layout_error"] = required_text(comparison, "reason", "게시 규격 구도 비교")
+                    review_input["rejected_design"] = changed
+                    photo_input = [to_float(first), *images, to_float(rendered)]
+                    task += "\nThe final image shows a rejected placement. Address layout_error without repeating it."
+                    continue
                 if choice == "original":
                     kept_reason = required_text(comparison, "reason", "촬영 전 구도 비교")
                     break
@@ -511,6 +596,21 @@ def review_composition_plan(ai, product, design, layout, folder, inputs, images)
             if "graphic" in layout and "graphic" not in revised:
                 (folder / layout["graphic"]["file"]).unlink()
             return changed, revised, reason
+    if format_issue and not kept_reason:
+        anchored = None
+        if design["crop"] != "preserve" or not touches_photo_edge(foreground):
+            anchored = measured_format_composition(ai, design, layout, folder, foreground, first, review_input)
+        if not anchored:
+            raise ValueError(f"게시 규격에 맞는 촬영 전 구도를 찾지 못했습니다. {review_input.get('layout_error', format_issue)}")
+        changed, kept_reason = anchored
+        anchored_layout = design_layers(changed, inputs["copy"], tuple(layout["size"]), inputs["fonts"], folder)
+        rendered, foreground = composition_preview(product, changed, anchored_layout, folder)
+        check_draft(foreground, changed, anchored_layout, folder)
+        if graphic := layout.get("graphic"):
+            (folder / graphic["file"]).unlink()
+        first.save(folder / "before-composition.png")
+        rendered.save(folder / "composition.png")
+        return changed, anchored_layout, kept_reason
     first.save(folder / "composition.png")
     return design, layout, kept_reason
 
@@ -739,7 +839,7 @@ def preview_artwork(photo, artwork, canvas_size, design):
 
 def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview=False, proposal=None, previous=None,
                   rejected=None, feedback=None, scene_issue=None, start_direction=None, viewpoint=None,
-                  campaign_intent=None):
+                  campaign_intent=None, format_rebuild=None):
 
     if folder.exists():
         raise FileExistsError(folder)
@@ -753,6 +853,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         raise ValueError("장면을 수정하려면 기준이 되는 완성본이 필요합니다")
     if campaign_intent and (not previous or feedback):
         raise ValueError("새 연출에는 기존 포스터와 하나의 연출 의도가 필요합니다")
+    if format_rebuild is not None and (not previous or feedback or campaign_intent or rejected or viewpoint):
+        raise ValueError("게시 규격에 맞춘 새 구도에는 채택한 포스터가 필요합니다")
     prior = load_layout(previous) if previous else None
     kept = prior or proposal
     if kept and kept["fields"] != fields:
@@ -762,6 +864,9 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             "price": f"{fields['price_krw']:,}원"}
     canvas = settings["canvas"]
     size = (canvas["width"], canvas["height"])
+    if format_rebuild is not None:
+        size, format_issue = format_rebuild
+        copy = {text["role"]: text["text"] for text in prior["texts"]}
     images = [to_float(photo), *map(to_float, references)]
     revision_info = {"requested_scene_change": feedback} if feedback else None
     design_images = images
@@ -775,9 +880,11 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             raise ValueError("사진 생성이 끝난 광고만 개선에 사용할 수 있습니다")
         with Image.open(previous / "ad.png") as finished:
             prior_image = to_float(finished)
-        if feedback:
+        if feedback or format_rebuild is not None:
             design_images = [images[0], prior_image, *images[1:]]
-    if prior and not feedback:
+    if format_rebuild is not None:
+        revision_info = {"format_issue": format_issue}
+    elif prior and not feedback:
         previous_design = prior.get("design", {})
         inputs = {"brief": brief, "copy": copy, "previous_concept": previous_design.get("concept", brief["message"])}
         inputs["previous_art_direction"] = previous_design.get("art_direction", prior.get("scene_prompt"))
@@ -835,10 +942,21 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
     if revision_info:
         design_input.update(brief={"message": brief["message"], "evidence": brief.get("evidence")},
                             idea=idea, revision_feedback=revision_info)
-    art_plan = proposal.get("art_direction_plan") if proposal else plan_art_direction(
-        ai, fields, design_input["brief"] | {"headline": copy["headline"]}, idea, images, revision_info)
+    art_plan = kept.get("art_direction_plan") if proposal or format_rebuild is not None else None
+    if art_plan is None and not proposal:
+        art_plan = plan_art_direction(ai, fields, design_input["brief"] | {"headline": copy["headline"]}, idea,
+                                      images, revision_info)
     if mask_model is not None and source_mask is None:
         product, source_mask = extract_subject(photo, mask_model, threshold)
+    if format_rebuild is not None and product is not None and prior["design"].get("source_crop") is None:
+        parts = source_parts(source_mask)
+        if parts is not None:
+            staging = ask_stage(ai, "ad_format_staging", FORMAT_STAGING,
+                                {"target_canvas": size, "format_issue": format_issue, "copy": copy},
+                                [images[0], prior_image, to_float(on_gray(product))])
+            if staging.get("move") is not None:
+                staging_intent = required_text(staging, "move", "게시 규격의 상품 배치")
+                revision_info["staging_intent"] = staging_intent
     moved_view = None
     staged_view = None
     if staging_intent:
@@ -856,6 +974,9 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         source_framing = {"source_crop": None, "reason": revision_info["staging_observation"]}
     elif moved_view is not None:
         source_framing = {"source_crop": None, "reason": "새 촬영 시점에서 상품의 구성을 유지합니다"}
+    elif format_rebuild is not None:
+        crop = prior["design"].get("source_crop")
+        source_framing = {"source_crop": crop, "reason": "채택한 광고의 상품 촬영 범위를 유지합니다"}
     elif not proposal and product is not None:
         framing_input = design_input | {"art_direction_plan": art_plan, "idea": idea}
         if scene_issue:
@@ -882,7 +1003,15 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             crop = source_framing["source_crop"]
             frame_fields = {"source_crop": crop, "crop": "preserve" if crop is None else "intentional"}
             design_task += "\nSource framing is approved. Use source_framing and lay out the actual view without changing it."
-        if feedback:
+        if format_rebuild is not None:
+            design_input["approved_concept"] = prior["design"]["concept"]
+            design_task += ("\nThe second image is the selected campaign poster. Keep the existing campaign idea, "
+                            "visible product assortment, visual motif and typographic voice. Solve format_issue by "
+                            "planning the photograph and type together for canvas_size from the beginning. Think in the "
+                            "long axis of the new frame. Use camera depth, the direction of the photographic cue or "
+                            "relative subject and headline scale. Do not center the old composition between two "
+                            "background-only bands or invent new product components. Treat the first image as identity.")
+        elif feedback:
             design_task += ("\nThe second image is the previous poster. Plan the requested_scene_change in revision_feedback "
                             "and preserve unaffected parts of that composition.")
             if scene_issue:
@@ -913,7 +1042,15 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 raise
             retry = design_input | {"previous_design": answer, "layout_error": str(error)}
             answer = ask_stage(ai, "ad_layout", design_task, retry, design_images) | frame_fields
-            layout = design_layers(answer, copy, size, settings["fonts"], result)
+            try:
+                layout = design_layers(answer, copy, size, settings["fonts"], result)
+            except ValueError:
+                if format_rebuild is None:
+                    raise
+                # Start the placement check with known approved lettering when the proposed typography is invalid.
+                approved = prior["design"]
+                answer = answer | {"boxes": approved["boxes"], "styles": approved["styles"], "accent": None}
+                layout = design_layers(answer, copy, size, settings["fonts"], result)
             effective = crop_subject(product, answer)
 
         composition_reason = proposal.get("composition_reason") if proposal else None
@@ -926,6 +1063,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         if detail_shot and art_plan:
             art_plan = art_plan | {"shot_scale": "detail"}
             design_input["art_direction_plan"]["shot_scale"] = "detail"
+        artwork = layout["artwork"]
         if not proposal:
             direction_input = {"message": brief["message"], "idea": idea, "design": answer}
             angle, scale = ANGLES[art_plan["angle"]], SHOT_SCALES[art_plan["shot_scale"]]
@@ -939,6 +1077,13 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             if revision_info:
                 direction_input.update(revision_info)
             direction_task = PHOTO_DIRECTION + "\nKeep the selected angle, framing, and photo_device in the scene."
+            if format_rebuild is not None:
+                direction_input["target_photo_aspect"] = [artwork["w"], artwork["h"]]
+                direction_input["approved_effect_hint"] = prior.get("revision", {}).get("visible_result")
+                direction_task += (" Arrange the subject and lighting for the new composition and art region. "
+                                   "Use perspective, directional light or meaningful surroundings across the long axis. "
+                                   "Follow the new placement preview and target_photo_aspect. Omit any description "
+                                   "of aspect ratio from scene.")
             if detail_shot:
                 direction_task += "\nThe approved composition uses a detail crop. Keep that magnification in the photograph."
             direction_images = images[:1]
@@ -963,6 +1108,13 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 direction_task += ("\nThe last image is the requested viewpoint, with gray gaps to reconstruct. "
                                    "Describe the new scene at that actual angle. Keep the visible product identity and "
                                    "use the planned quiet regions for type. The camera view takes priority over angle_guide.")
+            if format_rebuild is not None:
+                direction_images.append(prior_image)
+                direction_task += (" The last image is the approved poster. Describe the specific use gesture or "
+                                   "physical effect visible in its photograph that carries the message, and keep "
+                                   "that effect on the same product in the new arrangement. The source photo and "
+                                   "neutral placement preview identify the product and geometry; they omit the effect. "
+                                   "Do not inherit the approved poster's framing, exact positions, typography or ratio.")
             if campaign_intent:
                 direction_task += ("\nLay out a real scene for the hypothesis and the approved headline position. "
                                    "Describe the path, gesture or feature that points toward the planned design. "
@@ -970,7 +1122,6 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             direction = ask_stage(ai, "ad_scene_direction", direction_task, direction_input, direction_images)
             answer = answer | {"art_direction": required_text(direction, "scene", "촬영 연출")}
 
-        artwork = layout["artwork"]
         picture_size = (artwork["w"], artwork["h"])
         subject_box = answer.get("subject_box")
         placement = ("Follow the reference's product placement and scale if it has a plain gray background. "
@@ -1006,6 +1157,12 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                       "complete them naturally with details consistent with the first image. Keep the changed angle. "
                       f"{answer['art_direction']} Preserve the actual product, components and packaging. "
                       "Add no writing, graphics or products not specified in the scene.")
+        if format_rebuild is not None:
+            orientation = "vertical" if picture_size[0] < picture_size[1] else "horizontal"
+            if picture_size[0] == picture_size[1]:
+                orientation = "square"
+            prompt = (f"Compose for this {orientation} photograph, filling its {picture_size[0]} by "
+                      f"{picture_size[1]} frame with the planned composition. {prompt}")
         if preview:
             if (result / artwork["file"]).is_file():
                 with Image.open(result / artwork["file"]) as planned:
@@ -1017,9 +1174,13 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             model = models["generation"]
             model.use_lora(None, 0)
             generation = settings["generation"]
+            render_size = picture_size
+            if format_rebuild is not None:
+                scale = min(1, sqrt(canvas["width"] * canvas["height"] / (picture_size[0] * picture_size[1])))
+                render_size = tuple(round(side * scale) for side in picture_size)
             if staged_view is not None:
                 placement_area = subject_box or [8, 8, 84, 84]
-                guide = product_reference(photo, effective, picture_size, placement_area)
+                guide = product_reference(photo, effective, render_size, placement_area)
                 guide.save(result / "staging.png")
                 piece_box = frame_subject(moved_piece, picture_size, placement_area).getbbox()
                 revision_info["staged_piece_box"] = list(piece_box)
@@ -1032,8 +1193,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 original = ImageOps.contain(photo, (640, 640), Image.Resampling.LANCZOS)
                 generated = model.edit_with_reference(original, guide, prompt, generation["seed"], generation["steps"])
             else:
-                reference = product_reference(photo, effective, picture_size, subject_box, answer.get("source_crop"))
-                generated = model.edit(reference, prompt, generation["seed"], generation["steps"], size=picture_size)
+                reference = product_reference(photo, effective, render_size, subject_box, answer.get("source_crop"))
+                generated = model.edit(reference, prompt, generation["seed"], generation["steps"], size=render_size)
             scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
             foreground = find_foreground(scene, models["mask"], threshold)
             if answer["edge"] == "blend":

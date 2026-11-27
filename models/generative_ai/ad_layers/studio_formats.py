@@ -8,9 +8,10 @@ import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
 from .creative_brief import ask_stage, required_text
-from .format_layout import format_measurements, outer_margins, position_options, preview_placement
+from .format_layout import format_measurements, measured_styles, outer_margins, position_options, preview_placement
 from .layers import compose, load_layout, load_settings, save_layout, to_float
-from .scene_ad import check_text_overlap, design_layers, rendered_text_bounds
+from .scene_ad import check_text_overlap, design_layers, make_scene_ad, rendered_text_bounds, touches_photo_edge
+from .staging import staged_evidence
 from .studio_edits import foreground_mask, line_break_after
 from .text_render import LINE_HEIGHT, minimum_font_size
 
@@ -79,16 +80,37 @@ contrast, title line grouping, and how a viewer reaches the product and price. Q
 composition are allowed. A large empty band between the title and subject, with no visible photographic cue
 across it, breaks the reading path. A pair of title lines needs to read as one phrase before the viewer reaches
 the product. Also use outer_margins to inspect the actual space outside the product and all the lettering.
-If the entire campaign is pushed toward one end with a large empty outer strip, require a visible reason for
-that space. A flat stretch with no purposeful feature does not pass. Require enough contrast and space even
-on a wide crop. Return ready (boolean) and observation
-(one concrete Korean sentence describing actual placement or what must change)."""
+Read the long axis from edge to edge. An enlarged stretch of featureless wall, floor or surface has no
+photographic purpose merely because it balances a matching empty stretch at the other end. Check whether
+the subject itself meaningfully fills the long axis and directs the eye. If the scene was originally arranged
+along the other axis, can changing the text position actually fix it without separating the words from the
+product or making the product smaller? Require enough contrast and space even on a wide crop.
+Return ready (boolean), observation (one concrete Korean sentence), and rebuild_photo (boolean, true only when
+ready is false and the photograph's arrangement or empty filled edges require a native composition)."""
+
+NATIVE_REVIEW = """Review a poster newly photographed for one publishing ratio. Image 1 is the original product
+photograph, image 2 is the approved poster, image 3 is the attempted resize when present, and the last
+two images are the new finished poster and its phone preview. If has_moved_piece is true, the two images
+immediately before the finished poster show the actual moved piece from the source and the new photo detail
+at that location. Compare its shape and material closely and verify it appears once.
+Check product identity, including the exact visible versions, essential details, visible packaging and component
+count. Image 2 defines the campaign motif and styling. Match that motif without merely framing the original
+composition in empty bands. Look along the long axis for the specific visible arrangement or photographic cue
+that solves format_issue and connects the subject, headline and offer. A change in background alone is insufficient.
+Check the required copy, its prominence and contrast at phone size, and the natural scene and edges at full size.
+Return ready (boolean) and observation (one concrete Korean sentence describing the visible improvement or defect)."""
 
 COPY_BREAK = """검토할 광고 문구를 두 줄에 놓을 때 자연스러운 첫 줄을 고릅니다.
 문구를 그대로 읽고 문장의 절이나 호흡이 끝나는 곳에서 나눕니다. 상품을 설명하는 수량과 단위, 이름처럼
 같이 읽어야 하는 묶음을 유지합니다. 첫 줄의 끝에 낱말을 외따로 남기지 마세요.
 문구를 고쳐 쓰지 마세요. 입력에 있는 각 역할을 키로 두고, 원래 문구에서 그대로 떼어낸 첫 줄 또는
 자연스러운 줄바꿈이 없다는 뜻의 null을 값으로 하는 JSON 객체를 반환하세요."""
+
+
+class FormatPhotoIssue(ValueError):
+    def __init__(self, observation, poster=None):
+        super().__init__(observation)
+        self.poster = poster
 
 
 def extend_edges(contained, size, placement):
@@ -258,24 +280,9 @@ def selected_placement(answer, options, design):
         raise ValueError("계산한 게시 규격 배치 중 하나를 골라야 합니다")
     plan = options[name]
     colors = answer.get("colors", {})
-    line_roles = [f"headline_line_{index}" for index, _ in enumerate(plan["headline_lines"], 1)]
-    if not isinstance(colors, dict) or colors.keys() - (plan["boxes"].keys() | set(line_roles)):
+    if not isinstance(colors, dict):
         raise ValueError("게시 규격 문구의 색상을 확인하지 못했습니다")
-    styles = {role: style.copy() for role, style in design["styles"].items()}
-    for role in styles.keys() & plan["font_sizes"].keys():
-        styles[role]["size"] = plan["font_sizes"][role]
-    for role in colors.keys() & styles.keys():
-        styles[role]["color"] = colors[role]
-    if plan["headline_lines"]:
-        headline = styles["headline"]
-        rows = []
-        for line, box, role in zip(headline["lines"], plan["headline_lines"], line_roles, strict=True):
-            row = line | {"box": box, "size": plan["font_sizes"][role]}
-            if role in colors or "headline" in colors:
-                row["color"] = colors[role] if role in colors else colors["headline"]
-            rows.append(row)
-        headline["lines"] = rows
-    return {"boxes": plan["boxes"], "styles": styles, "accent": None}
+    return {"boxes": plan["boxes"], "styles": measured_styles(design, plan, colors), "accent": None}
 
 
 def adapt_format(source, output, format_name, ai, expand=None):
@@ -341,7 +348,7 @@ def adapt_format(source, output, format_name, ai, expand=None):
         if answer.get("ready") is not False or side not in sides:
             raise ValueError("게시 규격에서 채운 사진 가장자리의 검토 위치를 확인하지 못했습니다")
         if method == "relocated":
-            raise ValueError(f"게시 규격에서 사진의 새 가장자리를 확정하지 못했습니다. {observation}")
+            raise FormatPhotoIssue(f"게시 규격에서 사진의 새 가장자리를 확정하지 못했습니다. {observation}")
         if method == "initial":
             position_info.update(margin_side=side, margin_rejection=observation)
         return side
@@ -394,6 +401,8 @@ def adapt_format(source, output, format_name, ai, expand=None):
             if type(review.get("ready")) is not bool:
                 raise ValueError("게시 규격의 글자와 상품 배치 판정을 확인하지 못했습니다")
             if not review["ready"]:
+                if review.get("rebuild_photo") is True:
+                    raise FormatPhotoIssue(reading, poster)
                 inputs.update(layout_error=reading, previous_layout=revised)
                 inputs["previous_placement"] = answer.get("placement")
                 images[3:] = [to_float(poster)]
@@ -411,3 +420,37 @@ def adapt_format(source, output, format_name, ai, expand=None):
             stage.rename(output)
             return position_info
     raise ValueError(inputs["layout_error"])
+
+
+def rebuild_format(source, output, format_name, photo, fields, idea, ai, models, references, issue):
+    size = FORMATS[format_name]
+    approved = load_layout(source)
+    copy = {row["role"]: row["text"] for row in approved["texts"]}
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(dir=output.parent) as temporary:
+        folder = Path(temporary) / "candidate"
+        layout = make_scene_ad(photo, fields, idea, models | {"ai": ai}, folder, previous=source,
+                               references=references, format_rebuild=(size, str(issue)))
+        if tuple(layout["size"]) != size or {row["role"]: row["text"] for row in layout["texts"]} != copy:
+            raise ValueError("새 구도에서 채택 시안의 규격 또는 문구가 달라졌습니다")
+        if layout["design"]["crop"] == "preserve" and touches_photo_edge(foreground_mask(folder, layout)):
+            raise ValueError("새 게시용 사진에서 전체를 보여 줄 상품이 사진 가장자리에 닿습니다")
+        with Image.open(source / "ad.png") as reference, Image.open(folder / "ad.png") as poster:
+            phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
+            before = [to_float(issue.poster)] if issue.poster is not None else []
+            details = []
+            if layout.get("revision", {}).get("staged_piece_box") is not None:
+                with Image.open(folder / layout["artwork"]["file"]) as scene:
+                    piece, box = staged_evidence(folder, layout, scene)
+                    details = [to_float(piece), to_float(scene.crop(box))]
+            review = ask_stage(ai, "studio_format_native_review", NATIVE_REVIEW,
+                               {"size": size, "format_issue": str(issue), "copy": copy,
+                                "has_attempted_resize": bool(before), "has_moved_piece": bool(details)},
+                               [to_float(photo), to_float(reference), *before, *details, to_float(poster), to_float(phone)])
+        observation = required_text(review, "observation", "새 게시 규격 검토")
+        if review.get("ready") is not True:
+            raise ValueError(f"게시 규격의 새 구도를 확정하지 못했습니다. {observation}")
+        framing = {"method": "native", "resize_issue": str(issue), "review": observation}
+        save_layout(layout | {"format": format_name, "framing": framing}, folder)
+        folder.rename(output)
+    return framing

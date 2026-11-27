@@ -127,6 +127,28 @@ def position_options(layout, size, foreground, product_bounds, measurement):
     return options
 
 
+def measured_styles(design, plan, colors=None):
+    colors = colors if colors is not None else {}
+    line_roles = [f"headline_line_{index}" for index, _ in enumerate(plan["headline_lines"], 1)]
+    if not isinstance(colors, dict) or colors.keys() - (plan["boxes"].keys() | set(line_roles)):
+        raise ValueError("게시 규격 문구의 색상을 확인하지 못했습니다")
+    styles = {role: style.copy() for role, style in design["styles"].items()}
+    for role in styles.keys() & plan["font_sizes"].keys():
+        styles[role]["size"] = plan["font_sizes"][role]
+    for role in colors.keys() & styles.keys():
+        styles[role]["color"] = colors[role]
+    if plan["headline_lines"]:
+        headline = styles["headline"]
+        rows = []
+        for line, box, role in zip(headline["lines"], plan["headline_lines"], line_roles, strict=True):
+            row = line | {"box": box, "size": plan["font_sizes"][role]}
+            if role in colors or "headline" in colors:
+                row["color"] = colors[role] if role in colors else colors["headline"]
+            rows.append(row)
+        headline["lines"] = rows
+    return styles
+
+
 def preview_placement(frame, layout, source, plan):
     canvas = frame.convert("RGBA")
     for text in layout["texts"]:

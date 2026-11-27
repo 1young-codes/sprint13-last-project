@@ -15,7 +15,7 @@ from .layers import load_layout, load_settings, save_layout, to_float
 from .scene_ad import make_scene_ad, rendered_text_bounds
 from .staging import staged_evidence
 from .studio_edits import edit_version, foreground_mask
-from .studio_formats import FORMATS, adapt_format, fill_margin
+from .studio_formats import FORMATS, FormatPhotoIssue, adapt_format, fill_margin, rebuild_format
 from .studio_guides import START_GUIDES, find_actions
 from .viewpoint import available_viewpoints
 
@@ -371,7 +371,14 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
                 try:
                     if not (base / "foreground.png").is_file():
                         raise ValueError("크기 변경에 사용할 제품 영역이 없습니다")
-                    framing = adapt_format(base, variant, name, ai, fill_margin if generation is not None else None)
+                    try:
+                        framing = adapt_format(base, variant, name, ai, fill_margin if generation is not None else None)
+                    except FormatPhotoIssue as issue:
+                        if generation is None:
+                            raise
+                        record("format_rebuild", format=name, observation=str(issue))
+                        framing = rebuild_format(base, variant, name, photo, fields, idea, ai, generation(),
+                                                 references, issue)
                 except (ValueError, FileNotFoundError) as error:
                     record("format_failed", format=name, observation=str(error))
                     continue
