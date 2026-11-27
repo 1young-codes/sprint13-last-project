@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
 from .creative_brief import ask_stage, required_text
+from .format_layout import format_measurements, outer_margins, position_options, preview_placement
 from .layers import compose, load_layout, load_settings, save_layout, to_float
 from .scene_ad import check_text_overlap, design_layers, rendered_text_bounds
 from .studio_edits import foreground_mask, line_break_after
@@ -20,6 +21,12 @@ FORMATS = {"1:1": (1024, 1024), "4:5": (864, 1080), "9:16": (1080, 1920), "16:9"
 POSITION = """Pick the placement of the same photograph for one poster in the new ratio.
 The first image is the approved poster. The following previews are in position_order. Their extended
 edges preview where space will be filled. Choose where the product, copy and negative space work together.
+Some previews show the actual approved words fitted into space that clears the product. Use placement_notes
+to see which previews contain fitted type. Compare the entire layout. Avoid leaving a large unoccupied outer
+band just to align the product to one end of the frame. Outer_margins measures the space beyond the union of
+product and fitted words as a percentage of the canvas on each side. Look there for a visible purpose. If a
+large flat strip is empty in one preview and another keeps the same reading path with less dead space, prefer
+the more anchored layout even if the first preview has a simpler edge to expand.
 Check which placement gives the headline and supporting copy one useful quiet area near the product
 and keeps the scene anchored. Avoid distributing space into two large unused strips. Prefer extending
 an already simple part of the scene over extending furniture, hard edges, or important props.
@@ -29,8 +36,12 @@ position_order and reason as one concrete Korean sentence about the intended com
 MARGIN_CHECK = """Review the newly filled margins of a reframed product photo. The first image is the actual
 filled photograph; the second shows the same photograph with only stretched preview margins. photo_bounds
 identifies the unmodified photo in whole canvas percentages, left, top, right, bottom. Only inspect regions
-outside those bounds. Look at the corners as well as seams. Reject a new object, glow, smear, or broken
-surface that draws the eye or interrupts a continuous edge. Allow a naturally quiet extension. Return
+outside those bounds. Subsequent images show each added side plus a narrow strip of adjacent original photo,
+in margin_sides order. Compare the material across that join. Look at the corners as well as seams.
+Reject a new object, glow, smear, or broken
+surface that draws the eye or interrupts a continuous edge. Check for flipped patterns or repeating grains
+away from the seam as well. A surface that turns into a different material is a defect even when the
+transition is gradual. Allow a naturally quiet extension. Return
 ready (boolean), side (one of margin_sides if rejected, null if ready), and observation (one concrete Korean
 sentence naming what is visible and where)."""
 
@@ -43,6 +54,12 @@ as a percentage of the new canvas width. Group the product name and price while 
 Read the new photo before choosing positions. In a tall canvas, do not separate title and product with a wide
 unused stretch of background. Place the nearest title line beside or near the feature in the actual framing.
 In a wide canvas with no clear footer, keep the product name and price beside the headline or the product.
+placement_options holds exact boxes checked against the product mask using the approved text sizes. If one
+is available, start by choosing its key as placement. You may also return colors as a map from a text role
+to a #RRGGBB when needed for contrast, including headline_line_1 or headline_line_2 for a split heading.
+Keep the measured boxes and font_sizes when selecting an option. If the
+available options do not fit after rendering, return a custom layout using boxes and styles instead.
+On retry, look at why previous_placement or the rendered poster failed before choosing a placement again.
 Return a JSON object with boxes and styles keyed by headline, product_name and price. Each box is
 [left, top, width, height] in whole percentages of the poster. Keep them inside the poster and off one another.
 Each style has font, align (left, center, or right), color (#RRGGBB), size, and max_lines (1 or 2,
@@ -61,7 +78,10 @@ Judge the second at mobile size, using rendered_ink and product_bounds as eviden
 contrast, title line grouping, and how a viewer reaches the product and price. Quiet margins around the whole
 composition are allowed. A large empty band between the title and subject, with no visible photographic cue
 across it, breaks the reading path. A pair of title lines needs to read as one phrase before the viewer reaches
-the product. Require enough contrast and space even on a wide crop. Return ready (boolean) and observation
+the product. Also use outer_margins to inspect the actual space outside the product and all the lettering.
+If the entire campaign is pushed toward one end with a large empty outer strip, require a visible reason for
+that space. A flat stretch with no purposeful feature does not pass. Require enough contrast and space even
+on a wide crop. Return ready (boolean) and observation
 (one concrete Korean sentence describing actual placement or what must change)."""
 
 COPY_BREAK = """검토할 광고 문구를 두 줄에 놓을 때 자연스러운 첫 줄을 고릅니다.
@@ -88,15 +108,40 @@ def extend_edges(contained, size, placement):
     return frame, (left, top, left + contained.width, top + contained.height)
 
 
-def reflect_margin(filled, contained, placed, side):
+def reflect_margin(filled, contained, product, placed, side):
     left, top, right, bottom = placed
     width, height = filled.size
-    padding = ((top, height - bottom), (left, width - right), (0, 0))
-    reflected = Image.fromarray(np.pad(np.asarray(contained), padding, mode="reflect"))
+    px, py, pr, pb = product.getbbox()
+    clearance = max(1, min(contained.size) // 50)
+    strips = {"left": (0, 0, max(0, px - clearance), contained.height),
+              "right": (min(contained.width, pr + clearance), 0, contained.width, contained.height),
+              "top": (0, 0, contained.width, max(0, py - clearance)),
+              "bottom": (0, min(contained.height, pb + clearance), contained.width, contained.height)}
+    sx, sy, ex, ey = strips[side]
+    if sx == ex or sy == ey:
+        return None
     bounds = {"left": (0, 0, left, height), "right": (right, 0, width, height),
               "top": (0, 0, width, top), "bottom": (0, bottom, width, height)}[side]
+    amount = (left, width - right) if side in ("left", "right") else (top, height - bottom)
+    before, after = (amount[0], 0) if side in ("left", "top") else (0, amount[1])
+    padding = ((0, 0), (before, after), (0, 0)) if side in ("left", "right") else ((before, after), (0, 0), (0, 0))
+    reflected = Image.fromarray(np.pad(np.asarray(contained.crop(strips[side])), padding, mode="reflect"))
+    w, h = bounds[2] - bounds[0], bounds[3] - bounds[1]
+    x, y = (0, 0) if before else (reflected.width - w, reflected.height - h)
+    patch = reflected.crop((x, y, x + w, y + h))
+    sw, sh = contained.size
+    edges = {"left": (0, 0, 1, sh), "right": (sw - 1, 0, sw, sh),
+             "top": (0, 0, sw, 1), "bottom": (0, sh - 1, sw, sh)}
+    soft = contained.crop(edges[side]).resize((w, h)).filter(ImageFilter.GaussianBlur(min(contained.size) / 40))
+    horizontal = side in ("left", "right")
+    depth = w if horizontal else h
+    distance = np.arange(1, depth + 1) if not before else np.arange(depth, 0, -1)
+    fade = np.clip(distance / max(1, min(depth, min(contained.size) // 6)), 0, 1)
+    fade = (255 * fade**2 * (3 - 2 * fade)).astype(np.uint8)
+    fade_mask = Image.fromarray(fade[None, :] if horizontal else fade[:, None]).resize((w, h))
+    patch = Image.composite(soft, patch, fade_mask)
     result = filled.copy()
-    result.paste(reflected.crop(bounds), bounds[:2])
+    result.paste(patch, bounds[:2])
     return result
 
 
@@ -106,11 +151,13 @@ def frame_photo(photo, mask, size, expand=None, choose_position=None, check_marg
     ratio = target_width / target_height
     crop_width, crop_height = min(width, round(height * ratio)), min(height, round(width / ratio))
     left, top, right, bottom = mask.getbbox()
+    padding = round(min(width, height) * 0.04)
+    left, top = max(0, left - padding), max(0, top - padding)
+    right, bottom = min(width, right + padding), min(height, bottom + padding)
     fits = right - left <= crop_width and bottom - top <= crop_height
     if not fits:
-        padding = round(min(width, height) * 0.04)
-        crop_width = min(width, max(crop_width, right - left + 2 * padding))
-        crop_height = min(height, max(crop_height, bottom - top + 2 * padding))
+        crop_width = max(crop_width, right - left)
+        crop_height = max(crop_height, bottom - top)
     x = min(left, width - crop_width, max(0, right - crop_width, (width - crop_width) // 2))
     y = min(top, height - crop_height, max(0, bottom - crop_height, (height - crop_height) // 2))
     bounds = (x, y, x + crop_width, y + crop_height)
@@ -118,13 +165,21 @@ def frame_photo(photo, mask, size, expand=None, choose_position=None, check_marg
     if fits:
         return photo.resize(size, Image.Resampling.LANCZOS), mask.resize(size, Image.Resampling.NEAREST)
     contained = ImageOps.contain(photo, size, Image.Resampling.LANCZOS)
+    product = mask.resize(contained.size, Image.Resampling.NEAREST)
+
+    def place_mask(placed):
+        framed = Image.new("L", size)
+        framed.paste(product, placed[:2])
+        return framed
+
     extra_width, extra_height = size[0] - contained.width, size[1] - contained.height
     positions = ("left", "center", "right") if extra_width > extra_height else ("top", "center", "bottom")
     framing = "center"
     if choose_position is not None and max(extra_width, extra_height) >= min(size) * 0.06:
         choices = {name: extend_edges(contained, size, fraction)
                    for name, fraction in zip(positions, (0.15, 0.5, 0.85), strict=True)}
-        framing = choose_position({name: item[0] for name, item in choices.items()})
+        framing = choose_position({name: item[0] for name, item in choices.items()},
+                                  {name: place_mask(item[1]) for name, item in choices.items()})
         if not isinstance(framing, str) or framing not in choices:
             raise ValueError("게시 규격에 사용할 사진 위치를 고르지 못했습니다")
         frame, placed = choices[framing]
@@ -142,16 +197,13 @@ def frame_photo(photo, mask, size, expand=None, choose_position=None, check_marg
             break
         if attempt:
             raise ValueError("게시 규격에서 사진의 새 가장자리를 확정하지 못했습니다")
-        reflected = reflect_margin(filled, contained, placed, side)
-        if check_margin(reflected, frame, placed, "reflected") is None:
+        reflected = reflect_margin(filled, contained, product, placed, side)
+        if reflected is not None and check_margin(reflected, frame, placed, "reflected") is None:
             frame = reflected
             break
         fraction = 0 if side in ("left", "top") else 1
         frame, placed = extend_edges(contained, size, fraction)
-    framed_mask = Image.new("L", size)
-    left, top, right, bottom = placed
-    framed_mask.paste(mask.resize((right - left, bottom - top), Image.Resampling.NEAREST), (left, top))
-    return frame, framed_mask
+    return frame, place_mask(placed)
 
 
 def fill_margin(frame, margin):
@@ -198,6 +250,34 @@ def format_styles(ai, styles, layers, first_lines):
     return revised
 
 
+def selected_placement(answer, options, design):
+    name = answer.get("placement")
+    if name is None:
+        return answer
+    if not isinstance(name, str) or name not in options:
+        raise ValueError("계산한 게시 규격 배치 중 하나를 골라야 합니다")
+    plan = options[name]
+    colors = answer.get("colors", {})
+    line_roles = [f"headline_line_{index}" for index, _ in enumerate(plan["headline_lines"], 1)]
+    if not isinstance(colors, dict) or colors.keys() - (plan["boxes"].keys() | set(line_roles)):
+        raise ValueError("게시 규격 문구의 색상을 확인하지 못했습니다")
+    styles = {role: style.copy() for role, style in design["styles"].items()}
+    for role in styles.keys() & plan["font_sizes"].keys():
+        styles[role]["size"] = plan["font_sizes"][role]
+    for role in colors.keys() & styles.keys():
+        styles[role]["color"] = colors[role]
+    if plan["headline_lines"]:
+        headline = styles["headline"]
+        rows = []
+        for line, box, role in zip(headline["lines"], plan["headline_lines"], line_roles, strict=True):
+            row = line | {"box": box, "size": plan["font_sizes"][role]}
+            if role in colors or "headline" in colors:
+                row["color"] = colors[role] if role in colors else colors["headline"]
+            rows.append(row)
+        headline["lines"] = rows
+    return {"boxes": plan["boxes"], "styles": styles, "accent": None}
+
+
 def adapt_format(source, output, format_name, ai, expand=None):
     layout = load_layout(source)
     size = FORMATS[format_name]
@@ -212,12 +292,27 @@ def adapt_format(source, output, format_name, ai, expand=None):
         reference = to_float(poster)
     copy = {item["role"]: item["text"] for item in layout["texts"]}
     position_info = {}
+    dimensions = format_measurements(layout, size)
 
-    def choose_position(previews):
-        pictures = [to_float(ImageOps.contain(image, (540, 540), Image.Resampling.LANCZOS))
-                    for image in previews.values()]
+    def available(mask):
+        bounds = [round(100 * edge / length) for edge, length in zip(mask.getbbox(), size * 2, strict=True)]
+        return bounds, position_options(layout, size, np.asarray(mask) > 128, bounds, dimensions)
+
+    def choose_position(previews, masks):
+        pictures = []
+        notes = {}
+        for name, frame in previews.items():
+            bounds, options = available(masks[name])
+            choice = next(iter(options), None)
+            ink = []
+            if choice:
+                frame = preview_placement(frame, layout, source, options[choice])
+                ink = [(x, y, x + w, y + h) for x, y, w, h in options[choice]["boxes"].values()]
+            notes[name] = {"product_bounds": bounds, "placement": choice, "outer_margins": outer_margins(bounds, ink)}
+            pictures.append(to_float(ImageOps.contain(frame, (540, 540), Image.Resampling.LANCZOS)))
         answer = ask_stage(ai, "studio_format_position", POSITION,
-                           {"size": size, "copy": copy, "position_order": list(previews)}, [reference, *pictures])
+                           {"size": size, "copy": copy, "position_order": list(previews), "placement_notes": notes},
+                           [reference, *pictures])
         position_info.update(position=answer.get("position"), reason=required_text(answer, "reason", "사진 배치"))
         return position_info["position"]
 
@@ -226,8 +321,15 @@ def adapt_format(source, output, format_name, ai, expand=None):
         margins = (left, top, size[0] - right, size[1] - bottom)
         sides = [side for side, amount in zip(("left", "top", "right", "bottom"), margins, strict=True) if amount]
         bounds = [round(100 * edge / length) for edge, length in zip(placed, size * 2, strict=True)]
+        width, height = size
+        context = min(size) // 10
+        details = {"left": (0, 0, min(width, left + context), height),
+                   "top": (0, 0, width, min(height, top + context)),
+                   "right": (max(0, right - context), 0, width, height),
+                   "bottom": (0, max(0, bottom - context), width, height)}
         answer = ask_stage(ai, "studio_format_margin_check", MARGIN_CHECK,
-                           {"photo_bounds": bounds, "margin_sides": sides}, [to_float(filled), to_float(preview)])
+                           {"photo_bounds": bounds, "margin_sides": sides},
+                           [to_float(filled), to_float(preview), *[to_float(filled.crop(details[side])) for side in sides]])
         observation = required_text(answer, "observation", "사진 가장자리 검토")
         if answer.get("ready") is True:
             position_info.update(margin_review=observation, margin_method=method)
@@ -250,8 +352,9 @@ def adapt_format(source, output, format_name, ai, expand=None):
     protected = Image.composite(tint, framing, framing_mask)
     images = [reference, to_float(framing), to_float(protected)]
     fonts = load_settings()["fonts"]
-    bounds = [round(100 * point / side) for point, side in zip(framing_mask.getbbox(), (*size, *size), strict=True)]
+    bounds, placements = available(framing_mask)
     inputs = {"size": size, "copy": copy, "fonts": list(fonts), "approved_design": design, "product_bounds": bounds}
+    inputs["placement_options"] = placements
     if position_info:
         inputs["framing"] = position_info
     line_height = minimum_font_size(size[0]) * LINE_HEIGHT
@@ -264,10 +367,13 @@ def adapt_format(source, output, format_name, ai, expand=None):
         stage = Path(temporary)
         for _ in range(2):
             answer = ask_stage(ai, "studio_reframe", REFRAME, inputs | {"preferred_first_lines": first_lines}, images)
+            if placements and "layout_error" not in inputs and answer.get("placement") is None:
+                answer = {"placement": next(iter(placements))}
             try:
-                styles = format_styles(ai, answer.get("styles"), layout["texts"], first_lines)
-                revised = design | {"artwork_box": [0, 0, 100, 100], "boxes": answer.get("boxes"),
-                                    "styles": styles, "accent": answer.get("accent")}
+                proposed = selected_placement(answer, placements, design)
+                styles = format_styles(ai, proposed.get("styles"), layout["texts"], first_lines)
+                revised = design | {"artwork_box": [0, 0, 100, 100], "boxes": proposed.get("boxes"),
+                                    "styles": styles, "accent": proposed.get("accent")}
                 revised.pop("subject_box", None)
                 candidate = design_layers(revised, copy, size, fonts, stage)
                 check_text_overlap(foreground, candidate, stage)
@@ -279,19 +385,24 @@ def adapt_format(source, output, format_name, ai, expand=None):
             framing_mask.save(stage / "foreground.png")
             poster = compose(candidate, stage)
             phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
+            ink = rendered_text_bounds(candidate, stage)
             review = ask_stage(ai, "studio_format_reading", FORMAT_READING,
-                               {"copy": copy, "product_bounds": bounds, "rendered_ink": rendered_text_bounds(candidate, stage)},
+                               {"copy": copy, "product_bounds": bounds, "rendered_ink": ink,
+                                "outer_margins": outer_margins(bounds, ink.values())},
                                [reference, to_float(phone)])
             reading = required_text(review, "observation", "게시 규격 검토")
             if type(review.get("ready")) is not bool:
                 raise ValueError("게시 규격의 글자와 상품 배치 판정을 확인하지 못했습니다")
             if not review["ready"]:
                 inputs.update(layout_error=reading, previous_layout=revised)
+                inputs["previous_placement"] = answer.get("placement")
                 images[3:] = [to_float(poster)]
                 continue
             poster.save(stage / "ad.png")
             candidate.update(fields=layout["fields"], brief=layout["brief"], design=revised,
                              scene_prompt=layout["scene_prompt"], format=format_name, final_review_reason=reading)
+            if answer.get("placement") is not None:
+                candidate["text_placement"] = answer["placement"]
             if "art_direction_plan" in layout:
                 candidate["art_direction_plan"] = layout["art_direction_plan"]
             if position_info:

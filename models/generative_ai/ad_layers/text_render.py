@@ -7,6 +7,7 @@
 import html
 import re
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 from .layers import PROJECT_ROOT, load_settings
@@ -103,13 +104,10 @@ def page_html(texts: list[dict], size: tuple[int, int]) -> str:
             f"</style></head><body>{''.join(boxes)}</body></html>")
 
 
-def render_texts(texts: list[dict], size: tuple[int, int], folder: Path) -> None:
-    """texts의 각 줄을 folder/<file>로 저장합니다. 줄마다 x, y, w, h, text, font, color, file이 있어야 합니다."""
+@contextmanager
+def typography_page(texts, size):
     from playwright.sync_api import sync_playwright
 
-    texts = [line for text in texts for line in text.get("lines", (text,))]
-    if not texts:
-        return
     paths = {font_file(t["font"]).name: font_file(t["font"]) for t in texts}
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
@@ -119,10 +117,37 @@ def render_texts(texts: list[dict], size: tuple[int, int], folder: Path) -> None
             headers={"Access-Control-Allow-Origin": "*", "Content-Type": "font/ttf"}))
         page.set_content(page_html(texts, size))
         page.evaluate("document.fonts.ready.then(() => true)")
+        try:
+            yield page
+        finally:
+            browser.close()
+
+
+def measure_texts(texts, size):
+    """지정한 글자 크기에서 상자에 맞춰 축소하기 전 필요한 폭과 높이를 잽니다."""
+    with typography_page(texts, size) as page:
+        dimensions = page.evaluate("""() => Array.from(document.querySelectorAll('.t'), el => {
+          const size = Number(el.dataset.maxFontSize);
+          el.style.fontSize = size + 'px';
+          el.style.whiteSpace = 'nowrap';
+          const span = el.firstElementChild;
+          span.style.maxWidth = 'none';
+          const range = document.createRange();
+          range.selectNodeContents(span);
+          return [Math.ceil(range.getBoundingClientRect().width), Math.max(span.scrollHeight, Math.ceil(size / 0.9))];
+        })""")
+    return {text["role"]: tuple(extent) for text, extent in zip(texts, dimensions, strict=True)}
+
+
+def render_texts(texts: list[dict], size: tuple[int, int], folder: Path) -> None:
+    """texts의 각 줄을 folder/<file>로 저장합니다. 줄마다 x, y, w, h, text, font, color, file이 있어야 합니다."""
+    texts = [line for text in texts for line in text.get("lines", (text,))]
+    if not texts:
+        return
+    with typography_page(texts, size) as page:
         failed = page.evaluate(FIT_SCRIPT)
         if failed:
             roles = ", ".join(texts[int(element[1:])]["role"] for element in failed)
             raise ValueError(f"글자 크기와 줄 수를 유지할 공간이 부족합니다 ({roles})")
         for i, text in enumerate(texts):
             (folder / text["file"]).write_bytes(page.locator(f"#t{i}").screenshot(omit_background=True))
-        browser.close()

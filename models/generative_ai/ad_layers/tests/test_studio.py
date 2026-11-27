@@ -3,8 +3,9 @@ import shutil
 
 from PIL import Image
 import pytest
+import numpy as np
 
-from models.generative_ai.ad_layers import scene_ad, studio, studio_edits, studio_formats
+from models.generative_ai.ad_layers import format_layout, scene_ad, studio, studio_edits, studio_formats
 from models.generative_ai.ad_layers.layers import compose, load_layout, save_layout
 
 
@@ -43,7 +44,9 @@ def draft(tmp_path, monkeypatch):
     return folder, fields
 
 
-def test_observe_search_edit_and_select_the_best_version(tmp_path, draft):
+def test_observe_search_edit_and_select_the_best_version(tmp_path, draft, monkeypatch):
+    monkeypatch.setattr(studio_formats, "position_options", lambda *_: {})
+    monkeypatch.setattr(studio_formats, "format_measurements", lambda *_: {})
     folder, fields = draft
     stages = []
 
@@ -378,7 +381,7 @@ def test_crops_around_subject_and_pads_when_crop_would_cut_it():
     cropped, visible = studio_formats.frame_photo(
         photo, mask, (50, 100), lambda *_: pytest.fail("자를 수 있으면 배경을 생성할 필요가 없습니다"))
     assert cropped.getpixel((0, 0)) == (0, 0, 255)
-    assert visible.getbbox() == (29, 25, 50, 76)
+    assert visible.getbbox() == (25, 25, 46, 76)
 
     mask.paste(255, (7, 25, 93, 76))
     padded, visible = studio_formats.frame_photo(photo, mask, (50, 100))
@@ -414,15 +417,45 @@ def test_format_delegates_new_breaks_to_copy_review():
     assert studio_formats.format_styles(None, styles, layers, first_lines) == updated
 
 
+def test_format_options_use_measured_sizes_and_keep_clear_of_the_product(monkeypatch):
+    style = {"align": "left", "max_font_size": 8}
+    rows = [style | {"role": "headline_line_1"}, style | {"role": "headline_line_2"}]
+    source_style = {"size": 6, "lines": [{"box": [8, 5, 35, 9]}, {"box": [8, 15, 40, 11]}]}
+    layout = {"size": [100, 100], "texts": [style | {"role": "headline", "lines": rows},
+              style | {"role": "product_name"}, style | {"role": "price"}],
+              "design": {"boxes": {"headline": [8, 5, 40, 22]},
+                         "styles": {"headline": source_style, "product_name": {}, "price": {}}}}
+    mask = np.zeros((100, 100), dtype=bool)
+    mask[34:70, 20:87] = True
+
+    def measure(texts, size):
+        assert size == (100, 100) and all(text["max_font_size"] == 8 for text in texts)
+        return dict(zip((text["role"] for text in texts), [(24, 7), (32, 9), (12, 7), (14, 7)], strict=True))
+
+    monkeypatch.setattr(format_layout, "measure_texts", measure)
+    dimensions = format_layout.format_measurements(layout, (100, 100))
+    options = format_layout.position_options(layout, (100, 100), mask, [20, 34, 87, 70], dimensions)
+    chosen = studio_formats.selected_placement({"placement": "headline_above_offer_below"}, options, layout["design"])
+    assert chosen["boxes"]["headline"][2:] == [35, 23]
+    assert chosen["boxes"]["headline"][1] + 23 < 34
+    assert chosen["boxes"]["price"][1] > 70
+    assert chosen["styles"]["headline"]["lines"][0]["box"][2:] == [27, 10]
+    assert source_style["lines"][0]["box"] == [8, 5, 35, 9]
+    for option in options.values():
+        for x, y, w, h in option["boxes"].values():
+            assert not mask[y:y+h, x:x+w].any()
+
+
 def test_expands_only_the_chosen_photo_placement():
     photo = Image.new("RGB", (100, 100), "blue")
     mask = Image.new("L", photo.size)
     mask.paste(255, (7, 25, 93, 76))
     expanded = []
 
-    def choose(previews):
+    def choose(previews, masks):
         assert list(previews) == ["top", "center", "bottom"]
         assert all(preview.size == (50, 100) for preview in previews.values())
+        assert masks["top"].getbbox()[1] < masks["bottom"].getbbox()[1]
         return "bottom"
 
     def fill(frame, margin):
@@ -452,10 +485,31 @@ def test_format_removes_the_failed_margin_without_repainting_the_photo():
         return None if method == "relocated" else "top"
 
     result, visible = studio_formats.frame_photo(photo, mask, (50, 100), expand,
-                                               choose_position=lambda _: "center", check_margin=review)
+                                               choose_position=lambda *_: "center", check_margin=review)
     assert reviews == [((0, 25, 50, 75), "initial"), ((0, 25, 50, 75), "reflected"), ((0, 0, 50, 50), "relocated")]
     assert result.getpixel((0, 0)) == (0, 0, 255) and result.getpixel((0, 99)) == (0, 128, 0)
     assert visible.getbbox()[3] <= 50
+
+
+def test_reflected_margin_uses_the_background_without_repeating_the_product():
+    photo = Image.new("RGB", (20, 40), "blue")
+    photo.paste("red", (0, 15, 20, 30))
+    mask = Image.new("L", photo.size)
+    mask.paste(255, (0, 15, 20, 30))
+    frame = Image.new("RGB", (20, 85), "black")
+    bounds = (0, 10, 20, 50)
+    frame.paste(photo, bounds[:2])
+    result = studio_formats.reflect_margin(frame, photo, mask, bounds, "bottom")
+    assert result.crop((0, 50, 20, 85)).getcolors() == [(700, (0, 0, 255))]
+    assert result.crop((0, 0, 20, 50)).tobytes() == frame.crop((0, 0, 20, 50)).tobytes()
+
+
+def test_wide_crop_keeps_available_space_beyond_the_product():
+    photo = Image.new("RGB", (100, 100), "white")
+    mask = Image.new("L", photo.size)
+    mask.paste(255, (20, 32, 80, 74))
+    _, framed = studio_formats.frame_photo(photo, mask, (100, 50))
+    assert framed.getbbox() == (20, 4, 80, 46)
 
 
 def test_composition_review_can_fix_a_valid_layout(draft):
