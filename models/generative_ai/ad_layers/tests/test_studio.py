@@ -79,22 +79,26 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft, monkey
                 updated = data["approved_design"]
                 updated["styles"]["headline"]["break_after"] = 1
                 if "layout_error" in data:
-                    assert data["layout_error"] == "판매 정보가 떨어져 보입니다"
-                    if local_offer:
-                        assert set(data["offer_repair"]) == {"product_name", "price"}
-                        if data["previous_offer_offset"]:
-                            assert data["previous_layout"]["boxes"]["product_name"][1] == 30
-                            return '{"offer_offset":[2,0]}'
-                        return '{"offer_offset":[0,-7]}'
+                    assert "제목이 사진 속 상품 윤곽에 붙어 보입니다" in data["layout_error"]
+                    assert not local_offer
                     updated["boxes"]["price"] = [10, 47, 45, 10]
                 return json.dumps(updated)
+            if step == "studio_format_offer":
+                assert local_offer and data["observation"] == "판매 정보가 떨어져 보입니다"
+                assert len(images) == 1 + len(data["position_order"])
+                assert all(np.any(images[0] != picture) for picture in images[1:])
+                return json.dumps({"position": data["position_order"][0], "observation": "글자를 함께 옮깁니다"})
             if step == "studio_format_reading":
-                assert len(images) == 4 and data["copy"]["price"] == "18,000원"
+                assert len(images) == 6 and data["copy"]["price"] == "18,000원"
                 assert all(crop < poster for crop, poster in zip(images[3].shape[:2], images[2].shape[:2]))
+                assert all(crop < poster for crop, poster in zip(images[4].shape[:2], images[2].shape[:2]))
+                assert images[4].shape == images[5].shape and np.any(images[4] != images[5])
+                assert data["headline_behind_subject"] is False
                 if stages.count(step) <= (2 if local_offer else 1):
-                    return json.dumps({"finding": "offer" if local_offer else "layout",
+                    return json.dumps({"finding": "offer" if local_offer else "ready",
+                                       "headline_touches_product": not local_offer,
                                        "observation": "판매 정보가 떨어져 보입니다"})
-                return '{"finding":"ready","observation":"판매 정보가 제목과 연결됩니다"}'
+                return '{"finding":"ready","headline_touches_product":false,"observation":"판매 정보가 제목과 연결됩니다"}'
             if "edit_text" in data["actions"]:
                 assert set(data["actions"]) == {"edit_text", "hold"}
                 return json.dumps({"action": "edit_text", "arguments": {"changes": {"headline": {
@@ -110,8 +114,9 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft, monkey
     result = studio.run_studio(Image.new("RGB", (100, 100)), fields, "", output, Agent(), draft=folder,
                                formats=("thumbnail",))
     assert stages == ["studio_look", "studio_action", "studio_look", "studio_campaign_check", "studio_action",
-                      "studio_reframe", "studio_format_reading", "studio_reframe", "studio_format_reading"] + (
-                         ["studio_reframe", "studio_format_reading"] if local_offer else [])
+                      "studio_reframe", "studio_format_reading"] + (
+                         ["studio_format_offer", "studio_format_reading"] * 2 if local_offer
+                         else ["studio_reframe", "studio_format_reading"])
     assert result["status"] == "complete" and result["version"] == "v02"
     assert (output / "final" / "scene.png").read_bytes() == (folder / "scene.png").read_bytes()
     assert (output / "final" / "text_price.png").read_bytes() == (folder / "text_price.png").read_bytes()
@@ -122,8 +127,14 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft, monkey
         "phrase": "포근한 겨울", "color": "#FFAA33"}
     boxes = load_layout(output / "formats/thumbnail")["design"]["boxes"]
     assert boxes["headline"] == [20, 20, 45, 10]
-    assert boxes["product_name"] == ([12, 30, 45, 10] if local_offer else [10, 35, 45, 10])
-    assert boxes["price"] == ([12, 45, 45, 10] if local_offer else [10, 47, 45, 10])
+    if local_offer:
+        assert boxes["product_name"] != [10, 35, 45, 10]
+        assert boxes["price"][0] == boxes["product_name"][0]
+        assert boxes["price"][1] - boxes["product_name"][1] == 15
+        assert boxes["price"][2:] == boxes["product_name"][2:] == [45, 10]
+    else:
+        assert boxes["product_name"] == [10, 35, 45, 10]
+        assert boxes["price"] == [10, 47, 45, 10]
     assert (output / "versions/v01/ad.png").read_bytes() == (folder / "ad.png").read_bytes()
     with Image.open(result["formats"]["thumbnail"]) as poster:
         assert poster.size == (600, 600)

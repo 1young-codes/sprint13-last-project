@@ -633,6 +633,7 @@ def find_foreground(scene, mask_model, threshold):
 
 def check_text_overlap(foreground, layout, folder):
     mask = np.zeros(tuple(reversed(layout["size"])), dtype=bool)
+    headline_behind_subject = False
     x, y = layout["artwork"]["x"], layout["artwork"]["y"]
     height, width = foreground.shape
     mask[y:y + height, x:x + width] = foreground
@@ -657,8 +658,10 @@ def check_text_overlap(foreground, layout, folder):
                 hidden = np.bincount(parts[covered], minlength=len(sizes))
                 if covered.sum() > 0.12 * ink.sum() or np.any((sizes > 2) & (hidden > 0.35 * sizes)):
                     raise ValueError("제품 뒤로 넘어가는 제목이 너무 많아 읽기 어렵습니다")
+                headline_behind_subject = True
         elif covered.any():
             raise ValueError(f"{name} 레이어가 실제 제품을 가립니다")
+    return headline_behind_subject
 
 
 def tighten_aligned_stack(lines, foreground, layout, folder):

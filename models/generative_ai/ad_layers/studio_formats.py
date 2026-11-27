@@ -11,8 +11,8 @@ from .creative_brief import TEXT_ROLES, ask_stage, required_text, validate_boxes
 from .format_layout import (format_measurements, format_type_hierarchy, measured_styles, outer_margins, position_options,
                             preview_placement)
 from .layers import compose, load_layout, load_settings, save_layout, to_float
-from .scene_ad import (check_text_overlap, design_layers, make_scene_ad, rendered_text_bounds, tighten_text_groups,
-                       touches_photo_edge)
+from .scene_ad import (check_text_overlap, design_layers, make_scene_ad, pixel_box, rendered_text_bounds,
+                       tighten_text_groups, touches_photo_edge)
 from .staging import check_staged_identity
 from .studio_edits import foreground_mask, line_break_after, repair_staged_detail
 from .text_render import LINE_HEIGHT, minimum_font_size
@@ -68,12 +68,6 @@ to a #RRGGBB when needed for contrast, including headline_line_1 or headline_lin
 Keep the measured boxes and font_sizes when selecting an option. If the
 available options do not fit after rendering, return a custom layout using boxes and styles instead.
 On retry, look at why previous_placement or the rendered poster failed before choosing a placement again.
-If offer_repair is present, the problem is local to the name and price. Move both together to a quieter
-area near the headline or the subject, keeping their spacing, type sizes, and the rest of the layout.
-Return only {"offer_offset": [dx, dy]} in whole canvas percentages, with negative values for left or up.
-Use the previous_layout boxes and the last image to choose that shift.
-When a previous offer move was insufficient, address the remaining visible conflict. If the title box
-limits upward movement, use available sideways space to clear the product edge.
 For a margin error, first shift the affected text group inward with its alignment intact. Keep the approved
 alignment and size of the other copy unless the error explicitly names a broken reading path.
 For a full layout, return a JSON object with boxes and styles keyed by headline, product_name and price. Each box is
@@ -102,6 +96,10 @@ Reject a strong product edge, highlight, shadow, or texture interrupting the qui
 around those words. A recognizable letter can still look attached to a rim or reflection. Inspect the
 actual pixels even if the outline in product_bounds misses the visible detail. Suggest one clear placement
 change when this area fails. Treat this as a type repair unless the photograph has no usable text area.
+The fifth image shows the area around the headline. The sixth shows the same area before adding type.
+Compare them before approving. Report layout if a bright rim, highlight, or texture edge reaches the title
+glyphs and makes them look attached to the product contour, even when every letter is readable. A visible,
+purposeful intersection can work when headline_behind_subject is true and the entire line still reads cleanly.
 A large empty band between the title and subject, with no visible photographic cue
 across it, breaks the reading path. A pair of title lines needs to read as one phrase before the viewer reaches
 the product. Also use outer_margins to inspect the actual space outside the product and all the lettering.
@@ -114,11 +112,21 @@ photographic purpose merely because it balances a matching empty stretch at the 
 the subject itself meaningfully fills the long axis and directs the eye. If the scene was originally arranged
 along the other axis, can changing the text position actually fix it without separating the words from the
 product or making the product smaller? Require enough contrast and space even on a wide crop.
-Return JSON with observation (one concrete Korean sentence) and finding (one of ready, offer, layout, photo).
+Return JSON with observation (one concrete Korean sentence), finding (one of ready, offer, layout, photo),
+and headline_touches_product (boolean). Set headline_touches_product true when a visible product rim or
+highlight reaches the headline glyphs, even if it is easy to read or the overlap is intentional.
 Use offer if moving the name and price together can fix the only visible problem. If your observation asks
 to move those two lines into free space and nothing else needs changing, this is an offer finding.
 Use layout when the title, type size or multiple groups actually need revision. Use photo only when the
 photograph's own arrangement or filled edges require a new composition."""
+
+OFFER_POSITION = """The first image is the rejected poster. The remaining images are actual candidate posters,
+in position_order, with only the name and price moved together. Each image shows the whole poster above,
+and an enlarged view of the name and price area below. Choose the candidate that resolves the noted
+conflict and keeps a clear reading path between the headline, product and offer. Look for real space around
+the entire offer, including adjacent reflections and container edges. Avoid fixing one side by running the words
+into a different edge. Judge the whole poster as well as the nearest photographic detail. Return JSON with
+position (one key from position_order, or null if none is better) and observation (a concrete Korean sentence)."""
 
 NATIVE_REVIEW = """Review a poster newly photographed for one publishing ratio. Image 1 is the original product
 photograph, image 2 is the approved poster, image 3 is the attempted resize when present, and the last
@@ -411,14 +419,18 @@ def check_type_margin(size, ink):
                              f"글자 묶음을 안쪽으로 {shift}픽셀 이상 옮겨 주세요")
 
 
-def offer_detail(poster, ink):
+def text_detail(poster, bounds):
     width, height = poster.size
     context = min(poster.size) // 12
-    left, top, right, bottom = zip(ink["product_name"], ink["price"], strict=True)
+    left, top, right, bottom = zip(*bounds, strict=True)
     return poster.crop((max(0, round(min(left) * width / 100) - context),
                         max(0, round(min(top) * height / 100) - context),
                         min(width, round(max(right) * width / 100) + context),
                         min(height, round(max(bottom) * height / 100) + context)))
+
+
+def offer_detail(poster, ink):
+    return text_detail(poster, (ink["product_name"], ink["price"]))
 
 
 def check_offer_spacing(ink, size):
@@ -480,6 +492,65 @@ def move_offer(design, offset):
             continue
         return design | {"boxes": boxes}
     raise ValueError("제목과 겹치지 않는 방향으로 상품명과 가격을 함께 옮겨 주세요")
+
+
+def offer_position_options(design, layout, foreground, stage, tried):
+    roles = ("product_name", "price")
+    current_ink = rendered_text_bounds(layout, stage)
+    left = min(current_ink[role][0] for role in roles)
+    right = max(current_ink[role][2] for role in roles)
+    headline = current_ink["headline"]
+    align = design["styles"]["headline"]["align"]
+    anchor = {"left": headline[0] - left, "center": round((headline[0] + headline[2] - left - right) / 2),
+              "right": headline[2] - right}[align]
+    _, title_top, _, title_height = design["boxes"]["headline"]
+    top = min(design["boxes"][role][1] for role in roles)
+    bottom = max(design["boxes"][role][1] + design["boxes"][role][3] for role in roles)
+    directions = ((0, -7), (-2, -4), (2, -4), (-2, 0), (2, 0), (0, 7),
+                  (anchor, title_top - bottom - 1), (anchor, title_top + title_height - top + 1),
+                  (-6, -7), (6, -7))
+    limits = []
+    for axis, length in enumerate(layout["size"]):
+        margin = ceil(100 * min(layout["size"]) / (40 * length))
+        first = min(current_ink[role][axis] for role in roles)
+        last = max(current_ink[role][axis + 2] for role in roles)
+        limits.append((min(0, margin - first), max(0, 100 - margin - last)))
+    seen = set(tried)
+    choices = {}
+    for direction in directions:
+        offset = [max(low, min(value, high)) for value, (low, high) in zip(direction, limits, strict=True)]
+        try:
+            revised = move_offer(design, offset)
+        except ValueError:
+            continue
+        key = tuple(revised["boxes"][role][axis] for role in roles for axis in (0, 1))
+        if key in seen:
+            continue
+        seen.add(key)
+        texts = []
+        for text in layout["texts"]:
+            role = text["role"]
+            if role in roles:
+                x, y, _, _ = pixel_box(revised["boxes"][role], layout["size"])
+                text = text | {"x": x, "y": y}
+            texts.append(text)
+        candidate = layout | {"texts": texts}
+        try:
+            check_text_overlap(foreground, candidate, stage)
+            ink = rendered_text_bounds(candidate, stage)
+            check_type_margin(layout["size"], ink)
+        except ValueError:
+            continue
+        choices[f"position_{len(choices) + 1}"] = (revised, candidate, ink, key)
+    return choices
+
+
+def offer_preview(poster, ink):
+    preview = Image.new("RGB", (640, 640), "#f0efec")
+    for source, top, height in ((poster, 0, 444), (offer_detail(poster, ink), 452, 188)):
+        image = ImageOps.contain(source, (640, height), Image.Resampling.LANCZOS)
+        preview.paste(image, ((640 - image.width) // 2, top + (height - image.height) // 2))
+    return preview
 
 
 def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
@@ -575,80 +646,94 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
     output.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=output.parent) as temporary:
         stage = Path(temporary)
+        offer_repair = False
+        tried_offers = set()
 
         def render_copy(design):
             candidate = design_layers(design, copy, size, fonts, stage)
-            check_text_overlap(foreground, candidate, stage)
+            headline_behind_subject = check_text_overlap(foreground, candidate, stage)
             tighten_text_groups(foreground, candidate, stage)
             ink = rendered_text_bounds(candidate, stage)
-            if not {"product_name", "price"} <= ink.keys():
-                raise ValueError("상품명과 가격의 글자가 화면에 보여야 합니다")
+            if not all(role in ink for role in TEXT_ROLES):
+                raise ValueError("제목과 상품명, 가격이 모두 화면에 보여야 합니다")
             check_offer_spacing(ink, size)
-            return candidate, ink
+            return candidate, ink, headline_behind_subject
 
         for attempt in range(3):
-            if attempt == 2 and "offer_repair" not in inputs:
+            if attempt == 2 and not offer_repair:
                 break
-            answer = ask_stage(ai, "studio_reframe", REFRAME, inputs | {"preferred_first_lines": first_lines}, images)
-            if placements and "layout_error" not in inputs and answer.get("placement") is None:
-                answer = {"placement": next(iter(placements))}
-            try:
-                if "offer_repair" in inputs:
-                    revised = move_offer(inputs["previous_layout"], answer.get("offer_offset"))
-                else:
+            if offer_repair:
+                options = offer_position_options(revised, candidate, foreground, stage, tried_offers)
+                if not options:
+                    break
+                previews = [offer_preview(compose(option[1], stage), option[2]) for option in options.values()]
+                choice = ask_stage(ai, "studio_format_offer", OFFER_POSITION,
+                                   {"position_order": list(options), "observation": reading, "copy": copy},
+                                   [to_float(offer_preview(poster, ink)), *map(to_float, previews)])
+                position = choice.get("position")
+                if not isinstance(position, str) or position not in options:
+                    break
+                revised, candidate, ink, key = options[position]
+                tried_offers.add(key)
+            else:
+                answer = ask_stage(ai, "studio_reframe", REFRAME, inputs | {"preferred_first_lines": first_lines}, images)
+                if placements and "layout_error" not in inputs and answer.get("placement") is None:
+                    answer = {"placement": next(iter(placements))}
+                try:
                     proposed = selected_placement(answer, placements, design)
                     styles = format_styles(ai, proposed.get("styles"), layout["texts"], first_lines)
                     styles = format_type_hierarchy(styles, design["focus"])
                     revised = design | {"artwork_box": [0, 0, 100, 100], "boxes": proposed.get("boxes"),
                                         "styles": styles, "accent": proposed.get("accent")}
                     revised.pop("subject_box", None)
-                candidate, ink = render_copy(revised)
-                try:
-                    check_type_margin(size, ink)
-                except ValueError:
-                    shifted = move_copy_inside(revised, ink, size) if intent else None
-                    if shifted is None:
-                        raise
-                    candidate, ink = render_copy(shifted)
-                    check_type_margin(size, ink)
-                    revised = shifted
-            except ValueError as error:
-                inputs["layout_error"] = str(error)
-                if "offer_repair" in inputs:
-                    inputs["previous_offer_offset"] = answer.get("offer_offset")
-                else:
+                    candidate, ink, headline_behind_subject = render_copy(revised)
+                    try:
+                        check_type_margin(size, ink)
+                    except ValueError:
+                        shifted = move_copy_inside(revised, ink, size) if intent else None
+                        if shifted is None:
+                            raise
+                        candidate, ink, headline_behind_subject = render_copy(shifted)
+                        check_type_margin(size, ink)
+                        revised = shifted
+                except ValueError as error:
+                    inputs["layout_error"] = str(error)
                     inputs["previous_layout"] = answer
-                continue
-            framing.save(stage / candidate["artwork"]["file"])
-            framing_mask.save(stage / "foreground.png")
+                    continue
+                framing.save(stage / candidate["artwork"]["file"])
+                framing_mask.save(stage / "foreground.png")
+                tried_offers = {tuple(revised["boxes"][role][axis]
+                                      for role in ("product_name", "price") for axis in (0, 1))}
             poster = compose(candidate, stage)
             phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
             review = ask_stage(ai, "studio_format_reading", FORMAT_READING,
                                {"copy": copy, "focus": design["focus"], "product_bounds": bounds, "rendered_ink": ink,
                                 "outer_margins": outer_margins(bounds, ink.values()),
+                                "headline_behind_subject": headline_behind_subject,
                                 **({"intent": intent} if intent else {})},
-                               [reference, to_float(phone), to_float(poster), to_float(offer_detail(poster, ink))])
+                               [reference, to_float(phone), to_float(poster), to_float(offer_detail(poster, ink)),
+                                to_float(text_detail(poster, (ink["headline"],))),
+                                to_float(text_detail(framing, (ink["headline"],)))])
             reading = required_text(review, "observation", "게시 규격 검토")
             finding = review.get("finding")
-            if finding not in ("ready", "offer", "layout", "photo"):
+            touching = review.get("headline_touches_product")
+            if finding not in ("ready", "offer", "layout", "photo") or type(touching) is not bool:
                 raise ValueError("게시 규격의 글자와 상품 배치 판정을 확인하지 못했습니다")
+            if touching and not headline_behind_subject and finding in ("ready", "offer"):
+                finding = "layout"
+                reading = f"제목이 사진 속 상품 윤곽에 붙어 보입니다. 제목을 윤곽에서 띄워 주세요. {reading}"
             if finding == "photo":
                 raise FormatPhotoIssue(reading, poster)
             if finding != "ready":
                 inputs.update(layout_error=reading, previous_layout=revised)
-                inputs["previous_placement"] = answer.get("placement")
-                if finding == "offer" and revised.get("accent") is None:
-                    inputs["offer_repair"] = {role: ink[role] for role in ("product_name", "price")}
-                    inputs["previous_offer_offset"] = answer.get("offer_offset")
-                else:
-                    inputs.pop("offer_repair", None)
-                    inputs.pop("previous_offer_offset", None)
+                inputs["previous_placement"] = None if offer_repair else answer.get("placement")
+                offer_repair = finding == "offer" and revised.get("accent") is None
                 images[3:] = [to_float(poster)]
                 continue
             poster.save(stage / "ad.png")
             candidate.update(fields=layout["fields"], brief=layout["brief"], design=revised,
                              scene_prompt=layout["scene_prompt"], format=format_name, final_review_reason=reading)
-            if answer.get("placement") is not None:
+            if not offer_repair and answer.get("placement") is not None:
                 candidate["text_placement"] = answer["placement"]
             if "art_direction_plan" in layout:
                 candidate["art_direction_plan"] = layout["art_direction_plan"]

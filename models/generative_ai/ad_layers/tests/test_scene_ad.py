@@ -278,7 +278,8 @@ def test_headline_can_tuck_behind_the_subject_without_repainting_it(tmp_path):
               "artwork": {"file": "scene.png", "x": 0, "y": 0, "w": 30, "h": 30},
               "texts": [{"role": "headline", "file": "title.png", "x": 0, "y": 0, "w": 30, "h": 30,
                          "depth": "behind_subject"}]}
-    scene_ad.check_text_overlap(mask, layout, tmp_path)
+    assert scene_ad.check_text_overlap(mask, layout, tmp_path) is True
+    assert scene_ad.check_text_overlap(np.zeros_like(mask), layout, tmp_path) is False
     rendered = compose(layout, tmp_path)
     assert rendered.getpixel((12, 10)) == (0, 0, 255)
     assert rendered.getpixel((11, 10)) == (255, 255, 255)
