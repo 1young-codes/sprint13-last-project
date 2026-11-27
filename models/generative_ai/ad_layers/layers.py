@@ -91,6 +91,9 @@ def template_boxes(base: np.ndarray, rule: list[dict]) -> list[dict]:
 def compose(layout: dict, folder: Path) -> Image.Image:
     """layout.json대로 레이어를 아래부터 합칩니다. 제품을 옮기면 그림자가 같이 옮겨집니다."""
     canvas = Image.open(folder / layout["background"]["file"]).convert("RGBA")
+    artwork = layout.get("artwork")
+    if artwork:
+        paste_clipped(canvas, Image.open(folder / artwork["file"]).convert("RGBA"), artwork["x"], artwork["y"])
     product = layout.get("product")
     if product:
         shadow = layout.get("shadow")

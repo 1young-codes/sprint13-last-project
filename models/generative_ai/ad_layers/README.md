@@ -57,16 +57,18 @@ python -m models.generative_ai.ad_layers.make_ad --recompose outputs/ad_layers/�
 
 결과는 `outputs/ad_layers/<사진 이름>/<분위기>/`에 저장됩니다. `base.png`는 글자를 얹기 전 합성입니다. 단계별 걸린 시간은 `layout.json`의 `seconds`에 있습니다.
 
-## 생성된 장면을 보고 글자 배치하기
+## 포스터 구도를 먼저 정하기
 
-`scene_ad`는 상품 사진과 입력 정보를 보고 기획, 연출, 제목을 정합니다. Qwen은 글자용 여백이 있는 장면 한 장을 그립니다. 배치 담당은 그 장면과 실제 제품의 경계를 보고 글자 위치와 크기, 정렬, 줄 수를 정합니다. 제품 또는 다른 문구와 겹치거나 글자가 정해진 크기로 들어가지 않으면 같은 장면에서 배치만 한 번 더 요청합니다.
+`scene_ad`는 상품 사진과 참고 포스터를 보고 강조점과 사진 영역, 색면, 문구별 배치를 한 번에 정합니다. 참고 포스터를 제공하면 실제로 합친 구도를 보여 주고 한 차례 검토합니다. 최종 생성에서는 Qwen이 사진 영역만 그립니다. 글자가 정해진 크기로 들어가는지 생성 전에 검사하고, 최종 장면에서는 실제 글자 화소가 제품을 가리는지 확인합니다.
 
 ```bash
-python -m models.generative_ai.ad_layers.scene_ad photos/items.json photos outputs/scene_ads
+# 원본 사진을 넣은 구도 시안. OpenAI 호출과 글자 렌더링을 사용합니다.
+python -m models.generative_ai.ad_layers.scene_ad photos/items.json photos outputs/poster_previews --preview --references 참고.png
+python -m models.generative_ai.ad_layers.scene_ad photos/items.json photos outputs/scene_ads --designs outputs/poster_previews
 python -m models.generative_ai.ad_layers.make_ad --recompose outputs/scene_ads/01_사진
 ```
 
-입력 목록은 아래 모델 비교의 상품 목록 형식과 같습니다. 상품 결과마다 제품과 배경을 함께 그린 `scene.png`, 제목·상품명·가격의 투명 글자 레이어, `layout.json`, 최종 `ad.png`를 저장합니다. `layout.json`에서 문구와 위치를 수정한 뒤 글자 레이어를 다시 그릴 수 있습니다. 제품 위치까지 따로 바꾸는 작업은 위의 `make_ad` 실행 경로를 사용합니다.
+입력 목록은 아래 모델 비교의 상품 목록 형식과 같습니다. 결과에는 색면이 있는 `background.png`, 정해진 영역에 놓이는 `scene.png`, 제목·상품명·가격 레이어, `layout.json`, 합친 `ad.png`가 저장됩니다. `layout.json`에서 문구와 위치를 수정한 뒤 글자 레이어를 다시 그릴 수 있습니다. 제품을 장면에서 분리해 이동할 때는 위의 `make_ad` 실행 경로를 사용합니다.
 
 ## 아직 하지 않은 것
 

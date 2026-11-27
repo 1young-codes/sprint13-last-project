@@ -13,7 +13,6 @@ from .layers import to_float
 MODEL = "gpt-6-luna"
 TEXT_ROLES = ("headline", "product_name", "price")
 LAYOUT_ROLES = ("product", *TEXT_ROLES)
-COPY_SPACES = ("top", "bottom", "left", "right")
 MAX_HEADLINE_LENGTH = 24
 
 PLANNING = """You handle the ad strategy. Decide on one message for this product.
@@ -26,13 +25,6 @@ Use the photo to identify the product features to retain and emphasize. Choose t
 lighting direction, palette and product detail that makes the agreed message visible. Change the background
 when it serves that message. Describe the intended scene, leaving placement decisions to the layout stage.
 Return only JSON with one English string, "scene". Do not write ad copy."""
-
-SCENE_DIRECTION = """You direct the artwork for one Korean ad. Use the photo, the agreed message and the seller's idea.
-Choose one visual idea that expresses the message through the product, lighting, color and scale. Say what
-deserves attention first. Keep the product recognizable, including existing labels, packaging and identifying details.
-Choose a quiet strip wide enough for ad lettering, with even lighting and no props or product details inside it.
-Return JSON with "scene" (English, describing the concept, photography, palette and framing without ad copy),
-"focus" (one of product, headline, product_name, price) and "copy_space" (one of top, bottom, left, right)."""
 
 COPY = f"""You write the headline. Express the agreed message as one short, natural Korean campaign line
 of at most {MAX_HEADLINE_LENGTH} characters including spaces. Give one memorable phrase or a short sentence.
@@ -90,19 +82,14 @@ def layout_boxes(answer):
     return {"boxes": boxes, "reading_order": order, "typography": required_text(answer, "typography", "레이아웃")}
 
 
-def plan_copy(ai, photo, fields, idea, *, scene_first=False):
+def plan_copy(ai, photo, fields, idea):
     inputs = {key: fields[key] for key in ("product_name", "unit", "usage_example", "notes") if key in fields}
     photo_inputs = [to_float(photo)]
     strategy = ask_stage(ai, "ad_plan", PLANNING, inputs | {"owner_idea": idea}, photo_inputs)
     plan = {key: required_text(strategy, key, "기획") for key in ("message", "evidence")}
 
-    direction = ask_stage(ai, "ad_direction", SCENE_DIRECTION if scene_first else DIRECTION,
-                          inputs | {"idea": idea, "plan": plan}, photo_inputs)
+    direction = ask_stage(ai, "ad_direction", DIRECTION, inputs | {"idea": idea, "plan": plan}, photo_inputs)
     scene = required_text(direction, "scene", "연출")
-    if scene_first:
-        if direction.get("focus") not in LAYOUT_ROLES or direction.get("copy_space") not in COPY_SPACES:
-            raise ValueError("연출 단계에서 강조할 항목과 글자 여백 방향이 필요합니다")
-        plan |= {"focus": direction["focus"], "copy_space": direction["copy_space"]}
 
     writing = ask_stage(ai, "ad_headline", COPY, inputs | {"plan": plan, "scene": scene})
     headline = " ".join(required_text(writing, "headline", "문구").split())
