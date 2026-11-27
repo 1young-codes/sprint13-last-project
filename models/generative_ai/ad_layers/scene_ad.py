@@ -302,6 +302,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         raise ValueError("저장한 시안 적용과 완성본 개선 중 하나를 선택하세요")
     if rejected and not previous:
         raise ValueError("보류한 후보를 전달하려면 비교 기준이 되는 완성본도 필요합니다")
+    if feedback and not previous:
+        raise ValueError("장면을 수정하려면 기준이 되는 완성본이 필요합니다")
     prior = load_layout(previous) if previous else None
     kept = prior or proposal
     if kept and kept["fields"] != fields:
@@ -312,16 +314,20 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
     canvas = settings["canvas"]
     size = (canvas["width"], canvas["height"])
     images = [to_float(photo), *map(to_float, references)]
-    revision_info = None
+    revision_info = {"requested_scene_change": feedback} if feedback else None
+    design_images = images
     if prior:
         if prior.get("preview"):
             raise ValueError("사진 생성이 끝난 광고만 개선에 사용할 수 있습니다")
         with Image.open(previous / "ad.png") as finished:
             prior_image = to_float(finished)
+        if feedback:
+            design_images = [images[0], prior_image, *images[1:]]
+    if prior and not feedback:
         previous_design = prior.get("design", {})
         inputs = {"brief": brief, "copy": copy, "previous_concept": previous_design.get("concept", brief["message"])}
         inputs["previous_art_direction"] = previous_design.get("art_direction", prior.get("scene_prompt"))
-        inputs["previous_visual_review"] = feedback or prior.get("revision", {}).get("visual_review")
+        inputs["previous_visual_review"] = prior.get("revision", {}).get("visual_review")
         critique_prompt, critique_images = CRITIQUE, [prior_image, *images]
         if rejected:
             discarded = load_layout(rejected)
@@ -345,24 +351,30 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
     with TemporaryDirectory(dir=folder.parent) as staging:
         result = Path(staging)
         design_task = DESIGN + "\nReturn a JSON design object.\n" + DESIGN_SCHEMA
-        if revision_info:
+        if feedback:
+            design_task += ("\nThe second image is the previous poster. Plan the requested_scene_change in revision_feedback "
+                            "and preserve unaffected parts of that composition. Do not substitute another change.")
+        elif revision_info:
             design_task += ("\nMake room for the visual idea in revision_feedback. Give the photography "
                             "and type a new shared composition with the same exact copy.")
-        answer = proposal["design"] if proposal else ask_stage(ai, "ad_layout", design_task, design_input, images)
+        answer = proposal["design"] if proposal else ask_stage(ai, "ad_layout", design_task, design_input, design_images)
         try:
             layout = design_layers(answer, copy, size, settings["fonts"], result)
         except ValueError as error:
             if proposal:
                 raise
             retry = design_input | {"previous_design": answer, "layout_error": str(error)}
-            answer = ask_stage(ai, "ad_layout", design_task, retry, images)
+            answer = ask_stage(ai, "ad_layout", design_task, retry, design_images)
             layout = design_layers(answer, copy, size, settings["fonts"], result)
 
         if not proposal:
             direction_input = {"message": brief["message"], "idea": idea, "design": answer}
             if revision_info:
                 direction_input.update(revision_info)
-            direction = ask_stage(ai, "ad_scene_direction", PHOTO_DIRECTION, direction_input, images[:1])
+            direction_task = PHOTO_DIRECTION
+            if feedback:
+                direction_task += "\nDescribe the exact requested_scene_change and omit any conflicting design detail."
+            direction = ask_stage(ai, "ad_scene_direction", direction_task, direction_input, images[:1])
             answer = answer | {"art_direction": required_text(direction, "scene", "촬영 연출")}
 
         artwork = layout["artwork"]
@@ -370,8 +382,11 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         subject_box = answer.get("subject_box")
         placement = ("Follow the reference's product placement and scale if it has a plain gray background. "
                      if subject_box else "")
+        correction = (f"Required photographic change, taking precedence over other scene details: {feedback} "
+                      "Keep all poster copy out of the photograph. " if feedback else "")
         prompt = ("Make a new commissioned photograph with a newly built setting and lighting. "
-                  f"{placement}Replace the surroundings with the requested setting. Keep the product shape, material and details. "
+                  f"{correction}{placement}Replace the surroundings with the requested setting. "
+                  "Keep the product shape, material and details. "
                   f"{answer['art_direction']} Preserve the recognizable product details and genuine packaging labels. "
                   "Keep surroundings, props and surfaces free of stray lettering, numbers and logos. "
                   "Add no advertising text or overlays.")

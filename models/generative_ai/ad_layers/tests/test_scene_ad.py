@@ -14,6 +14,8 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     photo = Image.new("RGB", (70, 60), "orange")
     reference = Image.new("RGB", (70, 60), "white")
     fields = {"product_name": "수분 세럼", "price_krw": 32000}
+    correction = "Show the cap held visibly by a hand."
+    expect_correction = False
 
     def mask(model, pixels):
         assert model == "mask"
@@ -35,6 +37,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             assert reference.getpixel((243, 460)) == photo.getpixel((30, 28))
             is_revision = "ad_cycle_critique" in calls
             assert ("Narrow studio beam" if is_revision else "Amber reflections") in prompt
+            assert (correction in prompt) == expect_correction
             assert "부드러운 아침" not in prompt
             calls.append("qwen")
             return Image.new("RGB", size, (160, 40, 255) if is_revision else (0, 0, 255))
@@ -57,6 +60,8 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
                 assert data["design"]["artwork_box"] == [0, 0, 50, 100]
                 assert len(images) == 1 and "previous_art_direction" not in data
+                if expect_correction:
+                    assert data["requested_scene_change"] == correction
                 if "hypothesis" in data:
                     assert data["hypothesis"] == "A narrow beam through the glass" and data["idea"] == "가벼운 아침 연출"
                     return '{"scene":"Narrow studio beam"}'
@@ -66,11 +71,14 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 assert "product_name 글자 레이어가 실제 제품을 가립니다" in prompt
                 boxes = {"headline": [55, 10, 40, 30], "product_name": [55, 45, 40, 15], "price": [55, 65, 40, 15]}
                 return json.dumps({"reason": "상품명을 제품 옆으로 이동", "revision": {"boxes": boxes, "accent": None}})
-            assert step == "ad_layout" and images[0][0, 0, 2] == 0 and len(images) == 2
+            assert step == "ad_layout" and images[0][0, 0, 2] == 0
+            assert len(images) == (3 if expect_correction else 2)
             data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
             assert data["copy"] == {"headline": "부드러운 아침", "product_name": "수분 세럼", "price": "32,000원"}
             if "revision_feedback" in data:
                 assert "scene" not in data["brief"] and data["idea"] == "가벼운 아침 연출"
+            if expect_correction:
+                assert data["revision_feedback"]["requested_scene_change"] == correction and images[1][20, 15, 2] == 1
             boxes = {"headline": [55, 10, 40, 30], "product_name": [2, 2, 40, 15], "price": [55, 65, 40, 15]}
             if "layout_error" not in data:
                 boxes["headline"] = [55, 30, 40, 40]
@@ -130,6 +138,15 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     assert revision["revision"]["weakness"] == "평평한 조명"
     assert revision["design"]["art_direction"] == "Narrow studio beam"
     assert revision["brief"]["headline"] == layout["brief"]["headline"]
+
+    calls.clear()
+    expect_correction = True
+    targeted = scene_ad.make_scene_ad(photo, fields, "가벼운 아침 연출", models, tmp_path / "targeted",
+                                      references=[reference], previous=folder, feedback=correction)
+    assert "ad_cycle_critique" not in calls
+    assert targeted["revision"]["requested_scene_change"] == correction
+    assert correction not in targeted["design"]["art_direction"] and correction in targeted["scene_prompt"]
+    assert targeted["brief"]["headline"] == layout["brief"]["headline"]
 
 
 def test_type_can_extend_over_photo_but_not_over_product(tmp_path):
