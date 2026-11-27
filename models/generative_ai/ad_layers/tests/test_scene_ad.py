@@ -418,6 +418,33 @@ def test_split_headline_keeps_copy_and_checks_each_visible_line(tmp_path):
         scene_ad.layout_texts(answer, copy, (100, 100), ["noto_sans_kr"])
 
 
+@pytest.mark.parametrize("blocked", [False, True])
+def test_split_title_closes_the_visible_gap_without_covering_the_product(tmp_path, blocked):
+    lines = [
+        {"role": "headline_line_1", "file": "first.png", "x": 10, "y": 10, "w": 50, "h": 20},
+        {"role": "headline_line_2", "file": "second.png", "x": 10, "y": 31, "w": 50, "h": 25},
+    ]
+    for line, ink, color in zip(lines, ((5, 3, 35, 10), (3, 10, 40, 23)), ("white", "orange"), strict=True):
+        image = Image.new("RGBA", (line["w"], line["h"]))
+        image.paste(color, ink)
+        image.save(tmp_path / line["file"])
+    layout = {"size": [100, 100], "artwork": {"x": 0, "y": 0},
+              "texts": [{"role": "headline", "lines": lines}]}
+    foreground = np.zeros((100, 100), bool)
+    foreground[25, 20] = blocked
+    before = scene_ad.rendered_text_bounds(layout, tmp_path)
+    scene_ad.tighten_split_title(foreground, layout, tmp_path)
+    after = scene_ad.rendered_text_bounds(layout, tmp_path)
+    if blocked:
+        assert after == before
+    else:
+        assert after["headline_line_2"][1] - after["headline_line_1"][3] == 3
+        assert after["headline_line_1"][3] - after["headline_line_1"][1] == 7
+        assert after["headline_line_2"][3] - after["headline_line_2"][1] == 13
+        scene_ad.tighten_split_title(foreground, layout, tmp_path)
+        assert scene_ad.rendered_text_bounds(layout, tmp_path) == after
+
+
 def test_blended_photo_edges_keep_product_pixels_opaque():
     photo = Image.new("RGB", (30, 30), "orange")
     foreground = np.zeros((30, 30), dtype=bool)

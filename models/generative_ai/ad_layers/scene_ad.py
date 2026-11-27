@@ -654,6 +654,43 @@ def check_text_overlap(foreground, layout, folder):
             raise ValueError(f"{name} 레이어가 실제 제품을 가립니다")
 
 
+def tighten_split_title(foreground, layout, folder):
+    lines = next((text["lines"] for text in layout["texts"]
+                  if text["role"] == "headline" and "lines" in text), ())
+    if len(lines) != 2 or any(line.get("depth") == "behind_subject" for line in lines):
+        return
+    paths = [folder / line["file"] for line in lines]
+    original = []
+    for path in paths:
+        with Image.open(path) as layer:
+            original.append(layer.convert("RGBA"))
+    first, second = (layer.getchannel("A").getbbox() for layer in original)
+    if first is None or second is None:
+        return
+    left, right = [(line["x"] + box[0], line["x"] + box[2])
+                   for line, box in zip(lines, (first, second), strict=True)]
+    overlap = min(left[1], right[1]) - max(left[0], right[0])
+    if overlap * 2 < min(left[1] - left[0], right[1] - right[0]):
+        return
+    desired = max(1, round(0.4 * min(first[3] - first[1], second[3] - second[1])))
+    gap = lines[1]["y"] + second[1] - lines[0]["y"] - first[3]
+    excess = max(0, gap - desired)
+    # Keep the emphasized lower line as close as possible to its planned position.
+    down = min(excess, original[0].height - first[3])
+    up = min(excess - down, second[1])
+    if not (down or up):
+        return
+    for path, layer, box, shift in zip(paths, original, (first, second), (down, -up), strict=True):
+        shifted = Image.new("RGBA", layer.size)
+        shifted.paste(layer.crop(box), (box[0], box[1] + shift))
+        shifted.save(path)
+    try:
+        check_text_overlap(foreground, layout, folder)
+    except ValueError:
+        for path, layer in zip(paths, original, strict=True):
+            layer.save(path)
+
+
 def rendered_text_bounds(layout, folder):
     size = tuple(layout["size"])
     bounds_by_role = {}
@@ -679,6 +716,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
     original_error = None
     try:
         check_text_overlap(foreground, layout, folder)
+        tighten_split_title(foreground, layout, folder)
     except ValueError as error:
         original_error = str(error)
     if original_error is None and not assess_composition:
@@ -759,6 +797,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                 revised_scene.save(candidate / artwork["file"])
                 Image.fromarray(foreground).save(candidate / "foreground.png")
                 check_text_overlap(foreground, updated, candidate)
+                tighten_split_title(foreground, updated, candidate)
             except ValueError as error:
                 inputs = inputs | {"rejected_design" if needs_alternative else "design": revised,
                                    "layout_error": str(error)}
