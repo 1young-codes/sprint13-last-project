@@ -22,6 +22,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     exercise_cue_retry = True
     reject_cue = False
     reject_identity = False
+    repair_writing = False
     campaign_intent = "빛줄기와 제목을 같은 방향으로 연결합니다"
     expect_correction = False
     delegated_framing = False
@@ -125,7 +126,14 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 assert data["photo_cue"] == cue and images[1].shape == (1024, 512, 3)
                 assert data["has_approved_detail"] is expect_correction and len(images) == (3 if expect_correction else 2)
                 identity = {"identity_matches": not reject_identity,
-                            "identity_observation": "병이 검정색입니다" if reject_identity else "같은 앰버색 병입니다"}
+                            "identity_observation": "병이 검정색입니다" if reject_identity else "같은 앰버색 병입니다",
+                            "stray_writing": None}
+                if repair_writing and calls.count(step) == 1:
+                    return json.dumps(identity | {"visible": True, "observation": "빛이 보입니다",
+                                                  "stray_writing": {"box": [70, 10, 5, 2], "observation": "배경에 글자가 있습니다"},
+                                                  "correction": "Remove the background lettering.", "reposition": False})
+                if repair_writing:
+                    assert images[1][1, 1].tolist() == [1, 0, 0]
                 if reject_identity:
                     return json.dumps(identity | {"visible": True, "observation": "빛이 보입니다",
                                                   "correction": "Restore the original amber glass bottle.",
@@ -237,6 +245,20 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     assert calls == ["render", "qwen", "ad_photo_cue_check", "qwen", "ad_photo_cue_check"]
     assert not wrong_product.exists()
     reject_identity = False
+    repair_writing = True
+    calls.clear()
+
+    def remove_writing(scene, foreground, mark):
+        assert mark["box"] == [70, 10, 5, 2] and foreground.any()
+        result = scene.copy()
+        result.putpixel((1, 1), (255, 0, 0))
+        return result
+
+    monkeypatch.setattr(scene_ad, "remove_photo_writing", remove_writing)
+    cleaned = scene_ad.make_scene_ad(photo, fields, "", models, tmp_path / "cleaned", proposal=layout)
+    assert calls == ["render", "qwen", "ad_photo_cue_check", "ad_photo_cue_check"]
+    assert [check["stray_writing"] for check in cleaned["photo_cue_checks"]] == ["배경에 글자가 있습니다", None]
+    repair_writing = False
     calls.clear()
     rejected = tmp_path / "rejected"
     rejected.mkdir()

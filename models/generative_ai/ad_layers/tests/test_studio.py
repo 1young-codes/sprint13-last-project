@@ -222,7 +222,8 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
             if step == "ad_photo_cue_check":
                 assert len(images) == 2 and data["photo_cue"] == "The vessel reflects a strip of lamp light."
                 return ('{"identity_matches":true,"identity_observation":"같은 용기입니다",'
-                        '"visible":true,"observation":"용기에 조명이 반사됩니다","correction":null}')
+                        '"visible":true,"observation":"용기에 조명이 반사됩니다",'
+                        '"stray_writing":null,"correction":null}')
             if step == "ad_final_layout":
                 return '{"revision":null}'
             if step == "studio_staged_identity":

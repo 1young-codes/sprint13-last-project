@@ -211,13 +211,18 @@ check that all sold pieces or visible variants are still represented, without du
 Use the approved detail when provided to decide what can be outside the frame. Allow the expected effects of
 lighting, angle and an agreed close crop. Allow ordinary scene props that do not look like other sold products.
 Report a concrete visible difference before marking identity_matches false.
+Inspect the whole rendered photo for newly invented letters, numbers, logos or watermarks, including on
+blurred props near the edges. Preserve authentic markings on the original product. Return stray_writing
+as null if absent, or an object with observation (Korean) and box [left, top, width, height] in whole
+percentages of the rendered photograph covering the visible invented writing only.
 Verify photo_cue from the actual pixels in the second image. For a gesture or motion, locate
 the two relevant points and check their relative positions and direction. For light or material, locate the
 specified surface and check the actual highlight, shadow, or transmission there. Visible parts alone do not
 prove a relationship. If a planned action would physically miss its destination or appears suspended without
 plausible support, report it. Return JSON with identity_matches and visible (separate booleans),
 identity_observation and observation (one concrete Korean sentence for each finding), and correction
-(one precise English photographic instruction if either finding is false, otherwise null). If either is false,
+(one precise English photographic instruction if either finding is false or stray_writing is present,
+otherwise null). In those cases,
 also return reposition (boolean, true when the correction must change the relative position or orientation
 of product parts). Correct the failed findings while keeping anything that already works. Describe a physically
 complete arrangement when repositioning. Preserve the intended product scale and quiet area for lettering."""
@@ -423,6 +428,23 @@ def crop_subject(product, design):
     if not detail.getchannel("A").getbbox():
         raise ValueError("확대할 부분에 원본 상품이 없습니다")
     return detail
+
+
+def remove_photo_writing(scene, foreground, mark):
+    from ..photo_retouch.cleanup import load_inpaint_model, remove_distractions
+    from ..photo_retouch.settings import load_settings as retouch_settings
+
+    x, y, width, height = validate_boxes({"writing": mark.get("box")}, ("writing",))["writing"]
+    rule = retouch_settings()["cleanup"]
+    if width * height > 10000 * rule["max_box_share"]:
+        return None
+    try:
+        model = load_inpaint_model()
+    except FileNotFoundError:
+        return None
+    region = {"box": [10 * value for value in (x, y, x + width, y + height)], "label": "writing"}
+    cleaned, removed = remove_distractions(model, to_float(scene), [region], foreground, rule)
+    return Image.fromarray(np.rint(255 * cleaned).astype(np.uint8)) if removed else None
 
 
 def choose_source_framing(ai, product, inputs, images):
@@ -1358,29 +1380,50 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                     return model.edit(reference, instruction, generation["seed"], generation["steps"], size=render_size)
 
             approved_detail = on_gray(effective) if detail_shot and effective is not None else None
-            for attempt in range(2):
-                generated = photograph(prompt)
-                scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
-                if not photo_cue:
-                    break
+
+            def review_photo(candidate):
                 check = ask_stage(ai, "ad_photo_cue_check", PHOTO_CUE_CHECK,
                                   {"photo_cue": photo_cue, "has_approved_detail": approved_detail is not None,
                                    "crop": answer["crop"], "product_facts": fields},
-                                  [images[0], to_float(scene), *([to_float(approved_detail)] if approved_detail else [])])
+                                  [images[0], to_float(candidate), *([to_float(approved_detail)] if approved_detail else [])])
                 observation = required_text(check, "observation", "촬영 결과 검토")
                 identity = check.get("identity_matches")
                 identity_observation = required_text(check, "identity_observation", "촬영 결과 검토")
                 visible = check.get("visible")
                 if type(visible) is not bool or type(identity) is not bool:
                     raise ValueError("촬영한 사진에서 연출을 확인하지 못했습니다")
-                photo_checks.append({"visible": visible, "observation": observation, "identity_matches": identity,
-                                     "identity_observation": identity_observation})
-                if visible and identity:
+                mark = check.get("stray_writing")
+                if "stray_writing" not in check or (mark is not None and not isinstance(mark, dict)):
+                    raise ValueError("촬영한 사진에 새로 생긴 글자가 있는지 확인하지 못했습니다")
+                written = required_text(mark, "observation", "사진 글자 확인") if mark is not None else None
+                finding = {"visible": visible, "observation": observation, "identity_matches": identity,
+                           "identity_observation": identity_observation, "stray_writing": written}
+                photo_checks.append(finding)
+                return check, finding
+
+            foreground = None
+            for attempt in range(2):
+                generated = photograph(prompt)
+                scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
+                if not photo_cue:
                     break
+                check, finding = review_photo(scene)
+                if finding["visible"] and finding["identity_matches"] and finding["stray_writing"]:
+                    mark = check["stray_writing"]
+                    foreground = find_foreground(scene, models["mask"], threshold)
+                    fixed = remove_photo_writing(scene, foreground, mark)
+                    if fixed is not None:
+                        scene = fixed
+                        check, finding = review_photo(scene)
+                if finding["visible"] and finding["identity_matches"] and not finding["stray_writing"]:
+                    break
+                foreground = None
                 if attempt:
-                    if not identity:
-                        raise ValueError(f"촬영한 사진의 상품이 원본과 다릅니다. {identity_observation}")
-                    raise ValueError(f"사진에 의도한 연출이 보이지 않습니다. {observation}")
+                    if not finding["identity_matches"]:
+                        raise ValueError(f"촬영한 사진의 상품이 원본과 다릅니다. {finding['identity_observation']}")
+                    if finding["stray_writing"]:
+                        raise ValueError(f"촬영한 사진에 의도하지 않은 글자가 남았습니다. {finding['stray_writing']}")
+                    raise ValueError(f"사진에 의도한 연출이 보이지 않습니다. {finding['observation']}")
                 correction = required_text(check, "correction", "촬영 결과 검토")
                 reposition = check.get("reposition")
                 if type(reposition) is not bool:
@@ -1396,7 +1439,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                               f"against {answer['background']}. Preserve product identity. Add no text or graphics.")
                 else:
                     prompt = f"Priority reshoot correction, replacing any conflicting placement instruction: {correction} {prompt}"
-            foreground = find_foreground(scene, models["mask"], threshold)
+            if foreground is None:
+                foreground = find_foreground(scene, models["mask"], threshold)
             if answer["edge"] == "blend":
                 scene = blend_edges(scene, foreground, position=(artwork["x"], artwork["y"]), canvas_size=size)
             scene.save(result / artwork["file"])
