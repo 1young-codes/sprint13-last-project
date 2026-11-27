@@ -112,6 +112,7 @@ def test_reference_comparison_can_block_selection(tmp_path, draft):
             assert images[1][10, 10].tolist() == [0, 0, 0]
             data = json.loads(request.split("Input JSON follows:\n", 1)[1])
             assert list(data["actions"]) == ["hold"]
+            assert data["finding"] == "scene" and data["owner_idea"] == ""
             return '{"action":"hold","arguments":{},"reason":"촬영부터 고쳐야 합니다"}'
 
     output = tmp_path / "output"

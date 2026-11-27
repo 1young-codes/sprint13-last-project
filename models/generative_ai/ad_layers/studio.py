@@ -60,6 +60,9 @@ Korean sentence about the candidate), and reference_observation (a concrete Kore
 ACT = """Use the evidence in observation and the actual chosen poster (first image) to pick one action.
 The second image is the source photo. Ground any framing or staging change in a specific feature visible there.
 Use only a tool in actions and follow its guide. Choose the smallest change that can fix the visible issue.
+When the finding is scene because a selling detail does not stand out, name the detail the next photograph must
+show more clearly and how it should read. Let the framing step compare the whole and close views. Keep a full
+view only when the owner requires it or the message depends on the complete shape, packaging or arrangement.
 Read the earlier edits and what remained visible after each comparison. If moving or enlarging the words
 left the same photo-and-copy disconnect, choose a different composition action or revise the photography
 when available. Do not repeat an earlier edit that left the same issue.
@@ -195,7 +198,8 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         guides = find_actions(finding, available)
         record("guides", version=current, actions=list(guides))
         decision = ask_stage(ai, "studio_action", ACT,
-                             {"observation": observation, "actions": guides, "product": fields,
+                             {"finding": finding, "observation": observation, "actions": guides, "product": fields,
+                              "owner_idea": idea,
                               "design": layout["design"], "copy": [text["text"] for text in layout["texts"]],
                               "fonts": list(load_settings()["fonts"]), "last_edit_error": last_failure,
                               "earlier_edits": attempts}, [pictures[current], to_float(photo)])
@@ -235,7 +239,8 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         try:
             if action == "revise_scene":
                 make_scene_ad(photo, fields, idea, generation() | {"ai": ai}, revised, references=references,
-                              previous=base, feedback=required_text(arguments, "instruction", "장면 편집"))
+                              previous=base, feedback=required_text(arguments, "instruction", "장면 편집"),
+                              scene_issue=observation if finding == "scene" else None)
             else:
                 edit_version(base, revised, action, arguments, generation)
         except ValueError as error:

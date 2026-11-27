@@ -81,16 +81,16 @@ smaller information. Look at the actual space and ink, even if the proposal desc
 Keep the original when the revision would merely trade one generic arrangement for another.
 Return JSON with choice (original or revision) and a concrete Korean reason."""
 
-SOURCE_FRAMING = """Choose the framing of the product itself before laying out the ad. The first image is the
-product isolated to its tight bounds. The second image is the original photograph; any remaining images are design
-references. Use the proposed photographic idea and exact headline. Choose a close crop when it would make one
-otherwise small visible detail carry the message, and keep enough context to recognize the item and its use.
-If the evidence is concentrated in one part, propose a visibly tighter frame for comparison even if the whole
-product is plausible. Cut parts that do not help the story; trimming an edge alone rarely makes a detail lead.
-Choose the whole available view when the shape, labeling, count, or arrangement is the evidence. The original
-may already be cut by a photo edge; do not treat that edge as the real end of the object.
-Return JSON with source_crop (null for the whole product, or [left, top, width, height] in integer percentages of
-the first image) and reason (in Korean, what the chosen framing will make the reader see)."""
+SOURCE_FRAMING = """Propose one close framing to compare with the whole available product before layout.
+The first image is the isolated product in its tight bounds. The second is the original photo; any later images
+are references. Another reviewer will choose between the two views after seeing the rendered crop. If the message
+concerns one detail or a few neighboring features, show those features together much larger. Leave out parts that
+do not help explain the message. A whole shot can be good and still deserve comparison with a close shot.
+Keep context to recognize the item and its use. Return null if a meaningful crop would break necessary labels,
+shape, count, or an arrangement across the whole product, or if the request specifies keeping the full view.
+The original photo may already cut an edge of the object; preserve the meaning of its available view.
+Return JSON with source_crop (null or [left, top, width, height] in integer percentages of the first image)
+and reason (in Korean, what the crop makes easier to notice, or why a crop cannot help)."""
 
 SOURCE_FRAMING_CHECK = """The first two images show the whole available product and the actual crop in equal-size frames.
 The third image is the original photo. Compare the visible pixels against the exact headline and the intended
@@ -560,7 +560,7 @@ def preview_artwork(photo, artwork, canvas_size, design):
 
 
 def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview=False, proposal=None, previous=None,
-                  rejected=None, feedback=None):
+                  rejected=None, feedback=None, scene_issue=None):
 
     if folder.exists():
         raise FileExistsError(folder)
@@ -621,7 +621,11 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
     product = extract_subject(photo, mask_model, threshold) if mask_model is not None else None
     source_framing = proposal.get("source_framing") if proposal else None
     if not proposal and product is not None:
-        source_framing = choose_source_framing(ai, product, design_input | {"art_direction_plan": art_plan}, images)
+        framing_input = design_input | {"art_direction_plan": art_plan, "idea": idea}
+        if scene_issue:
+            framing_input = {"brief": brief, "copy": copy, "idea": idea, "scene_issue": scene_issue,
+                             "visible_feature": art_plan["evidence"]}
+        source_framing = choose_source_framing(ai, product, framing_input, images)
         source_crop = source_framing["source_crop"]
         scale = "detail" if source_crop is not None else art_plan["shot_scale"]
         if source_crop is None and scale == "detail":
@@ -644,7 +648,11 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             design_task += "\nSource framing is approved. Use source_framing and lay out the actual view without changing it."
         if feedback:
             design_task += ("\nThe second image is the previous poster. Plan the requested_scene_change in revision_feedback "
-                            "and preserve unaffected parts of that composition. Do not substitute another change.")
+                            "and preserve unaffected parts of that composition.")
+            if scene_issue:
+                design_task += " The approved source_framing takes precedence over framing suggested by the editor."
+            else:
+                design_task += " Do not substitute another change."
         elif revision_info:
             design_task += ("\nMake room for the visual idea in revision_feedback. Give the photography "
                             "and type a new shared composition with the same exact copy.")
@@ -667,6 +675,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 ai, product, answer, layout, result, design_input, images)
             effective = crop_subject(product, answer)
         detail_shot = product is not None and answer.get("source_crop") is not None
+        alternate_framing = bool(scene_issue and detail_shot)
         if detail_shot and art_plan:
             art_plan = art_plan | {"shot_scale": "detail"}
             design_input["art_direction_plan"]["shot_scale"] = "detail"
@@ -692,7 +701,11 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 direction_task += ("\nThe second image is the approved placement before photography. Use the subject "
                                    "position and open regions from it. Its lettering and flat colors are placeholders.")
             if feedback:
-                direction_task += "\nDescribe the exact requested_scene_change and omit any conflicting design detail."
+                if alternate_framing:
+                    direction_task += ("\nUse the requested photographic effect with the approved close framing. "
+                                       "Omit any instruction to keep the entire product in view.")
+                else:
+                    direction_task += "\nDescribe the exact requested_scene_change and omit any conflicting design detail."
             direction = ask_stage(ai, "ad_scene_direction", direction_task, direction_input, direction_images)
             answer = answer | {"art_direction": required_text(direction, "scene", "촬영 연출")}
 
@@ -702,9 +715,11 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         placement = ("Follow the reference's product placement and scale if it has a plain gray background. "
                      if subject_box else "")
         correction = (f"Required photographic change, taking precedence over other scene details: {feedback} "
-                      "Keep all poster copy out of the photograph. " if feedback else "")
-        guide = (f"{ANGLES[art_plan['angle']]} {SHOT_SCALES[art_plan['shot_scale']]} {art_plan['photo_device']} "
+                      "Keep all poster copy out of the photograph. " if feedback and not alternate_framing else "")
+        guide = (f"{ANGLES[art_plan['angle']]} {SHOT_SCALES[art_plan['shot_scale']]} "
                  if art_plan else "")
+        if art_plan and not alternate_framing:
+            guide += f"{art_plan['photo_device']} "
         prompt = ("Make a new commissioned photograph with a newly built setting and lighting. "
                   f"{correction}{placement}{guide}Replace the surroundings with the requested setting. "
                   "Keep the product shape, material and details. "

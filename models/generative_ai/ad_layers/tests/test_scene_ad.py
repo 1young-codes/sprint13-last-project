@@ -18,6 +18,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     correction = "Show the cap held visibly by a hand."
     actual_light = "Grazing light from the left defines the small drop under the cap."
     expect_correction = False
+    delegated_framing = False
 
     def mask(model, pixels):
         assert model == "mask"
@@ -39,8 +40,9 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             assert reference.getpixel((243, 460)) == photo.getpixel((30, 28))
             is_revision = "ad_cycle_critique" in calls
             assert ("Narrow studio beam" if is_revision else "Amber reflections") in prompt
-            assert "Shoot near the subject's height" in prompt and "Show the amber edge in side light." in prompt
-            assert (correction in prompt) == expect_correction
+            assert "Shoot near the subject's height" in prompt
+            assert ("Show the amber edge in side light." in prompt) == (not delegated_framing)
+            assert (correction in prompt) == (expect_correction and not delegated_framing)
             assert ("Keep the same close framing" in prompt) == expect_correction
             if expect_correction:
                 assert reference.getpixel((100, 460)) == (128, 128, 128)
@@ -65,6 +67,8 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                                    "photo_device": "Show the amber edge in side light."})
             if step == "ad_source_framing":
                 assert len(images) == 3 and images[0].shape == (28, 30, 3) and images[1].shape == (60, 70, 3)
+                if delegated_framing:
+                    assert "앰버 유리가 묻힙니다" in prompt and correction not in prompt
                 crop = [33, 10, 40, 80] if expect_correction else None
                 return json.dumps({"source_crop": crop, "reason": "병의 실제 형태를 확인합니다"})
             if step == "ad_source_framing_check":
@@ -84,6 +88,8 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 if expect_correction:
                     assert data["requested_scene_change"] == correction
                     assert "deliberate detail crop" in data["framing_guide"]
+                if delegated_framing:
+                    assert "Omit any instruction to keep the entire product" in prompt
                 if "hypothesis" in data:
                     assert data["hypothesis"] == "A narrow beam through the glass" and data["idea"] == "가벼운 아침 연출"
                     return '{"scene":"Narrow studio beam"}'
@@ -201,6 +207,14 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     with Image.open(tmp_path / "targeted" / "scene.png") as scene:
         assert scene.getpixel((15, 20)) == (0, 0, 255, 255)
         assert scene.getpixel((511, 20)) == (0, 0, 255, 0)
+
+    calls.clear()
+    delegated_framing = True
+    delegated = scene_ad.make_scene_ad(photo, fields, "가벼운 아침 연출", models, tmp_path / "delegated",
+                                       references=[reference], previous=folder, feedback=correction,
+                                       scene_issue="앰버 유리가 묻힙니다")
+    assert delegated["design"]["source_crop"] == [33, 10, 40, 80]
+    assert correction not in delegated["scene_prompt"]
 
 
 def test_cropped_side_stays_at_the_photo_edge_in_model_reference():
