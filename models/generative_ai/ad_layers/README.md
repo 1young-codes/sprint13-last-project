@@ -97,6 +97,8 @@ python -m models.generative_ai.ad_layers.scene_ad photos/items.json photos outpu
 
 [사진과 포스터 연출 가이드](art_direction_guides.md)는 상품에서 보여 줄 특징을 먼저 고르는 근거를 기록합니다. 촬영 각도와 거리, 광고 목적에 따른 글자 위계를 정한 뒤 렌더링 결과를 봅니다. 다음 수정에는 앞서 바꿔 본 내용과 그 뒤에도 남아 있는 문제를 함께 전달합니다.
 
+참고 포스터가 있으면 채택 직전에 원본 상품 사진, 생성한 사진, 광고를 함께 대조합니다. 참고작에서 메시지를 전달하는 표현을 찾아 후보에도 상품의 특징을 더 잘 드러내는 촬영이나 배치가 보이는지 확인합니다. 비교 결과는 `events.jsonl`에 `campaign_check`로 남습니다.
+
 ```bash
 python -m models.generative_ai.ad_layers.studio 사진.png 상품.json outputs/studio \
     --references 참고.png --formats 4:5 9:16 16:9 thumbnail --low-vram

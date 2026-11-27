@@ -32,15 +32,30 @@ the headline, and how the photo and type relate. Evaluate the poster against the
 Use any supplied theme guides. Identify the actual visible line, action, light, or scale that leads the eye
 between the image and the headline. Empty margin and legible copy beside a product are insufficient if the
 image does not show the message. Classify a missing photographic idea as scene, and a weak reading path as layout.
-For ready, name the visible composition decision in observation, such as a shared axis, directed action,
-or meaningful typographic contrast that leads from the message to the product. Evidence that the item
-matches the words confirms the subject and cannot by itself justify the visual composition.
+For ready, name the visible treatment in observation and explain how it makes this particular selling point
+more noticeable than in a standard catalog photo with the same words. Look for an actual use moment, a
+deliberate crop or angle, directed lighting that singles out a detail, or type that interacts with a specific
+shape or motion in the photo. Allow restrained minimal designs when the treatment is visible and purposeful.
+A centered product, aligned type and recognizable details can all be present in a catalog image. Classify
+scene if the shot could be swapped for a standard product photo without weakening the idea. Classify layout
+if the shot shows the idea but the type and spacing flatten it into disconnected information.
 Use the phone preview to read it as a shopper seeing the whole poster. Check whether the product name and price can be
 spotted and read as related information after the first glance. Report typography if either is visually lost
 or the price reads like a detached footnote. A supporting price can be smaller than the headline.
 Do not approve based on legibility alone. Give no score. Return JSON with version (from version_order),
 finding (one of ready, typography, layout, distraction, product, scene), and observation (a concrete Korean sentence).
 Use ready when the poster could serve this campaign as seen."""
+
+CAMPAIGN_CHECK = """Recheck the candidate against the actual design references and the actual source product.
+Image order: source product, finished candidate, candidate photograph without type, then reference posters.
+Name one visible treatment that makes a reference's message work. Compare the candidate's execution at that
+level, allowing for its own category and mood. A centered product, readable type and a visible feature already
+clear in the source do not by themselves establish a campaign idea. Compare the source and the candidate
+photograph before attributing a product feature to the new lighting, view or crop. If the scene adds no
+purposeful treatment to make the feature more noticeable, return scene. If the photograph does show the idea
+but scale, typography or placement weakens it, return layout. Allow quiet minimalism when the treatment is
+visible and supports the message. Return JSON with finding (ready, scene or layout), observation (a concrete
+Korean sentence about the candidate), and reference_observation (a concrete Korean detail from a reference)."""
 
 ACT = """Use the evidence in observation and the actual chosen poster (first image) to pick one action.
 Use only a tool in actions and follow its guide. Choose the smallest change that can fix the visible issue.
@@ -149,6 +164,17 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         if visible not in order or not isinstance(finding, str) or finding not in FINDINGS:
             raise ValueError("비교할 시안이나 수정 이유를 확인하지 못했습니다")
         observation = required_text(review, "observation", "시안 검토")
+        if finding == "ready" and sources:
+            selected = versions / visible
+            scene = read_image(selected / load_layout(selected)["artwork"]["file"])
+            check = ask_stage(ai, "studio_campaign_check", CAMPAIGN_CHECK, {"required_copy": required_copy},
+                              [to_float(photo), pictures[visible], to_float(scene), *sources])
+            finding = check.get("finding")
+            if finding not in ("ready", "scene", "layout"):
+                raise ValueError("참고 포스터와 비교한 결과를 확인하지 못했습니다")
+            observation = required_text(check, "observation", "참고 포스터 비교")
+            record("campaign_check", version=visible, finding=finding, observation=observation,
+                   reference_observation=required_text(check, "reference_observation", "참고 포스터 비교"))
         record("look", versions=order, version=visible, finding=finding, observation=observation)
         if pending:
             attempts[-1].update(preferred_version=visible, remaining_finding=finding, observation=observation)

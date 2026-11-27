@@ -91,6 +91,30 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft):
         assert poster.size == (600, 600)
 
 
+def test_reference_comparison_can_block_selection(tmp_path, draft):
+    folder, fields = draft
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            if step == "studio_look":
+                return '{"version":"v01","finding":"ready","observation":"중앙 정렬이 깔끔합니다"}'
+            if step == "studio_campaign_check":
+                assert len(images) == 4 and images[1][10, 10].tolist() == [1, 1, 1]
+                assert images[2][10, 10].tolist() == [0, 0, 1]
+                assert "포근한 겨울 저녁" in request
+                return json.dumps({"finding": "scene", "observation": "원본 촛불과 다른 연출이 보이지 않습니다",
+                                   "reference_observation": "참고작의 그림자가 불빛의 위치를 드러냅니다"})
+            assert step == "studio_action"
+            data = json.loads(request.split("Input JSON follows:\n", 1)[1])
+            assert list(data["actions"]) == ["hold"]
+            return '{"action":"hold","arguments":{},"reason":"촬영부터 고쳐야 합니다"}'
+
+    output = tmp_path / "output"
+    result = studio.run_studio(Image.new("RGB", (100, 100)), fields, "", output, Agent(), draft=folder,
+                               references=[Image.new("RGB", (100, 100), "red")], edit_limit=0)
+    assert result["status"] == "needs_review" and not (output / "final").exists()
+
+
 def test_region_edit_locks_product_and_rest_of_photo(tmp_path, draft):
     folder, _ = draft
 
