@@ -78,6 +78,24 @@ smaller information. Look at the actual space and ink, even if the proposal desc
 Keep the original when the revision would merely trade one generic arrangement for another.
 Return JSON with choice (original or revision) and a concrete Korean reason."""
 
+SOURCE_FRAMING = """Choose the framing of the product itself before laying out the ad. The first image is the
+product isolated to its tight bounds. The second image is the original photograph; any remaining images are design
+references. Use the proposed photographic idea and exact headline. Choose a close crop when it would make one
+otherwise small visible detail carry the message, and keep enough context to recognize the item and its use.
+If the evidence is concentrated in one part, propose a visibly tighter frame for comparison even if the whole
+product is plausible. Cut parts that do not help the story; trimming an edge alone rarely makes a detail lead.
+Choose the whole available view when the shape, labeling, count, or arrangement is the evidence. The original
+may already be cut by a photo edge; do not treat that edge as the real end of the object.
+Return JSON with source_crop (null for the whole product, or [left, top, width, height] in integer percentages of
+the first image) and reason (in Korean, what the chosen framing will make the reader see)."""
+
+SOURCE_FRAMING_CHECK = """The first two images show the whole available product and the actual crop in equal-size frames.
+The third image is the original photo. Compare the visible pixels against the exact headline and the intended
+selling detail. Check recognition, number of items, important labels, and the edges and detail that actually
+remain. Favor the crop only when it makes the detail meaningfully more prominent and keeps recognizable context.
+Keep the whole view if the crop mainly removes an edge with little practical enlargement of the selling detail.
+Return JSON with choice (whole or detail) and a Korean reason grounded in those two images."""
+
 FINAL_REVIEW = """Review the first poster, using the second image (its generated photo without type) and the reference
 posters that follow. Keep the generated photo, position, crop and canvas color. Use the actual product bounds to
 place type outside the product. Group the related text, give the main line a distinct scale, and judge contrast
@@ -232,6 +250,35 @@ def crop_subject(product, design):
     return detail
 
 
+def choose_source_framing(ai, product, inputs, images):
+    def on_gray(subject):
+        canvas = Image.new("RGB", subject.size, "#808080")
+        canvas.paste(subject, mask=subject.getchannel("A"))
+        return canvas
+
+    whole = on_gray(product)
+    answer = ask_stage(ai, "ad_source_framing", SOURCE_FRAMING, inputs, [to_float(whole), *images])
+    crop = answer.get("source_crop")
+    reason = answer.get("reason")
+    if "source_crop" not in answer or not isinstance(reason, str) or not reason.strip():
+        return {"source_crop": None, "reason": "추천 구도를 확인하지 못해 원본 범위를 유지합니다"}
+    if crop is None or crop == [0, 0, 100, 100]:
+        return {"source_crop": None, "reason": reason}
+    try:
+        validate_boxes({"source_crop": crop}, ("source_crop",))
+        detail = crop_subject(product, answer)
+    except ValueError as error:
+        return {"source_crop": None, "reason": f"{error}. 원본 범위를 유지합니다"}
+    frames = [to_float(ImageOps.pad(view, (512, 512), Image.Resampling.LANCZOS, color="#808080"))
+              for view in (whole, on_gray(detail))]
+    review = ask_stage(ai, "ad_source_framing_check", SOURCE_FRAMING_CHECK, inputs | {"proposal": reason},
+                       [*frames, images[0]])
+    review_reason = review.get("reason")
+    if review.get("choice") not in ("whole", "detail") or not isinstance(review_reason, str) or not review_reason.strip():
+        return {"source_crop": None, "reason": "확대본의 비교 결과가 없어 원본 범위를 유지합니다"}
+    return {"source_crop": crop if review["choice"] == "detail" else None, "reason": review_reason}
+
+
 def frame_subject(product, picture_size, subject_box, source_crop=None):
     x, y, width, height = pixel_box(subject_box, picture_size)
     contained = ImageOps.contain(product, (width, height), Image.Resampling.LANCZOS)
@@ -283,6 +330,13 @@ def review_composition_plan(ai, product, design, layout, folder, inputs, images)
     first, foreground = composition_preview(product, design, layout, folder)
     photo_input = [to_float(first), *images]
     review_input = inputs | {"design": design}
+    task = BLOCKING + "\n" + DESIGN_SCHEMA
+    if "source_framing" in inputs:
+        task += "\nKeep the chosen source_framing. Adjust placement, scale and type around that photographed view."
+    editable = {"concept", "focus", "background", "accent", "artwork_box", "subject_box", "crop", "source_crop",
+                "edge", "boxes", "styles"}
+    if "source_framing" in inputs:
+        editable -= {"crop", "source_crop"}
     original_valid = True
     try:
         check_text_overlap(foreground, layout, folder)
@@ -292,12 +346,10 @@ def review_composition_plan(ai, product, design, layout, folder, inputs, images)
 
     kept_reason = None
     for _ in range(2):
-        review = ask_stage(ai, "ad_composition", BLOCKING + "\n" + DESIGN_SCHEMA, review_input, photo_input)
+        review = ask_stage(ai, "ad_composition", task, review_input, photo_input)
         revision = review.get("revision")
         if not isinstance(revision, dict):
             break
-        editable = {"concept", "focus", "background", "accent", "artwork_box", "subject_box", "crop", "source_crop",
-                    "edge", "boxes", "styles"}
         changed = design | {key: revision[key] for key in editable & revision.keys()}
         if changed == design:
             break
@@ -546,24 +598,40 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                             idea=idea, revision_feedback=revision_info)
     art_plan = proposal.get("art_direction_plan") if proposal else plan_art_direction(
         ai, fields, design_input["brief"] | {"headline": copy["headline"]}, idea, images, revision_info)
-    if art_plan:
-        design_input["art_direction_plan"] = art_plan | {"layout_guide": THEMES[art_plan["theme"]]["layout"]}
     threshold = settings["product"]["mask_threshold"]
     mask_model = models.get("mask")
     product = extract_subject(photo, mask_model, threshold) if mask_model is not None else None
+    source_framing = proposal.get("source_framing") if proposal else None
+    if not proposal and product is not None:
+        source_framing = choose_source_framing(ai, product, design_input | {"art_direction_plan": art_plan}, images)
+        source_crop = source_framing["source_crop"]
+        scale = "detail" if source_crop is not None else art_plan["shot_scale"]
+        if source_crop is None and scale == "detail":
+            scale = "close"
+        art_plan = art_plan | {"shot_scale": scale}
+    if source_framing:
+        design_input["source_framing"] = source_framing
+    if art_plan:
+        design_input["art_direction_plan"] = art_plan | {"layout_guide": THEMES[art_plan["theme"]]["layout"]}
 
     folder.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=folder.parent) as staging:
         result = Path(staging)
         design_task = (DESIGN + "\nUse the selected layout_guide and connect the chosen photo_device to one "
                        "clear reading path. Return a JSON design object.\n" + DESIGN_SCHEMA)
+        frame_fields = {}
+        if source_framing and not proposal:
+            crop = source_framing["source_crop"]
+            frame_fields = {"source_crop": crop, "crop": "preserve" if crop is None else "intentional"}
+            design_task += "\nSource framing is approved. Use source_framing and lay out the actual view without changing it."
         if feedback:
             design_task += ("\nThe second image is the previous poster. Plan the requested_scene_change in revision_feedback "
                             "and preserve unaffected parts of that composition. Do not substitute another change.")
         elif revision_info:
             design_task += ("\nMake room for the visual idea in revision_feedback. Give the photography "
                             "and type a new shared composition with the same exact copy.")
-        answer = proposal["design"] if proposal else ask_stage(ai, "ad_layout", design_task, design_input, design_images)
+        answer = proposal["design"] if proposal else (
+            ask_stage(ai, "ad_layout", design_task, design_input, design_images) | frame_fields)
         try:
             layout = design_layers(answer, copy, size, settings["fonts"], result)
             effective = crop_subject(product, answer)
@@ -571,7 +639,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             if proposal:
                 raise
             retry = design_input | {"previous_design": answer, "layout_error": str(error)}
-            answer = ask_stage(ai, "ad_layout", design_task, retry, design_images)
+            answer = ask_stage(ai, "ad_layout", design_task, retry, design_images) | frame_fields
             layout = design_layers(answer, copy, size, settings["fonts"], result)
             effective = crop_subject(product, answer)
 
@@ -590,6 +658,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             lighting = art_plan["lighting"]
             direction_input.update(art_direction_plan=art_plan, angle_guide=angle, framing_guide=scale,
                                    lighting_guide=LIGHTING.get(lighting, lighting))
+            if source_framing:
+                direction_input["source_framing"] = source_framing
             if composition_reason:
                 direction_input["approved_composition"] = composition_reason
             if revision_info:
@@ -655,6 +725,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                       final_review_reason=final_review_reason)
         if art_plan:
             layout["art_direction_plan"] = art_plan
+        if source_framing:
+            layout["source_framing"] = source_framing
         if composition_reason:
             layout["composition_reason"] = composition_reason
         if preview:

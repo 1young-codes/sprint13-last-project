@@ -58,6 +58,7 @@ visible and supports the message. Return JSON with finding (ready, scene or layo
 Korean sentence about the candidate), and reference_observation (a concrete Korean detail from a reference)."""
 
 ACT = """Use the evidence in observation and the actual chosen poster (first image) to pick one action.
+The second image is the source photo. Ground any framing or staging change in a specific feature visible there.
 Use only a tool in actions and follow its guide. Choose the smallest change that can fix the visible issue.
 Read the earlier edits and what remained visible after each comparison. If moving or enlarging the words
 left the same photo-and-copy disconnect, choose a different composition action or revise the photography
@@ -197,7 +198,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
                              {"observation": observation, "actions": guides, "product": fields,
                               "design": layout["design"], "copy": [text["text"] for text in layout["texts"]],
                               "fonts": list(load_settings()["fonts"]), "last_edit_error": last_failure,
-                              "earlier_edits": attempts}, [pictures[current]])
+                              "earlier_edits": attempts}, [pictures[current], to_float(photo)])
         action = decision.get("action")
         arguments = decision.get("arguments")
         if (not isinstance(action, str) or action not in guides or not isinstance(arguments, dict)

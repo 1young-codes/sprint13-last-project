@@ -105,6 +105,8 @@ def test_reference_comparison_can_block_selection(tmp_path, draft):
                 return json.dumps({"finding": "scene", "observation": "원본 촛불과 다른 연출이 보이지 않습니다",
                                    "reference_observation": "참고작의 그림자가 불빛의 위치를 드러냅니다"})
             assert step == "studio_action"
+            assert len(images) == 2 and images[0][10, 10].tolist() == [1, 1, 1]
+            assert images[1][10, 10].tolist() == [0, 0, 0]
             data = json.loads(request.split("Input JSON follows:\n", 1)[1])
             assert list(data["actions"]) == ["hold"]
             return '{"action":"hold","arguments":{},"reason":"촬영부터 고쳐야 합니다"}'

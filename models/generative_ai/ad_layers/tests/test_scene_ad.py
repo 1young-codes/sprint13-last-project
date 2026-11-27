@@ -63,6 +63,14 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 return json.dumps({"theme": "studio", "angle": "level", "shot_scale": "whole",
                                    "lighting": actual_light if expect_correction else "transmitted", "evidence": "앰버색 병",
                                    "photo_device": "Show the amber edge in side light."})
+            if step == "ad_source_framing":
+                assert len(images) == 3 and images[0].shape == (28, 30, 3) and images[1].shape == (60, 70, 3)
+                crop = [33, 10, 40, 80] if expect_correction else None
+                return json.dumps({"source_crop": crop, "reason": "병의 실제 형태를 확인합니다"})
+            if step == "ad_source_framing_check":
+                assert expect_correction and images[0].shape == images[1].shape == (512, 512, 3)
+                assert not np.array_equal(images[0], images[1])
+                return '{"choice":"detail","reason":"앰버 유리의 빛이 확대되어 보입니다"}'
             if step == "ad_cycle_critique":
                 assert len(images) == 4 and images[0][20, 15, 2] == 1
                 assert "병의 하단이 잘렸습니다" in prompt
@@ -83,7 +91,8 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             if step == "ad_composition":
                 assert len(images) == 3 and images[0].shape == (1024, 1024, 3)
                 assert "부드러운 아침" in prompt
-                return '{"reason":"병 위치를 옮깁니다","revision":{"subject_box":[15,20,70,50]}}'
+                return ('{"reason":"병 위치를 옮깁니다",'
+                        '"revision":{"subject_box":[15,20,70,50],"crop":"preserve","source_crop":null}}')
             if step == "ad_composition_compare":
                 assert len(images) == 3 and not np.array_equal(images[0], images[1])
                 return '{"choice":"original","reason":"기존 위치에서 제목이 더 자연스럽게 읽힙니다"}'
@@ -117,11 +126,10 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             else:
                 assert "겹쳤습니다" in data["layout_error"]
             style = {"font": "noto_sans_kr", "align": "left", "color": "#ffffff", "size": 5, "max_lines": 1}
-            crop = {"crop": "intentional", "source_crop": [33, 10, 40, 80]} if expect_correction else {"crop": "preserve"}
             return json.dumps({"concept": "Light joins image and type", "focus": "headline", "background": "#251d16",
                                "accent": {"shape": "ellipse", "box": [35, 10, 55, 55], "color": "#9e6c4b"},
                                "artwork_box": [0, 0, 50, 100], "subject_box": [10, 20, 75, 50],
-                               "edge": "framed", **crop,
+                               "edge": "framed", "crop": "preserve",
                                "art_direction": "Amber reflections",
                                "boxes": boxes, "styles": {role: style for role in boxes}})
 
@@ -138,8 +146,8 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     folder = tmp_path / "result"
     models = {"ai": Interpreter(), "generation": Model(), "mask": "mask"}
     layout = scene_ad.make_scene_ad(photo, fields, "", models, folder, references=[reference])
-    assert calls == ["ad_plan", "ad_direction", "ad_headline", "ad_art_direction", "ad_layout", "ad_layout", "render",
-                     "ad_composition", "render", "ad_composition_compare", "ad_scene_direction", "qwen",
+    assert calls == ["ad_plan", "ad_direction", "ad_headline", "ad_art_direction", "ad_source_framing", "ad_layout",
+                     "ad_layout", "render", "ad_composition", "render", "ad_composition_compare", "ad_scene_direction", "qwen",
                      "ad_final_layout", "render"]
     assert layout["design"]["accent"] is None
     assert layout["art_direction_plan"]["evidence"] == "앰버색 병"
@@ -170,7 +178,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     (rejected / "layout.json").write_text(json.dumps(rejected_layout), encoding="utf-8")
     revision = scene_ad.make_scene_ad(photo, fields, "가벼운 아침 연출", models, tmp_path / "revision", references=[reference],
                                       previous=folder, rejected=rejected)
-    assert calls == ["ad_cycle_critique", "ad_art_direction", "ad_layout", "ad_layout", "render", "ad_composition",
+    assert calls == ["ad_cycle_critique", "ad_art_direction", "ad_source_framing", "ad_layout", "ad_layout", "render", "ad_composition",
                      "render", "ad_composition_compare", "ad_scene_direction", "qwen", "ad_final_layout", "render"]
     assert revision["revision"]["weakness"] == "평평한 조명"
     assert revision["design"]["art_direction"] == "Narrow studio beam"
@@ -186,6 +194,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     assert targeted["brief"]["headline"] == layout["brief"]["headline"]
     assert calls.count("ad_final_layout") == 2 and calls.count("qwen") == 1
     assert targeted["artwork"] == layout["artwork"]
+    assert targeted["design"]["source_crop"] == targeted["source_framing"]["source_crop"] == [33, 10, 40, 80]
     headline = next(text for text in targeted["texts"] if text["role"] == "headline")
     assert headline["max_font_size"] == 65 and "depth" not in headline
     assert targeted["design"]["edge"] == "blend"
