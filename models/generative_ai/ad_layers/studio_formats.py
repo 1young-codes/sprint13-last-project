@@ -26,6 +26,14 @@ an already simple part of the scene over extending furniture, hard edges, or imp
 Keep every visible product and retain the campaign's visual focus. Return JSON with position from
 position_order and reason as one concrete Korean sentence about the intended composition."""
 
+MARGIN_CHECK = """Review the newly filled margins of a reframed product photo. The first image is the actual
+filled photograph; the second shows the same photograph with only stretched preview margins. photo_bounds
+identifies the unmodified photo in whole canvas percentages, left, top, right, bottom. Only inspect regions
+outside those bounds. Look at the corners as well as seams. Reject a new object, glow, smear, or broken
+surface that draws the eye or interrupts a continuous edge. Allow a naturally quiet extension. Return
+ready (boolean), side (one of margin_sides if rejected, null if ready), and observation (one concrete Korean
+sentence naming what is visible and where)."""
+
 REFRAME = """Reframe the approved poster's exact typography for a new aspect ratio. The first image is the
 approved poster and the second is the actual photo in the new frame. Keep the new photo unchanged. Use its
 quiet space and the product bounds to place the exact headline, product name and price. Keep the approved
@@ -68,7 +76,19 @@ def extend_edges(contained, size, placement):
     return frame, (left, top, left + contained.width, top + contained.height)
 
 
-def frame_photo(photo, mask, size, expand=None, choose_position=None):
+def reflect_margin(filled, contained, placed, side):
+    left, top, right, bottom = placed
+    width, height = filled.size
+    padding = ((top, height - bottom), (left, width - right), (0, 0))
+    reflected = Image.fromarray(np.pad(np.asarray(contained), padding, mode="reflect"))
+    bounds = {"left": (0, 0, left, height), "right": (right, 0, width, height),
+              "top": (0, 0, width, top), "bottom": (0, bottom, width, height)}[side]
+    result = filled.copy()
+    result.paste(reflected.crop(bounds), bounds[:2])
+    return result
+
+
+def frame_photo(photo, mask, size, expand=None, choose_position=None, check_margin=None):
     width, height = photo.size
     target_width, target_height = size
     ratio = target_width / target_height
@@ -98,13 +118,27 @@ def frame_photo(photo, mask, size, expand=None, choose_position=None):
         frame, placed = choices[framing]
     else:
         frame, placed = extend_edges(contained, size, 0.5)
+    for attempt in range(2):
+        if expand is None or placed == (0, 0, *size):
+            break
+        margin = Image.new("L", size, 255)
+        margin.paste(0, placed)
+        filled = Image.composite(expand(frame, np.asarray(margin) != 0), frame, margin)
+        side = check_margin(filled, frame, placed, "relocated" if attempt else "initial") if check_margin else None
+        if side is None:
+            frame = filled
+            break
+        if attempt:
+            raise ValueError("게시 규격에서 사진의 새 가장자리를 확정하지 못했습니다")
+        reflected = reflect_margin(filled, contained, placed, side)
+        if check_margin(reflected, frame, placed, "reflected") is None:
+            frame = reflected
+            break
+        fraction = 0 if side in ("left", "top") else 1
+        frame, placed = extend_edges(contained, size, fraction)
     framed_mask = Image.new("L", size)
     left, top, right, bottom = placed
     framed_mask.paste(mask.resize((right - left, bottom - top), Image.Resampling.NEAREST), (left, top))
-    if expand is not None:
-        margin = Image.new("L", size, 255)
-        margin.paste(0, placed)
-        frame = Image.composite(expand(frame, np.asarray(margin) != 0), frame, margin)
     return frame, framed_mask
 
 
@@ -175,7 +209,30 @@ def adapt_format(source, output, format_name, ai, expand=None):
         position_info.update(position=answer.get("position"), reason=required_text(answer, "reason", "사진 배치"))
         return position_info["position"]
 
-    framing, framing_mask = frame_photo(photo, mask, size, expand, choose_position)
+    def check_margin(filled, preview, placed, method):
+        left, top, right, bottom = placed
+        margins = (left, top, size[0] - right, size[1] - bottom)
+        sides = [side for side, amount in zip(("left", "top", "right", "bottom"), margins, strict=True) if amount]
+        bounds = [round(100 * edge / length) for edge, length in zip(placed, size * 2, strict=True)]
+        answer = ask_stage(ai, "studio_format_margin_check", MARGIN_CHECK,
+                           {"photo_bounds": bounds, "margin_sides": sides}, [to_float(filled), to_float(preview)])
+        observation = required_text(answer, "observation", "사진 가장자리 검토")
+        if answer.get("ready") is True:
+            position_info.update(margin_review=observation, margin_method=method)
+            if method == "relocated":
+                position_info.update(position=position_info["margin_side"],
+                                     reason="채운 여백에 흔적이 보여 원본 사진을 그쪽 가장자리에 붙였습니다")
+            return None
+        side = answer.get("side")
+        if answer.get("ready") is not False or side not in sides:
+            raise ValueError("게시 규격에서 채운 사진 가장자리의 검토 위치를 확인하지 못했습니다")
+        if method == "relocated":
+            raise ValueError(f"게시 규격에서 사진의 새 가장자리를 확정하지 못했습니다. {observation}")
+        if method == "initial":
+            position_info.update(margin_side=side, margin_rejection=observation)
+        return side
+
+    framing, framing_mask = frame_photo(photo, mask, size, expand, choose_position, check_margin)
     images = [reference, to_float(framing)]
     fonts = load_settings()["fonts"]
     bounds = [round(100 * point / side) for point, side in zip(framing_mask.getbbox(), (*size, *size), strict=True)]

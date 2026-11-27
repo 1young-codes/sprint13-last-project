@@ -425,6 +425,29 @@ def test_expands_only_the_chosen_photo_placement():
     assert result.crop((0, 39, 50, 92)).tobytes() == expanded[0].crop((0, 39, 50, 92)).tobytes()
 
 
+def test_format_removes_the_failed_margin_without_repainting_the_photo():
+    photo = Image.new("RGB", (100, 100), "blue")
+    mask = Image.new("L", photo.size)
+    mask.paste(255, (0, 25, 100, 76))
+    reviews = []
+
+    def expand(frame, margin):
+        return Image.new("RGB", frame.size, "red" if margin[0, 0] else "green")
+
+    def review(filled, _, placed, method):
+        reviews.append((placed, method))
+        assert filled.crop(placed).tobytes() == Image.new("RGB", (50, 50), "blue").tobytes()
+        if method == "reflected":
+            assert filled.getpixel((0, 0)) == (0, 0, 255) and filled.getpixel((0, 99)) == (255, 0, 0)
+        return None if method == "relocated" else "top"
+
+    result, visible = studio_formats.frame_photo(photo, mask, (50, 100), expand,
+                                               choose_position=lambda _: "center", check_margin=review)
+    assert reviews == [((0, 25, 50, 75), "initial"), ((0, 25, 50, 75), "reflected"), ((0, 0, 50, 50), "relocated")]
+    assert result.getpixel((0, 0)) == (0, 0, 255) and result.getpixel((0, 99)) == (0, 128, 0)
+    assert visible.getbbox()[3] <= 50
+
+
 def test_composition_review_can_fix_a_valid_layout(draft):
     folder, _ = draft
     layout = load_layout(folder)
