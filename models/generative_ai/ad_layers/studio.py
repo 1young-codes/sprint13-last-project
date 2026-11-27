@@ -37,6 +37,9 @@ Use ready when the poster could serve this campaign as seen."""
 
 ACT = """Use the evidence in observation and the actual chosen poster (first image) to pick one action.
 Use only a tool in actions and follow its guide. Choose the smallest change that can fix the visible issue.
+Read the earlier edits and what remained visible after each comparison. If moving or enlarging the words
+left the same photo-and-copy disconnect, choose a different composition action or revise the photography
+when available. Do not repeat an earlier edit that left the same issue.
 Keep the exact wording. Return JSON with action, arguments (an object with only the listed input keys),
 and reason (Korean, briefly saying what will visibly change)."""
 
@@ -116,6 +119,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
     record("poster", version=current, image=(first / "ad.png").relative_to(output).as_posix())
 
     pending = None
+    attempts = []
     observation = ""
     last_failure = None
     for turn in range(edit_limit + 1):
@@ -133,6 +137,9 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
             raise ValueError("비교할 시안이나 수정 이유를 확인하지 못했습니다")
         observation = required_text(review, "observation", "시안 검토")
         record("look", versions=order, version=visible, finding=finding, observation=observation)
+        if pending:
+            attempts[-1].update(preferred_version=visible, remaining_finding=finding, observation=observation)
+            record("edit_review", **attempts[-1])
         current, pending = visible, None
         base = versions / current
         layout = load_layout(base)
@@ -150,7 +157,8 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         decision = ask_stage(ai, "studio_action", ACT,
                              {"observation": observation, "actions": guides, "product": fields,
                               "design": layout["design"], "copy": [text["text"] for text in layout["texts"]],
-                              "fonts": list(load_settings()["fonts"]), "last_edit_error": last_failure}, [pictures[current]])
+                              "fonts": list(load_settings()["fonts"]), "last_edit_error": last_failure,
+                              "earlier_edits": attempts}, [pictures[current]])
         action = decision.get("action")
         arguments = decision.get("arguments")
         if (not isinstance(action, str) or action not in guides or not isinstance(arguments, dict)
@@ -195,6 +203,8 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
             continue
         last_failure = None
         pending = new_id
+        attempts.append({"candidate": new_id, "parent": current, "action": action, "arguments": arguments,
+                         "reason": reason})
         record("poster", version=new_id, parent=current, image=(revised / "ad.png").relative_to(output).as_posix())
 
     image = versions / current / "ad.png"

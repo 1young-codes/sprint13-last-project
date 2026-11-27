@@ -71,6 +71,9 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft):
                 return json.dumps({"action": "edit_text", "arguments": {"changes": {"headline": {
                     "box": [20, 20, 45, 10], "first_line": "포근한 겨울"}}}, "reason": "제목 이동"})
             assert set(data["actions"]) == {"select", "hold"}
+            edit = data["earlier_edits"][0]
+            assert (edit["action"], edit["candidate"], edit["preferred_version"], edit["remaining_finding"]) == (
+                "edit_text", "v02", "v02", "ready")
             return '{"action":"select","arguments":{},"reason":"제목과 제품이 함께 읽힙니다"}'
 
     output = tmp_path / "output"
