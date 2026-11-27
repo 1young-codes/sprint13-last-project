@@ -198,7 +198,21 @@ If the product name is broader than the photograph, do not fill in other items, 
 When there is a product demonstration, describe exactly what supports each object and the physical relationship
 of the moving parts. Use surroundings and props only where they serve this particular image or the owner's
 request. Follow the agreed crop. State only what the generated photograph should show. Include no ad text,
-graphics, coordinates or layout markup. Return JSON with one string, 'scene'."""
+graphics, coordinates or layout markup. Return JSON with 'scene' and 'photo_cue'. Write photo_cue as one
+short English sentence naming the visible relationship or effect that must be true for the scene to convey the
+message. For a demonstration, name the relative position and direction of the moving parts, not just their
+presence. The cue must be directly observable in the photograph without reading the headline."""
+
+PHOTO_CUE_CHECK = """Compare the original product (first image) and the rendered photograph without type
+(second image). Verify photo_cue from the actual pixels in the second image. For a gesture or motion, locate
+the two relevant points and check their relative positions and direction. For light or material, locate the
+specified surface and check the actual highlight, shadow, or transmission there. Visible parts alone do not
+prove a relationship. If a planned action would physically miss its destination or appears suspended without
+plausible support, report it. Return JSON with visible (boolean), observation (one concrete Korean sentence
+describing what is actually visible), and correction (one precise English photographic instruction if false,
+null if true). If false, also return reposition (boolean, true when the correction must change the relative
+position or orientation of product parts). For that case give a self-contained physical arrangement, including
+what supports the moving part and where it points. Keep the product identity, scale and quiet area for lettering."""
 
 FORMAT_STAGING = """The first image is the source product, the second the approved campaign, and the
 third the isolated original product. Choose whether to physically move one already visible, independently
@@ -968,6 +982,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
     if format_rebuild is not None and (not previous or feedback or campaign_intent or rejected or viewpoint):
         raise ValueError("게시 규격에 맞춘 새 구도에는 채택한 포스터가 필요합니다")
     prior = load_layout(previous) if previous else None
+    photo_cue = required_text(proposal, "photo_cue", "촬영 연출") if proposal and "photo_cue" in proposal else None
+    photo_checks = []
     kept = prior or proposal
     if kept and kept["fields"] != fields:
         raise ValueError("시안의 상품 정보가 현재 입력과 다릅니다")
@@ -1204,6 +1220,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             if format_rebuild is not None:
                 direction_input["target_photo_aspect"] = [artwork["w"], artwork["h"]]
                 direction_input["approved_effect_hint"] = prior.get("revision", {}).get("visible_result")
+                direction_input["approved_photo_cue"] = prior.get("photo_cue")
                 direction_task += (" Arrange the subject and lighting for the new composition and art region. "
                                    "Use perspective, directional light or meaningful surroundings across the long axis. "
                                    "Follow the new placement preview and target_photo_aspect. Omit any description "
@@ -1238,13 +1255,15 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                                    "physical effect visible in its photograph that carries the message, and keep "
                                    "that effect on the same product in the new arrangement. The source photo and "
                                    "neutral placement preview identify the product and geometry; they omit the effect. "
-                                   "Do not inherit the approved poster's framing, exact positions, typography or ratio.")
+                                   "Do not inherit the approved poster's framing, exact positions, typography or ratio. "
+                                   "When approved_photo_cue is present, keep that physical relationship in scene.")
             if campaign_intent:
                 direction_task += ("\nLay out a real scene for the hypothesis and the approved headline position. "
                                    "Describe the path, gesture or feature that points toward the planned design. "
                                    "Keep layout_device to guide photography only: include no graphic or text in the photo.")
             direction = ask_stage(ai, "ad_scene_direction", direction_task, direction_input, direction_images)
             answer = answer | {"art_direction": required_text(direction, "scene", "촬영 연출")}
+            photo_cue = (direction_input.get("approved_photo_cue") or required_text(direction, "photo_cue", "촬영 연출"))
 
         picture_size = (artwork["w"], artwork["h"])
         subject_box = answer.get("subject_box")
@@ -1287,6 +1306,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 orientation = "square"
             prompt = (f"Compose for this {orientation} photograph, filling its {picture_size[0]} by "
                       f"{picture_size[1]} frame with the planned composition. {prompt}")
+        if photo_cue:
+            prompt += f" The finished photo must visibly show: {photo_cue}"
         if preview:
             if (result / artwork["file"]).is_file():
                 with Image.open(result / artwork["file"]) as planned:
@@ -1316,11 +1337,46 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 guide.save(result / "viewpoint.png")
             if staged_view is not None or moved_view is not None:
                 original = ImageOps.contain(photo, (640, 640), Image.Resampling.LANCZOS)
-                generated = model.edit_with_reference(original, guide, prompt, generation["seed"], generation["steps"])
+
+                def photograph(instruction):
+                    return model.edit_with_reference(original, guide, instruction, generation["seed"], generation["steps"])
             else:
                 reference = product_reference(photo, effective, render_size, subject_box, answer.get("source_crop"))
-                generated = model.edit(reference, prompt, generation["seed"], generation["steps"], size=render_size)
-            scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
+
+                def photograph(instruction):
+                    return model.edit(reference, instruction, generation["seed"], generation["steps"], size=render_size)
+
+            for attempt in range(2):
+                generated = photograph(prompt)
+                scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
+                if not photo_cue:
+                    break
+                check = ask_stage(ai, "ad_photo_cue_check", PHOTO_CUE_CHECK, {"photo_cue": photo_cue},
+                                  [images[0], to_float(scene)])
+                observation = required_text(check, "observation", "촬영 결과 검토")
+                visible = check.get("visible")
+                if type(visible) is not bool:
+                    raise ValueError("촬영한 사진에서 연출을 확인하지 못했습니다")
+                photo_checks.append({"visible": visible, "observation": observation})
+                if visible:
+                    break
+                if attempt:
+                    raise ValueError(f"사진에 의도한 연출이 보이지 않습니다. {observation}")
+                correction = required_text(check, "correction", "촬영 결과 검토")
+                reposition = check.get("reposition")
+                if type(reposition) is not bool:
+                    raise ValueError("촬영을 고칠 때 상품 배치를 바꿔야 하는지 확인하지 못했습니다")
+                if reposition and staged_view is None and moved_view is None:
+                    reference = photo.convert("RGB")
+                    camera = (f"{ANGLES[art_plan['angle']]} {SHOT_SCALES[art_plan['shot_scale']]} "
+                              f"{LIGHTING.get(art_plan['lighting'], art_plan['lighting'])} " if art_plan else "")
+                    prompt = ("Make one finished commercial photograph. The reference identifies the original item, "
+                              "its proportions, materials, labels, and visible parts. Change the arrangement to the "
+                              f"one described here: {correction} The photograph must show: {photo_cue} "
+                              f"{camera} Keep a quiet area for the later lettering. Use a background that can sit "
+                              f"against {answer['background']}. Preserve product identity. Add no text or graphics.")
+                else:
+                    prompt = f"Priority reshoot correction, replacing any conflicting placement instruction: {correction} {prompt}"
             foreground = find_foreground(scene, models["mask"], threshold)
             if answer["edge"] == "blend":
                 scene = blend_edges(scene, foreground, position=(artwork["x"], artwork["y"]), canvas_size=size)
@@ -1333,6 +1389,10 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                       final_review_reason=final_review_reason)
         if art_plan:
             layout["art_direction_plan"] = art_plan
+        if photo_cue:
+            layout["photo_cue"] = photo_cue
+        if photo_checks:
+            layout["photo_cue_checks"] = photo_checks
         if source_framing:
             layout["source_framing"] = source_framing
         if composition_reason:

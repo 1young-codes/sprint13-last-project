@@ -17,6 +17,10 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     fields = {"product_name": "수분 세럼", "price_krw": 32000}
     correction = "Show the cap held visibly by a hand."
     actual_light = "Grazing light from the left defines the small drop under the cap."
+    cue = "The near glass edge catches an amber highlight."
+    cue_correction = "Move the side light to reveal the near glass edge."
+    exercise_cue_retry = True
+    reject_cue = False
     campaign_intent = "빛줄기와 제목을 같은 방향으로 연결합니다"
     expect_correction = False
     delegated_framing = False
@@ -36,7 +40,14 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             assert weights is None and strength == 0
 
         def edit(self, reference, prompt, seed, steps, *, size):
-            assert reference.size == size == (512, 1024)
+            assert size == (512, 1024)
+            if reject_cue and "ad_photo_cue_check" in calls:
+                assert reference.size == photo.size and reference.tobytes() == photo.tobytes()
+                assert "The reference identifies the original item" in prompt
+                assert "Follow the reference's product placement" not in prompt and cue in prompt
+                calls.append("qwen")
+                return Image.new("RGB", size, "blue")
+            assert reference.size == size
             assert reference.getpixel((0, 0)) == (128, 128, 128)
             assert reference.getpixel((243, 460)) == photo.getpixel((30, 28))
             is_revision = "ad_cycle_critique" in calls
@@ -48,6 +59,9 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             if expect_correction:
                 assert reference.getpixel((100, 460)) == (128, 128, 128)
             assert "부드러운 아침" not in prompt
+            if exercise_cue_retry and "ad_photo_cue_check" in calls:
+                assert prompt.startswith(f"Priority reshoot correction, replacing any conflicting placement instruction: {cue_correction}")
+            assert cue in prompt
             calls.append("qwen")
             return Image.new("RGB", size, (160, 40, 255) if is_revision else (0, 0, 255))
 
@@ -101,8 +115,14 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                     assert data["hypothesis"] == "A narrow beam through the glass" and data["idea"] == "가벼운 아침 연출"
                     if "layout_device" in data:
                         assert data["visible_result"] == "빛이 제목으로 이어짐"
-                    return '{"scene":"Narrow studio beam"}'
-                return '{"scene":"Amber reflections"}'
+                    return json.dumps({"scene": "Narrow studio beam", "photo_cue": cue})
+                return json.dumps({"scene": "Amber reflections", "photo_cue": cue})
+            if step == "ad_photo_cue_check":
+                assert cue in prompt and len(images) == 2 and images[1].shape == (1024, 512, 3)
+                if reject_cue or exercise_cue_retry and calls.count(step) == 1:
+                    return json.dumps({"visible": False, "observation": "병 가장자리에 빛이 없습니다",
+                                       "correction": cue_correction, "reposition": reject_cue})
+                return '{"visible":true,"observation":"유리 가장자리에 빛이 보입니다","correction":null}'
             if step == "ad_composition":
                 assert len(images) == 3 and images[0].shape == (1024, 1024, 3)
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
@@ -165,7 +185,9 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     layout = scene_ad.make_scene_ad(photo, fields, "", models, folder, references=[reference])
     assert calls == ["ad_plan", "ad_direction", "ad_headline", "ad_art_direction", "ad_source_framing", "ad_layout",
                      "ad_layout", "render", "ad_composition", "render", "ad_composition_compare", "ad_scene_direction", "qwen",
-                     "ad_final_layout", "render"]
+                     "ad_photo_cue_check", "qwen", "ad_photo_cue_check", "ad_final_layout", "render"]
+    assert layout["photo_cue"] == cue and [check["visible"] for check in layout["photo_cue_checks"]] == [False, True]
+    exercise_cue_retry = False
     assert layout["design"]["accent"] is None
     assert layout["art_direction_plan"]["evidence"] == "앰버색 병"
     assert layout["final_review_reason"] == "상품명을 제품 옆으로 이동"
@@ -185,8 +207,16 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     calls.clear()
     accepted = scene_ad.make_scene_ad(photo, fields, "", models, tmp_path / "accepted",
                                       references=[reference], proposal=layout)
-    assert calls == ["render", "qwen"]
+    assert calls == ["render", "qwen", "ad_photo_cue_check"]
     assert accepted["design"] == layout["design"] and accepted["final_review_reason"] is None
+    reject_cue = True
+    calls.clear()
+    unapproved = tmp_path / "unapproved"
+    with pytest.raises(ValueError, match="사진에 의도한 연출이 보이지 않습니다"):
+        scene_ad.make_scene_ad(photo, fields, "", models, unapproved, proposal=layout)
+    assert calls == ["render", "qwen", "ad_photo_cue_check", "qwen", "ad_photo_cue_check"]
+    assert not unapproved.exists()
+    reject_cue = False
     calls.clear()
     rejected = tmp_path / "rejected"
     rejected.mkdir()
@@ -196,7 +226,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     revision = scene_ad.make_scene_ad(photo, fields, "가벼운 아침 연출", models, tmp_path / "revision", references=[reference],
                                       previous=folder, rejected=rejected)
     assert calls == ["ad_cycle_critique", "ad_art_direction", "ad_source_framing", "ad_layout", "ad_layout", "render", "ad_composition",
-                     "render", "ad_composition_compare", "ad_scene_direction", "qwen", "ad_final_layout", "render"]
+                     "render", "ad_composition_compare", "ad_scene_direction", "qwen", "ad_photo_cue_check", "ad_final_layout", "render"]
     assert revision["revision"]["weakness"] == "평평한 조명"
     assert revision["design"]["art_direction"] == "Narrow studio beam"
     assert revision["brief"]["headline"] == layout["brief"]["headline"]

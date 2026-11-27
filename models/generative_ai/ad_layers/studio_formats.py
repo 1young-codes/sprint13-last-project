@@ -107,6 +107,8 @@ An offer stranded apart from the headline and advertised detail is a layout defe
 legible by itself. Give the specific gap or missing visual connection in the observation.
 If intent describes a same-size repair, check that the photographed feature is more legible and the
 unused region visibly shrank in the second image.
+If photo_cue is provided, find that physical relationship or effect in the reframed photo. Use photo when
+the crop has removed it and a new composition is required to show it again.
 Read the long axis from edge to edge. An enlarged stretch of featureless wall, floor or surface has no
 photographic purpose merely because it balances a matching empty stretch at the other end. Check whether
 the subject itself meaningfully fills the long axis and directs the eye. If the scene was originally arranged
@@ -137,6 +139,8 @@ Check product identity, including the exact visible versions, essential details,
 count. Image 2 defines the campaign motif and styling. Match that motif without merely framing the original
 composition in empty bands. Look along the long axis for the specific visible arrangement or photographic cue
 that solves format_issue and connects the subject, headline and offer. A change in background alone is insufficient.
+When photo_cue is supplied, locate it in the final composition and check the actual direction and position of
+the elements. Both parts can be visible while their planned relationship is absent.
 Check the required copy, its prominence and contrast at phone size, and the natural scene and edges at full size.
 Return ready (boolean) and observation (one concrete Korean sentence describing the visible improvement or defect)."""
 
@@ -710,6 +714,7 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                                {"copy": copy, "focus": design["focus"], "product_bounds": bounds, "rendered_ink": ink,
                                 "outer_margins": outer_margins(bounds, ink.values()),
                                 "headline_behind_subject": headline_behind_subject,
+                                **({"photo_cue": layout["photo_cue"]} if layout.get("photo_cue") else {}),
                                 **({"intent": intent} if intent else {})},
                                [reference, to_float(phone), to_float(poster), to_float(offer_detail(poster, ink)),
                                 to_float(text_detail(poster, (ink["headline"],))),
@@ -737,6 +742,8 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                 candidate["text_placement"] = answer["placement"]
             if "art_direction_plan" in layout:
                 candidate["art_direction_plan"] = layout["art_direction_plan"]
+            if "photo_cue" in layout:
+                candidate["photo_cue"] = layout["photo_cue"]
             if position_info:
                 candidate["framing"] = position_info
             save_layout(candidate, stage)
@@ -791,7 +798,8 @@ def rebuild_format(source, output, format_name, photo, fields, idea, ai, models,
                     details = [to_float(guide)]
             review = ask_stage(ai, "studio_format_native_review", NATIVE_REVIEW,
                                {"size": size, "format_issue": str(issue), "copy": copy,
-                                "has_attempted_resize": bool(before), "has_staged_group": bool(details)},
+                                "has_attempted_resize": bool(before), "has_staged_group": bool(details),
+                                **({"photo_cue": layout["photo_cue"]} if layout.get("photo_cue") else {})},
                                [to_float(photo), to_float(reference), *before, *details, to_float(poster), to_float(phone)])
         observation = required_text(review, "observation", "새 게시 규격 검토")
         if review.get("ready") is not True:

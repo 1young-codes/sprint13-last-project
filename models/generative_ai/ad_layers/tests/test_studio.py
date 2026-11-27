@@ -145,6 +145,7 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
         tmp_path, draft, monkeypatch, staged, ready, same_piece):
     folder, fields = draft
     approved = load_layout(folder)
+    approved["photo_cue"] = "The vessel reflects a strip of lamp light."
     approved["brief"] = {"headline": "다듬기 전 제목", "message": "포근한 겨울 저녁을 보여 줍니다"}
     approved["source_framing"] = {"source_crop": None, "reason": "용기까지 보여 줍니다"}
     approved["art_direction_plan"] = {"theme": "lifestyle", "angle": "three_quarter", "shot_scale": "whole",
@@ -208,7 +209,11 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
                 assert data["target_photo_aspect"] == [1080, 1920]
                 assert "approved_design" not in data
                 assert len(images) == (4 if staged else 3)
-                return '{"scene":"Warm lamp light guides the eye from the vessel."}'
+                assert data["approved_photo_cue"] == approved["photo_cue"]
+                return '{"scene":"Warm lamp light guides the eye from the vessel.","photo_cue":"The rim casts a dark shadow."}'
+            if step == "ad_photo_cue_check":
+                assert len(images) == 2 and data["photo_cue"] == "The vessel reflects a strip of lamp light."
+                return '{"visible":true,"observation":"용기에 조명이 반사됩니다","correction":null}'
             if step == "ad_final_layout":
                 return '{"revision":null}'
             if step == "studio_staged_identity":
@@ -244,7 +249,8 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
         framing = studio_formats.rebuild_format(folder, output, "9:16", photo, fields, "", Agent(),
                                                 {"mask": "mask", "generation": Model()}, (), issue)
         assert framing["method"] == "native"
-        assert load_layout(output)["format"] == "9:16"
+        saved = load_layout(output)
+        assert saved["format"] == "9:16" and saved["photo_cue"] == approved["photo_cue"]
         assert (output / "ad.png").exists()
         assert (output / "staging.png").exists() == staged
     stages = ["ad_format_staging", "ad_staging", "ad_staging_check"] if staged else []
@@ -253,7 +259,7 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
     review = (["studio_staged_identity"] if staged else [])
     review += ["studio_format_native_review"] if same_piece else ["studio_repair_detail"]
     assert calls == [*stages, *plans, "ad_composition", "ad_composition", *measured, "ad_scene_direction", "photo",
-                     "ad_final_layout", *review]
+                     "ad_photo_cue_check", "ad_final_layout", *review]
 
 
 def test_native_detail_repair_recomposes_after_source_identity_passes(draft, monkeypatch):
