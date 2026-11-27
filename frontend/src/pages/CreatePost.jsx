@@ -1,103 +1,41 @@
-import { useEffect, useState } from 'react'
 import Stepper from '../components/Stepper.jsx'
 import PhotoDrop from '../components/PhotoDrop.jsx'
 import PostCard from '../components/PostCard.jsx'
 import AnglePicker from '../components/AnglePicker.jsx'
-import { createPostJob, getPostJob, POLL_MS, USE_SAMPLE } from '../api/postApi.js'
+import { FeedGrid, ProfileHead } from '../components/Feed.jsx'
+import { USE_SAMPLE } from '../api/postApi.js'
 import { estimateMinutes } from '../anglePresets.js'
-import { postSlides } from '../postSlides.js'
-
-// 문구 생성 함수(유진님, generate_product_captions)가 받는 값과 같은 칸
-const EMPTY_FORM = { productName: '', unit: '', price: '', usageExample: '', notes: '' }
-
-// 가격은 0보다 큰 정수만 받는다. 쉼표나 '원'을 붙여 써도 숫자만 읽는다.
-function parsePrice(text) {
-  const digits = text.replace(/[,\s원]/g, '')
-  if (!/^\d+$/.test(digits)) return null
-  const value = Number(digits)
-  return value > 0 ? value : null
-}
+import { useCreatePost } from '../hooks/useCreatePost.js'
+import { postProgress } from '../postProgress.js'
 
 // 게시글 만들기 (매번): ① 입력 → ② 결과 → ③ 게시
+// 이 파일은 컴퓨터 화면의 "모양"만 맡는다. 입력 검사, 상태 묻기, 사진 빼기 같은 동작은
+// hooks/useCreatePost.js에 있어서, 휴대폰 전용 화면을 만들어도 그대로 쓸 수 있다.
 //   storeName: 게시글 위쪽과 가게 프로필에 나오는 이름 (가게 설정에서 넣는다)
-export default function CreatePost({ storeName }) {
-  const [step, setStep] = useState(0)
-  const [photo, setPhoto] = useState(null)
-  const [photoUrl, setPhotoUrl] = useState('')
-  const [form, setForm] = useState(EMPTY_FORM) // 품목, 단위, 가격, 활용 예시, 기타
-  const [angles, setAngles] = useState([]) // 고른 카메라 각도 id 목록 (비면 원본 그대로)
-  const [job, setJob] = useState(null) // { jobId, angles, status, queue_position, product_photo, usage_example, message }
-  const [excluded, setExcluded] = useState([]) // 결과에서 체크를 꺼서 뺀 사진 key 목록
-  const [submitting, setSubmitting] = useState(false)
-  const [submitError, setSubmitError] = useState('') // 서버가 돌려준 한국어 문장
-
-  // 사진이 바뀌면 미리보기 주소를 새로 만들고, 이전 주소는 정리한다.
-  function changePhoto(file) {
-    if (photoUrl) URL.revokeObjectURL(photoUrl)
-    setPhoto(file)
-    setPhotoUrl(file ? URL.createObjectURL(file) : '')
-  }
-
-  // 생성 중이면 일정 간격으로 상태를 묻는다.
-  useEffect(() => {
-    if (!job || (job.status !== 'queued' && job.status !== 'running')) return undefined
-    const timer = setTimeout(async () => {
-      const next = await getPostJob(job.jobId)
-      setJob({ jobId: job.jobId, angles: job.angles, ...next })
-    }, POLL_MS)
-    return () => clearTimeout(timer)
-  }, [job])
-
-  function setField(name, value) {
-    setForm((prev) => ({ ...prev, [name]: value }))
-  }
-
-  const price = parsePrice(form.price)
-  const priceError = form.price.trim() !== '' && price === null
-  const missing = [
-    !photo && '제품 사진',
-    !form.productName.trim() && '품목',
-    !form.unit.trim() && '단위',
-    price === null && '가격',
-    !form.usageExample.trim() && '활용 예시',
-  ].filter(Boolean)
-  const canStart = missing.length === 0
-
-  async function start() {
-    setSubmitting(true)
-    setSubmitError('')
-    try {
-      const { jobId } = await createPostJob({
-        photo,
-        productName: form.productName.trim(),
-        unit: form.unit.trim(),
-        priceKrw: price,
-        usageExample: form.usageExample.trim(),
-        notes: form.notes.trim(),
-        angles,
-      })
-      setJob({ jobId, status: 'queued', angles })
-      setExcluded([])
-      setStep(1)
-    } catch (error) {
-      setSubmitError(error.message)
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  function toggleSlide(key) {
-    setExcluded((prev) => (prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key]))
-  }
-
-  function restart() {
-    changePhoto(null)
-    setForm(EMPTY_FORM)
-    setAngles([])
-    setJob(null)
-    setExcluded([])
-    setStep(0)
-  }
+//   storeBio: 가게 프로필의 한 줄 소개, feed: 게시한 게시글 목록, onPublished(feed): 게시해서 피드가 바뀌었을 때, onGoTo(tab): 다른 탭으로
+export default function CreatePost({ storeName, storeBio, feed = [], onPublished, onGoTo }) {
+  const {
+    step,
+    photoUrl,
+    changePhoto,
+    form,
+    setField,
+    angles,
+    setAngles,
+    priceError,
+    missing,
+    canStart,
+    submitting,
+    submitError,
+    start,
+    job,
+    excluded,
+    toggleSlide,
+    backToInput,
+    publishing,
+    publish,
+    restart,
+  } = useCreatePost({ onPublished })
 
   return (
     <section className="page">
@@ -187,42 +125,28 @@ export default function CreatePost({ storeName }) {
           storeName={storeName}
           excluded={excluded}
           onToggle={toggleSlide}
-          onBack={() => setStep(0)}
-          onPublish={() => setStep(2)}
+          onBack={backToInput}
+          publishing={publishing}
+          onPublish={publish}
         />
       )}
 
       {step === 2 && job?.status === 'ready' && (
-        <PublishedStep job={job} storeName={storeName} excluded={excluded} onMore={restart} />
+        <PublishedStep storeName={storeName} storeBio={storeBio} feed={feed} onMore={restart} onGoTo={onGoTo} />
       )}
     </section>
   )
 }
 
-function ResultStep({ job, storeName, excluded, onToggle, onBack, onPublish }) {
-  const waiting = job.status === 'queued' || job.status === 'running'
-  const ready = job.status === 'ready'
-  const product = job.product_photo
-  const requested = job.angles ?? []
-  const finished = product?.angle_images?.length ?? 0
-  const pendingAngles = requested.slice(finished)
-  const chosen = product ? postSlides(product).filter((slide) => slide.url && !excluded.includes(slide.key)) : []
-
-  let statusText = '사진과 문구를 만드는 중입니다'
-  if (job.status === 'queued') {
-    statusText = job.queue_position > 0 ? `순서를 기다리는 중입니다 (앞에 ${job.queue_position}개)` : '순서를 기다리는 중입니다'
-  } else if (product && pendingAngles.length > 0) {
-    statusText = `각도 사진을 만드는 중입니다 (${finished} / ${requested.length})`
-  } else if (product) {
-    statusText = '문구와 해시태그를 만드는 중입니다'
-  }
+function ResultStep({ job, storeName, excluded, onToggle, onBack, publishing, onPublish }) {
+  const { waiting, ready, product, requested, pendingAngles, chosen, statusText } = postProgress(job, excluded)
 
   return (
     <>
       <h1>{ready ? '게시글 2개를 만들었습니다' : '게시글을 만들고 있습니다'}</h1>
       <p className="lead">
         {ready
-          ? 'PC에서 게시물을 열었을 때의 모습입니다. 사진을 넘겨 보고, 어색한 사진은 체크를 꺼서 뺀 뒤 게시를 누르세요.'
+          ? '인스타그램에서 게시물을 열었을 때의 모습입니다. 사진을 넘겨 보고, 어색한 사진은 체크를 꺼서 뺀 뒤 게시를 누르세요.'
           : `약 ${estimateMinutes(requested.length)}분 걸립니다. 다 된 사진부터 아래에 나옵니다. 이 화면을 닫지 말고 기다려 주세요.`}
       </p>
       {USE_SAMPLE && <p className="hint">지금은 서버 없이 예시 결과를 보여줍니다.</p>}
@@ -268,14 +192,19 @@ function ResultStep({ job, storeName, excluded, onToggle, onBack, onPublish }) {
       )}
       <div className="footer">
         <button type="button" className="secondary" onClick={onBack}>이전</button>
-        <button type="button" className="primary" disabled={!ready || chosen.length === 0} onClick={onPublish}>게시</button>
+        <button type="button" className="primary" disabled={!ready || chosen.length === 0 || publishing} onClick={onPublish}>
+          {publishing ? '올리는 중…' : '게시'}
+        </button>
       </div>
     </>
   )
 }
 
-function PublishedStep({ job, storeName, excluded, onMore }) {
-  const chosen = postSlides(job.product_photo).filter((slide) => slide.url && !excluded.includes(slide.key))
+// 게시 뒤: 방금 올린 2개에 "새 게시물" 표시, 그 뒤에 예전 게시글이 이어진다 (최대 4개 더)
+const PREVIOUS_SHOWN = 4
+
+function PublishedStep({ storeName, storeBio, feed, onMore, onGoTo }) {
+  const shown = feed.slice(0, 2 + PREVIOUS_SHOWN)
 
   return (
     <>
@@ -285,36 +214,29 @@ function PublishedStep({ job, storeName, excluded, onMore }) {
       </div>
 
       <div className="card profile">
-        <header className="profile-head">
-          <span className="avatar large">로고</span>
-          <div>
-            <strong>{storeName}</strong>
-            <p className="hint">[프로필 소개글]</p>
-          </div>
-        </header>
-        <div className="grid">
-          <FeedTile label="제품 소개" url={chosen[0]?.url} count={chosen.length} />
-          <FeedTile label="활용 예시" url={job.usage_example.image_url} />
-          <div className="tile empty">다음 게시글이 여기에 쌓입니다</div>
-        </div>
+        <ProfileHead storeName={storeName} bio={storeBio} count={feed.length} />
+        <FeedGrid
+          posts={shown}
+          newCount={2}
+          tail={
+            feed.length > shown.length ? (
+              <button type="button" className="tile empty tile-button" onClick={() => onGoTo?.('feed')}>
+                내 피드에서 {feed.length - shown.length}개 더 보기
+              </button>
+            ) : (
+              <div className="tile empty">다음 게시글이 여기에 쌓입니다</div>
+            )
+          }
+        />
       </div>
 
       <div className="footer end">
         <button type="button" className="secondary" disabled title="인스타그램 연동 여부가 정해지면 연결합니다">
           인스타그램에서 확인하기
         </button>
+        <button type="button" className="secondary" onClick={() => onGoTo?.('feed')}>내 피드 보기</button>
         <button type="button" className="primary" onClick={onMore}>게시글 더 만들기</button>
       </div>
     </>
-  )
-}
-
-function FeedTile({ label, url, count = 1 }) {
-  return (
-    <div className="tile">
-      <span className="tile-badge">새 게시물</span>
-      {count > 1 && <span className="tile-many" title={`사진 ${count}장`}>⧉ {count}</span>}
-      {url ? <img src={url} alt={label} /> : <span>[{label} 사진]</span>}
-    </div>
   )
 }
