@@ -275,11 +275,14 @@ class QwenImageModel:
         (투명한 채로 크기를 바꾸면 색이 깨집니다)."""
         image = image.convert("RGB").resize(aligned_size(*image.size), Image.Resampling.LANCZOS)
         width, height = aligned_size(*size) if size else image.size
-        return self.run_steps(lambda: self.pipe(
+        result = self.run_steps(lambda: self.pipe(
             prompt=prompt, image=image, width=width, height=height,
             output_resolution=math.sqrt(width * height), true_cfg_scale=1, num_inference_steps=steps,
             sigmas=simple_sigmas(steps), use_kv_cache=self.reuse_condition_cache,
             generator=torch.Generator(device="cpu").manual_seed(seed)).images[0], steps).convert("RGB")
+        if self.low_vram:
+            torch.cuda.empty_cache()
+        return result
 
     @torch.inference_mode()
     def edit_with_reference(self, reference: Image.Image, image: Image.Image, prompt: str, seed: int,

@@ -9,10 +9,13 @@ IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], np.float32)
 
 
-def load_mask_model():
+def load_mask_model(*, low_vram=False):
+    import torch
     from transformers import AutoModelForImageSegmentation
 
-    model = AutoModelForImageSegmentation.from_pretrained(model_folder("product_mask"), trust_remote_code=True)
+    # CUDA deformable convolution supports FP16 for BiRefNet's offset layers.
+    options = {"dtype": torch.float16} if low_vram else {}
+    model = AutoModelForImageSegmentation.from_pretrained(model_folder("product_mask"), trust_remote_code=True, **options)
     return model.to("cuda").eval()
 
 

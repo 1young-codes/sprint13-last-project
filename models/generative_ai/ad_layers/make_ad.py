@@ -32,7 +32,7 @@ def load_models(*, low_vram: bool = False) -> dict:
     from ..photo_retouch.product_mask import load_mask_model
 
     # ponytail: MagCache 비율 없이 모든 단계를 계산합니다. 속도가 필요하면 광고 사진으로 비율을 재서 넘깁니다.
-    return {"generation": QwenImageModel(low_vram=low_vram), "mask": load_mask_model(), "ai": Interpreter()}
+    return {"generation": QwenImageModel(low_vram=low_vram), "mask": load_mask_model(low_vram=low_vram), "ai": Interpreter()}
 
 
 def make_ad(photo: Image.Image, fields: dict, mood_key: str, idea: str, models: dict, folder: Path,
