@@ -683,17 +683,27 @@ def test_cue_crop_compares_positions_but_keeps_the_visible_cue_protected():
     assert visible.getbbox() == (55, 25, 90, 85)
 
 
-def test_wide_context_is_kept_when_the_complete_product_must_remain_visible():
+@pytest.mark.parametrize("keep_clearance", [False, True])
+def test_separate_context_box_and_product_are_kept_when_they_do_not_fit_a_tight_crop(keep_clearance):
     photo = Image.new("RGB", (160, 100), "blue")
     photo.paste("red", (40, 32, 76, 79))
-    photo.paste("yellow", (144, 21, 158, 48))
+    photo.paste("yellow", (144, 0, 158, 48))
     mask = Image.new("L", photo.size)
     mask.paste(255, (40, 32, 76, 79))
-    old, _ = studio_formats.frame_photo(photo, mask, (100, 100), keep_clearance=True)
-    protected, visible = studio_formats.frame_photo(photo, mask, (100, 100), keep_clearance=True,
-                                                     protected_box=(40, 21, 158, 79))
+    plan = {"protected_box": [25, 32, 22, 47], "context_box": [90, 0, 9, 48]}
+    bounds = studio_formats.protected_photo_bounds(plan, mask, keep_clearance, "노란 소품")
+    assert bounds == (40, 0, 158, 79)
+    old, _ = studio_formats.frame_photo(photo, mask, (100, 100), keep_clearance=keep_clearance)
+
+    def examine(frame, preview, placed, method):
+        assert placed[1] == 0 and placed[3] < frame.height
+        assert method == "reflected"
+
+    protected, visible = studio_formats.frame_photo(photo, mask, (100, 100), check_margin=examine,
+                                                     keep_clearance=keep_clearance, protected_box=bounds)
     assert (255, 255, 0) not in old.get_flattened_data()
     assert (255, 255, 0) in protected.get_flattened_data()
+    assert (255, 255, 0) in protected.crop((0, 0, 100, 1)).get_flattened_data()
     assert visible.getbbox() and (255, 0, 0) in protected.get_flattened_data()
 
 

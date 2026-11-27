@@ -46,12 +46,14 @@ CUE_CROP = """The first image is the actual photograph and the second is its cur
 smallest rectangle containing all visible parts of the merchandise and the complete physical action in
 photo_cue. Include the contact and support that make the action believable, such as fingers where they grip.
 Exclude empty background or an incidental limb beyond its supporting contact. Preserve the actual product's
-silhouette, label, and parts that already appear in the photograph. If exact copy names a visibly present
-object or setting detail that makes the message concrete, include enough of that detail to remain recognizable.
-Omit incidental props whose loss would leave the message unchanged. Return JSON with protected_box as
-[left, top, width, height] in whole percentages of the first image, or null if there is no removable perimeter,
-context_feature as one short visible description of that copy-related detail or null, and observation as one
-Korean sentence naming what must remain visible."""
+silhouette, label, and parts that already appear in the photograph. Locate a separate context feature when
+the exact copy names a visibly present object or setting detail that makes the message concrete. Keep any
+previously named context_feature if it is still visible. Localize the part of that feature that is actually
+visible in the first image, including a clipped part at the very edge. Omit incidental props whose loss would
+leave the message unchanged. Return JSON with protected_box for the merchandise and action, context_box
+for the visible context feature, context_feature as a short description of the content of context_box, and
+observation as one Korean sentence naming what must remain visible. Both rectangles use [left, top, width,
+height] in percentages of the first image, or null when the corresponding region is absent."""
 
 MARGIN_CHECK = """Review the newly filled margins of a reframed product photo. The first image is the actual
 filled photograph; the second shows the same photograph with only stretched preview margins. photo_bounds
@@ -267,6 +269,15 @@ def reflect_margin(filled, contained, product, placed, side):
     return result
 
 
+def reflect_margins(frame, photo, content, placed):
+    left, top, right, bottom = placed
+    gaps = (left, top, frame.width - right, frame.height - bottom)
+    for side, amount in zip(("left", "top", "right", "bottom"), gaps, strict=True):
+        if amount and (filled := reflect_margin(frame, photo, content, placed, side)) is not None:
+            frame = filled
+    return frame
+
+
 def fit_crop(photo, mask, box, size, keep_clearance, check_margin):
     width, height = size
     crop = mask.crop(box)
@@ -307,12 +318,7 @@ def fit_crop(photo, mask, box, size, keep_clearance, check_margin):
         known_subject = Image.new("L", original_size)
         known_subject.paste(subject, (left, top))
         preview = filled
-        for side, remaining in zip(("left", "top", "right", "bottom"),
-                                   (placed[0], placed[1], width - placed[2], height - placed[3])):
-            if remaining:
-                reflected = reflect_margin(filled, known, known_subject, placed, side)
-                if reflected is not None:
-                    filled = reflected
+        filled = reflect_margins(filled, known, known_subject, placed)
         if check_margin(filled, preview, placed, "clearance") is not None:
             return original()
     visible = Image.new("L", size)
@@ -332,8 +338,6 @@ def frame_photo(photo, mask, size, expand=None, choose_position=None, check_marg
     right, bottom = min(width, right + padding), min(height, bottom + padding)
     fits = right - left <= crop_width and bottom - top <= crop_height
     if not fits:
-        if protected_box is not None and not keep_clearance:
-            return frame_photo(photo, mask, size, expand, choose_position, check_margin, keep_clearance=keep_clearance)
         crop_width = max(crop_width, right - left)
         crop_height = max(crop_height, bottom - top)
     x = min(left, width - crop_width, max(0, right - crop_width, (width - crop_width) // 2))
@@ -361,6 +365,14 @@ def frame_photo(photo, mask, size, expand=None, choose_position=None, check_marg
     photo, mask = photo.crop(bounds), mask.crop(bounds)
     contained = ImageOps.contain(photo, size, Image.Resampling.LANCZOS)
     product = mask.resize(contained.size, Image.Resampling.NEAREST)
+    if not product.getbbox():
+        raise FormatPhotoIssue("게시 규격에서 상품 영역이 너무 작습니다")
+    margin_content = product
+    if protected_box is not None:
+        margin_content = mask.copy()
+        px, py, pr, pb = protected_box
+        margin_content.paste(255, (px - x, py - y, pr - x, pb - y))
+        margin_content = margin_content.resize(contained.size, Image.Resampling.NEAREST)
 
     def place_mask(placed):
         framed = Image.new("L", size)
@@ -369,11 +381,11 @@ def frame_photo(photo, mask, size, expand=None, choose_position=None, check_marg
 
     extra_width, extra_height = size[0] - contained.width, size[1] - contained.height
     positions = ("left", "center", "right") if extra_width > extra_height else ("top", "center", "bottom")
-    pl, pt, pr, pb = mask.getbbox()
+    pl, pt, pr, pb = margin_content.getbbox()
     touches_start = (extra_width > 0 and pl == 0) or (extra_height > 0 and pt == 0)
-    touches_end = (extra_width > 0 and pr == mask.width) or (extra_height > 0 and pb == mask.height)
+    touches_end = (extra_width > 0 and pr == contained.width) or (extra_height > 0 and pb == contained.height)
     if touches_start and touches_end:
-        raise FormatPhotoIssue("잘린 상품이 양쪽 사진 가장자리에 닿아 있어 이 규격에 맞는 구도로 다시 촬영해야 합니다")
+        raise FormatPhotoIssue("보존할 피사체가 양쪽 사진 가장자리에 닿아 있어 이 규격에 맞는 구도로 다시 촬영해야 합니다")
     framing = "center"
     if touches_start or touches_end:
         frame, placed = extend_edges(contained, size, 0 if touches_start else 1)
@@ -387,6 +399,11 @@ def frame_photo(photo, mask, size, expand=None, choose_position=None, check_marg
         frame, placed = choices[framing]
     else:
         frame, placed = extend_edges(contained, size, 0.5)
+    if expand is None and protected_box is not None and placed != (0, 0, *size):
+        filled = reflect_margins(frame, contained, margin_content, placed)
+        if check_margin and check_margin(filled, frame, placed, "reflected") is not None:
+            raise FormatPhotoIssue("보존할 피사체는 남겼지만 사진 가장자리가 부자연스럽습니다", filled)
+        return filled, place_mask(placed)
     for attempt in range(2):
         if expand is None or placed == (0, 0, *size):
             break
@@ -399,7 +416,7 @@ def frame_photo(photo, mask, size, expand=None, choose_position=None, check_marg
             break
         if attempt:
             raise FormatPhotoIssue("게시 규격에서 사진의 새 가장자리를 확정하지 못했습니다")
-        reflected = reflect_margin(filled, contained, product, placed, side)
+        reflected = reflect_margin(filled, contained, margin_content, placed, side)
         if reflected is not None and check_margin(reflected, frame, placed, "reflected") is None:
             frame = reflected
             break
@@ -462,6 +479,30 @@ def round_box_edges(box):
     if x + w > 100 or y + h > 100:
         return box
     return [round(x), round(y), round(x + w) - round(x), round(y + h) - round(y)]
+
+
+def protected_photo_bounds(plan, mask, keep_clearance, context_feature):
+    def region(name):
+        try:
+            box = validate_boxes({name: round_box_edges(plan.get(name))}, (name,))[name]
+        except ValueError:
+            return None
+        x, y, w, h = pixel_box(box, mask.size)
+        return x, y, x + w, y + h
+
+    merchandise = region("protected_box")
+    if merchandise and not mask.crop(merchandise).getbbox():
+        merchandise = None
+    context = region("context_box") if context_feature else None
+    if keep_clearance and not context_feature:
+        return None
+    if not merchandise and not context:
+        return None
+    boxes = [box for box in (merchandise, context) if box is not None]
+    if keep_clearance or merchandise is None:
+        boxes.append(mask.getbbox())
+    left, top, right, bottom = zip(*boxes, strict=True)
+    return min(left), min(top), max(right), max(bottom)
 
 
 def selected_placement(answer, options, design):
@@ -918,22 +959,10 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                          {"photo_cue": photo_cue, "copy": copy, "intent": intent, "size": size,
                           "context_feature": context_feature},
                          [to_float(photo), reference])
-        bounds = round_box_edges(plan.get("protected_box"))
-        try:
-            bounds = validate_boxes({"photo": bounds}, ("photo",))["photo"]
-        except ValueError:
-            pass
-        else:
-            x, y, width, height = pixel_box(bounds, photo.size)
-            if mask.crop((x, y, x + width, y + height)).getbbox():
-                shared = plan.get("context_feature")
-                if isinstance(shared, str) and shared.strip():
-                    context_feature = shared.strip()
-                if not keep_clearance or context_feature:
-                    protected_box = (x, y, x + width, y + height)
-                    if keep_clearance:
-                        left, top, right, bottom = mask.getbbox()
-                        protected_box = (min(x, left), min(y, top), max(x + width, right), max(y + height, bottom))
+        shared = plan.get("context_feature")
+        if isinstance(shared, str) and shared.strip():
+            context_feature = shared.strip()
+        protected_box = protected_photo_bounds(plan, mask, keep_clearance, context_feature)
 
     def available(mask):
         bounds = [round(100 * edge / length) for edge, length in zip(mask.getbbox(), size * 2, strict=True)]
