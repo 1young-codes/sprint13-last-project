@@ -55,6 +55,25 @@ break. For the headline only, optionally set "depth" to "behind_subject" when th
 can deliberately cross a small outer part of a large headline. Every word must stay readable. Leave out
 depth when the type belongs in clear space. If a prior design failed, address the reported issue."""
 
+BLOCKING = """Review the first image as a full poster made from the real product silhouette and the exact
+rendered typography. The flat background is a placeholder; judge placement, scale, spacing and how the
+reader's eye moves. The second image is the source photograph. Any further images are composition references.
+Name the specific element that physically connects the headline and subject. If reading the separate blocks
+depends on a lighting effect that has not been generated, correct the underlying geometry now. Consider a
+common center axis, a relationship to a particular part of the product, or a deliberate edge relationship
+with a legible large headline. Use the treatment justified by this product and message.
+When the structure is weak, move or resize the actual subject_box and the copy together. Avoid only changing
+font size or color. Keep the full recognizable product, exact copy, and one clear group for supporting details.
+If present, follow the requested visual correction. Return JSON with reason (Korean) and revision (null when
+the structure works, or an object containing the design fields that need to change)."""
+
+BLOCKING_COMPARE = """Compare the two rendered drafts in the first two images. They use the same product
+and copy and neither has final lighting. Any later images are composition references. Judge the visible
+relationship between the headline and product, the way their sizes balance, and the placement of the
+smaller information. Look at the actual space and ink, even if the proposal described a different effect.
+Keep the original when the revision would merely trade one generic arrangement for another.
+Return JSON with choice (original or revision) and a concrete Korean reason."""
+
 FINAL_REVIEW = """Review the first poster, using the second image (its generated photo without type) and the reference
 posters that follow. Keep the generated photo, position, crop and canvas color. Use the actual product bounds to
 place type outside the product. Group the related text, give the main line a distinct scale, and judge contrast
@@ -180,23 +199,99 @@ def design_layers(answer, copy, size, fonts, folder):
     return layout
 
 
-def product_reference(photo, mask_model, threshold, picture_size, subject_box):
+def extract_subject(photo, mask_model, threshold):
     from ..photo_retouch.product_mask import product_mask
 
     mask = product_mask(mask_model, to_float(photo))
-    if not (mask > threshold).any():
+    return cutout_product(photo, mask, threshold) if (mask > threshold).any() else None
+
+
+def frame_subject(product, picture_size, subject_box):
+    x, y, width, height = pixel_box(subject_box, picture_size)
+    contained = ImageOps.contain(product, (width, height), Image.Resampling.LANCZOS)
+    frame = Image.new("RGBA", picture_size)
+    frame.alpha_composite(contained, (x + (width - contained.width) // 2, y + (height - contained.height) // 2))
+    return frame
+
+
+def product_reference(photo, product, picture_size, subject_box):
+    if product is None:
         return photo
-    product = cutout_product(photo, mask, threshold)
     if subject_box:
-        x, y, width, height = pixel_box(subject_box, picture_size)
-        product = ImageOps.contain(product, (width, height), Image.Resampling.LANCZOS)
         reference = Image.new("RGB", picture_size, "#808080")
-        reference.paste(product, (x + (width - product.width) // 2, y + (height - product.height) // 2), product)
+        framed = frame_subject(product, picture_size, subject_box)
+        reference.paste(framed, mask=framed.getchannel("A"))
         return reference
     margin = round(max(product.size) / 10)
     reference = Image.new("RGB", (product.width + 2 * margin, product.height + 2 * margin), "#808080")
     reference.paste(product, (margin, margin), product)
     return reference
+
+
+def composition_preview(product, design, layout, folder):
+    artwork = layout["artwork"]
+    size = (artwork["w"], artwork["h"])
+    subject = frame_subject(product, size, design.get("subject_box", [8, 8, 84, 84]))
+    image = Image.new("RGBA", size, design["background"])
+    image.alpha_composite(subject)
+    image.save(folder / artwork["file"])
+    foreground = np.asarray(subject.getchannel("A")) > 128
+    Image.fromarray(foreground).save(folder / "foreground.png")
+    return compose(layout, folder), foreground
+
+
+def review_composition_plan(ai, product, design, layout, folder, inputs, images):
+    first, foreground = composition_preview(product, design, layout, folder)
+    photo_input = [to_float(first), *images]
+    review_input = inputs | {"design": design}
+    original_valid = True
+    try:
+        check_text_overlap(foreground, layout, folder)
+    except ValueError as error:
+        original_valid = False
+        review_input["layout_error"] = str(error)
+
+    kept_reason = None
+    for _ in range(2):
+        review = ask_stage(ai, "ad_composition", BLOCKING + "\n" + DESIGN_SCHEMA, review_input, photo_input)
+        revision = review.get("revision")
+        if not isinstance(revision, dict):
+            break
+        editable = {"concept", "focus", "background", "accent", "artwork_box", "subject_box", "crop",
+                    "edge", "boxes", "styles"}
+        changed = design | {key: revision[key] for key in editable & revision.keys()}
+        if changed == design:
+            break
+        with TemporaryDirectory(dir=folder) as temporary:
+            candidate = Path(temporary)
+            try:
+                revised = design_layers(changed, inputs["copy"], tuple(layout["size"]), inputs["fonts"], candidate)
+                rendered, foreground = composition_preview(product, changed, revised, candidate)
+                check_text_overlap(foreground, revised, candidate)
+            except ValueError as error:
+                review_input.update(rejected_design=changed, layout_error=str(error))
+                continue
+            reason = required_text(review, "reason", "촬영 전 구도 검토")
+            if original_valid:
+                comparison = ask_stage(ai, "ad_composition_compare", BLOCKING_COMPARE,
+                                       {"proposed_change": reason, "copy": inputs["copy"]},
+                                       [to_float(first), to_float(rendered), *images[1:]])
+                choice = comparison.get("choice")
+                if choice == "original":
+                    kept_reason = required_text(comparison, "reason", "촬영 전 구도 비교")
+                    break
+                if choice != "revision":
+                    raise ValueError("촬영할 구도 시안을 고르지 못했습니다")
+                reason = required_text(comparison, "reason", "촬영 전 구도 비교")
+            first.save(folder / "before-composition.png")
+            rendered.save(folder / "composition.png")
+            for path in candidate.iterdir():
+                path.replace(folder / path.name)
+            if "graphic" in layout and "graphic" not in revised:
+                (folder / layout["graphic"]["file"]).unlink()
+            return changed, revised, reason
+    first.save(folder / "composition.png")
+    return design, layout, kept_reason
 
 
 def find_foreground(scene, mask_model, threshold):
@@ -400,6 +495,9 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         ai, fields, design_input["brief"] | {"headline": copy["headline"]}, idea, images, revision_info)
     if art_plan:
         design_input["art_direction_plan"] = art_plan | {"layout_guide": THEMES[art_plan["theme"]]["layout"]}
+    threshold = settings["product"]["mask_threshold"]
+    mask_model = models.get("mask")
+    product = extract_subject(photo, mask_model, threshold) if mask_model is not None else None
 
     folder.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=folder.parent) as staging:
@@ -422,16 +520,28 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             answer = ask_stage(ai, "ad_layout", design_task, retry, design_images)
             layout = design_layers(answer, copy, size, settings["fonts"], result)
 
+        composition_reason = proposal.get("composition_reason") if proposal else None
+        if product is not None and not proposal:
+            answer, layout, composition_reason = review_composition_plan(
+                ai, product, answer, layout, result, design_input, images)
         if not proposal:
             direction_input = {"message": brief["message"], "idea": idea, "design": answer}
             angle, scale = ANGLES[art_plan["angle"]], SHOT_SCALES[art_plan["shot_scale"]]
             direction_input.update(art_direction_plan=art_plan, angle_guide=angle, framing_guide=scale)
+            if composition_reason:
+                direction_input["approved_composition"] = composition_reason
             if revision_info:
                 direction_input.update(revision_info)
             direction_task = PHOTO_DIRECTION + "\nKeep the selected angle, framing, and photo_device in the scene."
+            direction_images = images[:1]
+            if (result / "composition.png").is_file():
+                with Image.open(result / "composition.png") as proof:
+                    direction_images.append(to_float(proof))
+                direction_task += ("\nThe second image is the approved placement before photography. Use the subject "
+                                   "position and open regions from it. Its lettering and flat colors are placeholders.")
             if feedback:
                 direction_task += "\nDescribe the exact requested_scene_change and omit any conflicting design detail."
-            direction = ask_stage(ai, "ad_scene_direction", direction_task, direction_input, images[:1])
+            direction = ask_stage(ai, "ad_scene_direction", direction_task, direction_input, direction_images)
             answer = answer | {"art_direction": required_text(direction, "scene", "촬영 연출")}
 
         artwork = layout["artwork"]
@@ -454,14 +564,17 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         if answer["crop"] == "preserve":
             prompt += " Keep all of the product in frame with space around its edges."
         if preview:
-            scene = preview_artwork(photo, artwork, size, answer)
+            if (result / artwork["file"]).is_file():
+                with Image.open(result / artwork["file"]) as planned:
+                    scene = planned.convert("RGB")
+            else:
+                scene = preview_artwork(photo, artwork, size, answer)
             final_review_reason = None
         else:
             model = models["generation"]
             model.use_lora(None, 0)
             generation = settings["generation"]
-            threshold = settings["product"]["mask_threshold"]
-            reference = product_reference(photo, models["mask"], threshold, picture_size, subject_box)
+            reference = product_reference(photo, product, picture_size, subject_box)
             generated = model.edit(reference, prompt, generation["seed"], generation["steps"], size=picture_size)
             scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
             foreground = find_foreground(scene, models["mask"], threshold)
@@ -476,6 +589,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                       final_review_reason=final_review_reason)
         if art_plan:
             layout["art_direction_plan"] = art_plan
+        if composition_reason:
+            layout["composition_reason"] = composition_reason
         if preview:
             scene.save(result / "scene.png")
         poster = compose(layout, result)

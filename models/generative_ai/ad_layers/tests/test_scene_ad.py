@@ -66,13 +66,20 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
                 assert data["design"]["artwork_box"] == [0, 0, 50, 100]
                 assert "vertical layers" in data["angle_guide"] and data["art_direction_plan"]["angle"] == "level"
-                assert len(images) == 1 and "previous_art_direction" not in data
+                assert len(images) == 2 and images[1].shape == (1024, 1024, 3) and "previous_art_direction" not in data
                 if expect_correction:
                     assert data["requested_scene_change"] == correction
                 if "hypothesis" in data:
                     assert data["hypothesis"] == "A narrow beam through the glass" and data["idea"] == "가벼운 아침 연출"
                     return '{"scene":"Narrow studio beam"}'
                 return '{"scene":"Amber reflections"}'
+            if step == "ad_composition":
+                assert len(images) == 3 and images[0].shape == (1024, 1024, 3)
+                assert "부드러운 아침" in prompt
+                return '{"reason":"병 위치를 옮깁니다","revision":{"subject_box":[15,20,70,50]}}'
+            if step == "ad_composition_compare":
+                assert len(images) == 3 and not np.array_equal(images[0], images[1])
+                return '{"choice":"original","reason":"기존 위치에서 제목이 더 자연스럽게 읽힙니다"}'
             if step == "ad_final_layout":
                 assert len(images) == 3 and images[1][0, 0, 2] == 1
                 assert "product_name 글자 레이어가 실제 제품을 가립니다" in prompt
@@ -114,11 +121,14 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     models = {"ai": Interpreter(), "generation": Model(), "mask": "mask"}
     layout = scene_ad.make_scene_ad(photo, fields, "", models, folder, references=[reference])
     assert calls == ["ad_plan", "ad_direction", "ad_headline", "ad_art_direction", "ad_layout", "ad_layout", "render",
-                     "ad_scene_direction", "qwen", "ad_final_layout", "render"]
+                     "ad_composition", "render", "ad_composition_compare", "ad_scene_direction", "qwen",
+                     "ad_final_layout", "render"]
     assert layout["design"]["accent"] is None
     assert layout["art_direction_plan"]["evidence"] == "앰버색 병"
     assert layout["final_review_reason"] == "상품명을 제품 옆으로 이동"
     assert (folder / "before-typesetting.png").is_file()
+    assert (folder / "composition.png").is_file()
+    assert not (folder / "before-composition.png").exists()
     assert {layer["text"] for layer in layout["texts"]} == {"부드러운 아침", "수분 세럼", "32,000원"}
     assert json.loads((folder / "layout.json").read_text(encoding="utf-8")) == layout
     with Image.open(folder / "ad.png") as ad:
@@ -142,8 +152,8 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     (rejected / "layout.json").write_text(json.dumps(rejected_layout), encoding="utf-8")
     revision = scene_ad.make_scene_ad(photo, fields, "가벼운 아침 연출", models, tmp_path / "revision", references=[reference],
                                       previous=folder, rejected=rejected)
-    assert calls == ["ad_cycle_critique", "ad_art_direction", "ad_layout", "ad_layout", "render", "ad_scene_direction",
-                     "qwen", "ad_final_layout", "render"]
+    assert calls == ["ad_cycle_critique", "ad_art_direction", "ad_layout", "ad_layout", "render", "ad_composition",
+                     "render", "ad_composition_compare", "ad_scene_direction", "qwen", "ad_final_layout", "render"]
     assert revision["revision"]["weakness"] == "평평한 조명"
     assert revision["design"]["art_direction"] == "Narrow studio beam"
     assert revision["brief"]["headline"] == layout["brief"]["headline"]
