@@ -459,7 +459,7 @@ def test_campaign_checks_large_offer_panel_before_selection(tmp_path, draft, off
                 return '{"version":"v01","finding":"ready","observation":"문구를 읽을 수 있습니다"}'
             if step == "studio_campaign_check":
                 assert data["offer_panel"] == "bottom"
-                assert data["offer_panel_spacing"] == {"gap_px": 10, "line_height_px": 3}
+                assert data["offer_panel_spacing"] == {"gap_px": 10, "line_height_px": 3, "panel_percent": 40}
                 assert images[4].shape == (73, 100, 3)
                 assert images[4][0, 0].tolist() == [0, 0, 1]
                 return json.dumps({"scene": {"treatment": "lighting", "observation": "조명이 보입니다"},
@@ -473,6 +473,66 @@ def test_campaign_checks_large_offer_panel_before_selection(tmp_path, draft, off
     output = tmp_path / "panel-review"
     result = studio.run_studio(Image.new("RGB", (100, 100)), fields, "", output, Agent(), draft=folder, edit_limit=0)
     assert result["status"] == ("complete" if offer_connection == "connected" else "needs_review")
+
+
+@pytest.mark.parametrize(("preferred", "challenger_passes", "selected"), [
+    ("v02", True, "v02"), ("v02", False, "v01"), ("v01", True, "v01"),
+])
+def test_ready_large_offer_panel_is_compared_before_selection(tmp_path, draft, monkeypatch,
+                                                        preferred, challenger_passes, selected):
+    folder, fields = draft
+    layout = load_layout(folder)
+    layout["artwork"]["h"] = 70
+    layout["design"]["artwork_box"] = [0, 0, 100, 70]
+    for text in layout["texts"][1:]:
+        text["y"] += 39
+        layout["design"]["boxes"][text["role"]][1] = text["y"]
+    Image.new("RGB", (100, 70), "blue").save(folder / "scene.png")
+    with Image.open(folder / "foreground.png") as mask:
+        upper = mask.crop((0, 0, 100, 70))
+    upper.save(folder / "foreground.png")
+    compose(layout, folder).save(folder / "ad.png")
+    save_layout(layout, folder)
+    monkeypatch.setitem(studio.FORMATS, "1:1", (100, 100))
+    edited = []
+
+    def reframe(source, target, format_name, ai, expand, *, intent):
+        assert format_name == "1:1" and expand is None and "아래쪽 정보 영역" in intent
+        edited.append(source)
+        shutil.copytree(source, target)
+        alternative = load_layout(target)
+        alternative["artwork"]["h"] = 100
+        alternative["design"]["artwork_box"] = [0, 0, 100, 100]
+        Image.new("RGB", (100, 100), "blue").save(target / "scene.png")
+        compose(alternative, target).save(target / "ad.png")
+        save_layout(alternative, target)
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            data = json.loads(request.split("Input JSON follows:\n", 1)[1])
+            if step == "studio_look":
+                if data.get("compare_offer_panel"):
+                    assert data["version_order"] == ["v01", "v02"]
+                    np.testing.assert_allclose(images[1][99, 98], [34 / 255] * 3)
+                    assert images[2][99, 98].tolist() == [0, 0, 1]
+                    return json.dumps({"version": preferred, "finding": "ready", "observation": "실제 두 광고를 비교했습니다"})
+                return '{"version":"v01","finding":"ready","observation":"정보가 읽힙니다"}'
+            if step == "studio_campaign_check":
+                response = json.loads(CAMPAIGN_READY)
+                if data.get("offer_panel"):
+                    response["layout"]["offer_connection"] = "connected"
+                else:
+                    response["layout"]["ready"] = challenger_passes
+                return json.dumps(response)
+            assert step == "studio_action" and "select" in data["actions"]
+            return '{"action":"select","arguments":{},"reason":"두 배치를 검토해 골랐습니다"}'
+
+    monkeypatch.setattr(studio, "adapt_format", reframe)
+    output = tmp_path / "offer-panel-compare"
+    result = studio.run_studio(Image.new("RGB", (100, 100)), fields, "", output, Agent(), draft=folder, edit_limit=1)
+    assert edited == [output / "versions/v01"]
+    assert result["status"] == "complete" and result["version"] == selected
+    assert load_layout(output / "final")["texts"] == layout["texts"]
 
 
 @pytest.mark.parametrize(("finding", "observation", "has_reference", "planned_layout"), [

@@ -55,6 +55,11 @@ If idea requires a visible edit to an existing poster, check that the chosen ver
 returning ready. Use photo_boxes to locate the photograph on each full canvas. A large flat area outside a
 good photograph is a layout defect when it has no role in the intended reading path. A visually strong
 product or a readable headline does not satisfy a requested composition change on its own.
+When compare_offer_panel is true, the two posters reuse the same photograph and wording. Compare how each
+uses its surface, leads from the headline to the subject and then to the offer, and protects the photographed
+detail. Look for a quiet place for the offer within the image in the reframed version. Keep a separate panel
+when it gives the reading path a clearer structure, avoids a distracting crop or background, or fulfills the
+owner's request. Name a visible difference between the two in observation.
 Use the phone preview to read it as a shopper seeing the whole poster. Check whether the product name and price can be
 spotted and read as related information after the first glance. Report typography if either is visually lost
 or the price reads like a detached footnote. A supporting price can be smaller than the headline.
@@ -181,7 +186,9 @@ def offer_panel_detail(poster, artwork, ink):
     for side, depth, gap, crop in regions:
         if depth >= minimum_panel and gap >= 0:
             line_height = max((box[3] - box[1]) * height / 100 for box in offer)
-            return side, poster.crop(crop), {"gap_px": round(gap), "line_height_px": round(line_height)}
+            axis = width if side in ("left", "right") else height
+            return side, poster.crop(crop), {"gap_px": round(gap), "line_height_px": round(line_height),
+                                             "panel_percent": round(100 * depth / axis)}
     return None
 
 
@@ -318,8 +325,10 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
     attempts = []
     observation = ""
     last_failure = None
+    reframe_attempted = False
     for turn in range(edit_limit + 1):
         order = [current, pending] if pending else [current]
+        compare_offer_panel = pending and attempts[-1].get("compare_offer_panel", False)
         posters = [read_image(versions / name / "ad.png") for name in order]
         pictures = {name: to_float(poster) for name, poster in zip(order, posters, strict=True)}
         edition = load_layout(versions / current)
@@ -338,7 +347,8 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         else:
             review = ask_stage(ai, "studio_look", LOOK, {"product_facts": fields, "required_copy": required_copy,
                                                        "idea": idea, "version_order": order, "art_directions": directions,
-                                                       "photo_boxes": photo_boxes},
+                                                       "photo_boxes": photo_boxes,
+                                                       **({"compare_offer_panel": True} if compare_offer_panel else {})},
                                [to_float(photo), *pictures.values(), to_float(phone_preview(posters)), *sources])
         visible = review.get("version")
         finding = review.get("finding")
@@ -354,6 +364,11 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
             alternative_finding, alternative_observation = assess_campaign(pending, posters[-1], required_copy)
             if alternative_finding in ("ready", "layout"):
                 visible, finding, observation = pending, alternative_finding, alternative_observation
+        if compare_offer_panel and finding != "ready" and (visible == pending or finding in ("layout", "typography")):
+            other = current if visible == pending else pending
+            other_finding, other_observation = assess_campaign(other, posters[order.index(other)], required_copy)
+            if other_finding == "ready":
+                visible, finding, observation = other, other_finding, other_observation
         record("look", versions=order, version=visible, finding=finding, observation=observation)
         if pending:
             attempts[-1].update(preferred_version=visible, remaining_finding=finding, observation=observation)
@@ -382,17 +397,30 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
                     available.add("repair_staged_detail")
                 if camera_viewpoints:
                     available.add("change_viewpoint")
-        guides = find_actions(finding, available)
+        panel = None
+        if finding == "ready" and "reframe_photo" in available and not reframe_attempted:
+            panel = offer_panel_detail(posters[order.index(current)], layout["artwork"], rendered_text_bounds(layout, base))
+        try_offer_panel = panel is not None and panel[2]["panel_percent"] >= 25
+        guides = find_actions("layout", {"reframe_photo"}) if try_offer_panel else find_actions(finding, available)
         record("guides", version=current, actions=list(guides))
-        decision = ask_stage(ai, "studio_action", ACT,
-                             {"finding": finding, "observation": observation, "actions": guides, "product": fields,
-                              "owner_idea": idea,
-                              "design": layout["design"], "actual_foreground_bounds": foreground_bounds,
-                              "rendered_text_bounds": rendered_text_bounds(layout, base) if "edit_text" in guides else {},
-                              "camera_viewpoints": camera_viewpoints if "change_viewpoint" in guides else {},
-                              "copy": [text["text"] for text in layout["texts"]],
-                              "fonts": list(load_settings()["fonts"]), "last_edit_error": last_failure,
-                              "earlier_edits": attempts}, [pictures[current], to_float(photo)])
+        if try_offer_panel:
+            side = {"left": "왼쪽", "top": "위쪽", "right": "오른쪽", "bottom": "아래쪽"}[panel[0]]
+            instruction = (f"{side} 정보 영역을 줄이고 기존 사진을 화면에 채워 판매 정보를 사진의 조용한 공간에 배치합니다. "
+                           "상품과 문구에 연결된 장면 요소를 보존하고 확정 문구를 그대로 씁니다.")
+            if idea:
+                instruction += f" 요청 사항도 반영합니다. {idea}"
+            decision = {"action": "reframe_photo", "arguments": {"instruction": instruction},
+                        "reason": "큰 정보 영역을 사용한 시안과 같은 사진 안에 정보를 배치한 시안을 비교합니다"}
+        else:
+            decision = ask_stage(ai, "studio_action", ACT,
+                                 {"finding": finding, "observation": observation, "actions": guides, "product": fields,
+                                  "owner_idea": idea,
+                                  "design": layout["design"], "actual_foreground_bounds": foreground_bounds,
+                                  "rendered_text_bounds": rendered_text_bounds(layout, base) if "edit_text" in guides else {},
+                                  "camera_viewpoints": camera_viewpoints if "change_viewpoint" in guides else {},
+                                  "copy": [text["text"] for text in layout["texts"]],
+                                  "fonts": list(load_settings()["fonts"]), "last_edit_error": last_failure,
+                                  "earlier_edits": attempts}, [pictures[current], to_float(photo)])
         action = decision.get("action")
         arguments = decision.get("arguments")
         if (not isinstance(action, str) or action not in guides or not isinstance(arguments, dict)
@@ -440,6 +468,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
                 make_scene_ad(photo, fields, idea, generation() | {"ai": ai}, revised, references=references,
                               previous=base, campaign_intent=required_text(arguments, "intent", "광고 연출"))
             elif action == "reframe_photo":
+                reframe_attempted = True
                 instruction = required_text(arguments, "instruction", "사진 배치")
                 adapt_format(base, revised, same_format, ai, fill_margin if generation is not None else None,
                              intent=instruction)
@@ -460,7 +489,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         last_failure = None
         pending = new_id
         attempts.append({"candidate": new_id, "parent": current, "action": action, "arguments": arguments,
-                         "reason": reason})
+                         "reason": reason, **({"compare_offer_panel": True} if try_offer_panel else {})})
         record("poster", version=new_id, parent=current, image=(revised / "ad.png").relative_to(output).as_posix())
 
     image = versions / current / "ad.png"
