@@ -27,12 +27,14 @@
 
 | 순서 | 확인한 흐름 | 출처 |
 | --- | --- | --- |
-| 시작 방식 | 기존 구도와 효과가 맞으면 템플릿을 고른다. 특정 포스터가 출발점이면 가져올 구도와 바꿀 제품을 지정한다. 적절한 참고가 없으면 상품과 목표에서 새로 시작한다. | [공식 작업 흐름](https://dreamina.capcut.com/resource/choose-dreamina-marketing-workflow) |
+| 시작 방식 | 제품 수, 촬영 각도, 문구 공간이 맞는 템플릿을 고른다. 특정 포스터가 출발점이면 가져올 구도와 바꿀 제품을 지정한다. 적절한 참고가 없으면 상품과 목표에서 새로 시작한다. | [공식 작업 흐름](https://dreamina.capcut.com/ko-kr/resource/choose-dreamina-marketing-workflow) |
 | 상품과 후보 | 실제 상품 사진과 확인된 판매 포인트를 넣는다. 스타일, 비율과 해상도를 정한 뒤 생성하고 후보를 검토한다. 공개 제작 사례에서도 상품을 준비한 다음 템플릿을 적용하고 이미지를 생성했다. | [공식 상품 포스터 안내](https://dreamina.capcut.com/resource/product-poster), [제작 사례 · 유료 협업 표기](https://www.teapawt.net/rezkhere/status/2123738435110457564) |
 | 캔버스 편집 | 고른 시안을 캔버스에서 열어 글자와 그래픽을 따로 얹거나 수정한다. 불필요한 소품은 범위를 표시한 뒤 그 영역을 채운다. 한국어 사용자 가이드에서는 수정한 후보를 다시 선택해 한 가지씩 손보는 과정을 소개한다. | [공식 마케팅 그래픽 안내](https://dreamina.capcut.com/ai-image/how-to-use-ai-high-quality-marketing-graphics-dreamina), [공식 영역 편집 안내](https://dreamina.capcut.com/resource/ai-generative-fill), [신영선 캔버스 사용 기록](https://www.yeongseon.kr/archive/410d86104de280fb85edcc1e3a851608.html) |
 | 게시 규격 | 고른 대표 시안을 기준으로 채널에 맞춰 배치나 크롭을 조정한다. 바깥 공간이 필요하면 사진을 확장한다. 필요한 파일 형식과 크기를 고르고 내보낸다. | [공식 마케팅 그래픽 안내](https://dreamina.capcut.com/ai-image/how-to-use-ai-high-quality-marketing-graphics-dreamina), [공식 이미지 확장 안내](https://dreamina.capcut.com/resource/ai-expand-image) |
 
 공개 커뮤니티 글에는 참고 이미지를 이용한 일관성이 장점이라는 의견과, 정확한 레이어 제어가 필요한 최종 제작에는 제약이 있다는 의견이 함께 있었다. 이는 사용자의 경험이며 마케팅 스튜디오의 버튼 동작을 직접 확인한 근거와는 구분한다. [AIToolBench 사용 후기](https://www.reddit.com/r/AIToolBench/comments/1u2mea1/dreamina_is_the_best_ai_design_tool_ive_found_for/)
+
+블랙프라이데이 포스터를 다룬 AiScopeX 협업 영상의 공개 설명에도 포스터 재현 후 캔버스에서 글자와 레이어를 편집하는 순서가 적혀 있다. [AiScopeX 영상 설명](https://zolotube.com/watch?v=YdQBTEnGrFY)
 
 ## 프로젝트에 적용하는 방식
 
