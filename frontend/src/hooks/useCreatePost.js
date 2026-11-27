@@ -1,32 +1,11 @@
 import { useEffect, useState } from 'react'
 import { createPostJob, getPostJob, POLL_MS } from '../api/postApi.js'
+import { EMPTY_FORM, missingFields, parsePrice } from '../postForm.js'
 
 // 게시글 만들기의 "동작"만 모은 곳. 화면 모양은 들어 있지 않다.
 // 컴퓨터 화면(pages/CreatePost.jsx)과 나중에 만들 휴대폰 전용 화면이 이것을 같이 쓴다.
 //
 // 흐름: ① 입력 → start() → ② 결과 (2초마다 상태를 묻는다) → publish() → ③ 게시 → restart()
-
-// 문구 생성 함수(유진님, generate_product_captions)가 받는 값과 같은 칸
-export const EMPTY_FORM = { productName: '', unit: '', price: '', usageExample: '', notes: '' }
-
-// 가격은 0보다 큰 정수만 받는다. 쉼표나 '원'을 붙여 써도 숫자만 읽는다.
-export function parsePrice(text) {
-  const digits = text.replace(/[,\s원]/g, '')
-  if (!/^\d+$/.test(digits)) return null
-  const value = Number(digits)
-  return value > 0 ? value : null
-}
-
-// 아직 안 넣은 칸 이름 목록. 비어 있으면 시작할 수 있다.
-export function missingFields(photo, form) {
-  return [
-    !photo && '제품 사진',
-    !form.productName.trim() && '품목',
-    !form.unit.trim() && '단위',
-    parsePrice(form.price) === null && '가격',
-    !form.usageExample.trim() && '활용 예시',
-  ].filter(Boolean)
-}
 
 export function useCreatePost() {
   const [step, setStep] = useState(0) // 0 입력, 1 결과, 2 게시
