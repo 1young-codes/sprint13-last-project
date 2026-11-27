@@ -234,7 +234,8 @@ def test_campaign_comparison_can_block_selection(tmp_path, draft, finding, obser
     assert "resume_review" not in (fresh / "events.jsonl").read_text(encoding="utf-8")
 
 
-def test_scene_action_can_use_a_prepared_camera_viewpoint(tmp_path, draft, monkeypatch):
+@pytest.mark.parametrize("action", ["change_viewpoint", "rebuild_campaign"])
+def test_scene_action_keeps_improved_photo_for_layout_work(tmp_path, draft, monkeypatch, action):
     folder, fields = draft
     monkeypatch.setattr(studio, "available_viewpoints", lambda: {"high_angle": "하이 앵글"})
     ai = object()
@@ -247,15 +248,20 @@ def test_scene_action_can_use_a_prepared_camera_viewpoint(tmp_path, draft, monke
         if step == "studio_campaign_check":
             return {"scene": {"treatment": "feature_framing", "observation": "윗면이 보입니다"},
                     "layout": {"ready": False, "observation": "가격을 상품명 가까이 옮겨야 합니다"}}
-        if "change_viewpoint" in data["actions"]:
+        if action in data["actions"]:
             assert data["camera_viewpoints"] == {"high_angle": "하이 앵글"}
-            return {"action": "change_viewpoint", "arguments": {"viewpoint": "high_angle",
-                    "instruction": "윗면이 보이도록 촬영"}, "reason": "윗면을 강조합니다"}
+            arguments = ({"viewpoint": "high_angle", "instruction": "윗면이 보이도록 촬영"}
+                         if action == "change_viewpoint" else {"intent": "제품의 윗면과 제목을 이어서 표현"})
+            return {"action": action, "arguments": arguments, "reason": "윗면을 강조합니다"}
         return {"action": "hold", "arguments": {}, "reason": "촬영 결과를 검토합니다"}
 
     def remake(photo, facts, idea, models, output, **kwargs):
-        assert facts == fields and kwargs["scene_issue"] == "윗면이 가려집니다"
-        assert kwargs["viewpoint"] == "high_angle" and kwargs["feedback"] == "윗면이 보이도록 촬영"
+        assert facts == fields
+        if action == "change_viewpoint":
+            assert kwargs["scene_issue"] == "윗면이 가려집니다"
+            assert kwargs["viewpoint"] == "high_angle" and kwargs["feedback"] == "윗면이 보이도록 촬영"
+        else:
+            assert kwargs["campaign_intent"] == "제품의 윗면과 제목을 이어서 표현" and "feedback" not in kwargs
         edits.append(kwargs["previous"])
         shutil.copytree(folder, output)
 

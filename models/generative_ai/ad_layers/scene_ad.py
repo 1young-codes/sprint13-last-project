@@ -13,7 +13,7 @@ from .art_direction import ANGLES, LIGHTING, SHOT_SCALES, THEMES, plan_art_direc
 from .creative_brief import LAYOUT_ROLES, TEXT_ROLES, ask_stage, plan_copy, required_text, validate_boxes
 from .layers import compose, cutout_product, load_layout, load_settings, save_layout, to_float
 from .text_render import minimum_font_size, render_texts
-from .viewpoint import camera_view, place_camera_view
+from .viewpoint import available_viewpoints, camera_view, place_camera_view
 
 
 DESIGN = """Art-direct one complete Korean campaign poster before any artwork is generated. The first image
@@ -32,12 +32,15 @@ An accent can cross from the edge or sit in quiet space over the photo. Give the
 
 DESIGN_SCHEMA = """A design object has "concept" (the visual idea and why it serves the message), "focus" (product, headline,
 product_name, or price), "background" (#RRGGBB), "accent" (null, or an object with "shape" rectangle or ellipse,
-"box", "color" #RRGGBB, and "layer" background or overlay), "artwork_box", "subject_box", "edge" (blend or framed),
+"box", "color" #RRGGBB, and "layer" background, overlay or behind_subject), "artwork_box", "subject_box", "edge" (blend or framed),
 "crop" (preserve or intentional), and "art_direction" (English
 photographic framing, lighting, materials and background for the artwork region; no text or graphic overlays).
 Use a background accent outside the artwork, or an overlay accent over quiet space without covering the product.
+Use behind_subject when a shape should tuck behind the real silhouette. Give it a clear visible role linking the
+feature and headline. The compositor hides only the part behind the subject and keeps the product visible.
 Use the blended edge for a calm photo perimeter that can merge into a plain graphic field. A framed edge can
-align a deliberate crop with the type or cover the whole canvas.
+align a deliberate, distinct image panel with the type or cover the whole canvas. When the background above
+or below the photo should read as the same continuous surface, prefer blend.
 Use preserve for a complete product by default. Choose intentional only when a motivated crop emphasizes a real
 detail and the shopper can still identify the product and any important label.
 For an intentional detail shot include source_crop as [left, top, width, height] in whole percentages of the
@@ -119,14 +122,17 @@ Match the lettering to the visual mood and keep any confirmed line breaks. Use t
 When the photograph clearly supports one specific phrase, consider highlighting it with a color sampled visually
 from the relevant feature. Put {phrase, color} only at revision.styles.headline.emphasis. The revision.accent
 field is only for a graphic shape using shape, layer, box and color, or null to remove the graphic.
+For a deliberate shape that links the real subject contour to the headline, use layer behind_subject. The
+subject stays entirely visible. Keep both a visible part of the graphic and a part tucked behind the subject.
 Copy whole space-separated words exactly, including attached Korean particles or punctuation. Omit the emphasis
 if there is no suitable phrase. Use a single treatment and keep the accent legible against the actual background.
 If the same bright color on supporting information competes with the headline, reduce its emphasis.
 If a solid graphic panel is the strongest element by color contrast and the offer is secondary, soften or
 remove the panel. Use a common alignment and gap for the supporting text instead of relying on a shared box.
-If a hard photo boundary runs behind the words and splits their background for no clear reason, set edge to
-blend so only the photo's outer surroundings fade into the canvas. Keep framed when a distinct image panel
-improves the composition. This affects the surroundings, leaving the subject intact.
+If a hard photo boundary behind the words or between the heading and product cuts a shared background for no
+clear reason, set edge to blend so only the outer surroundings fade into the canvas. Inspect the top and bottom
+edges as well as the sides. Keep framed when a distinct image panel improves the composition. This affects the
+surroundings, leaving the subject intact.
 Return one JSON object with exactly two keys: reason (a concrete Korean sentence) and revision. A revision
 contains only boxes, styles, accent or edge in the same form as the supplied design. Each of boxes and styles,
 if changed, must include headline, product_name and price. Boxes are [left, top, width, height] in whole
@@ -237,12 +243,12 @@ def design_layers(answer, copy, size, fonts, folder):
     graphic = None
     if accent is not None:
         if (not isinstance(accent, dict) or accent.get("shape") not in ("rectangle", "ellipse")
-                or accent.get("layer", "background") not in ("background", "overlay")
+                or accent.get("layer", "background") not in ("background", "overlay", "behind_subject")
                 or not is_color(accent.get("color"))):
             raise ValueError("색면의 형태와 색이 올바르지 않습니다")
         validate_boxes({"accent": accent.get("box")}, ("accent",))
         ax, ay, aw, ah = pixel_box(accent["box"], size)
-        overlay = accent.get("layer") == "overlay"
+        overlay = accent.get("layer") in ("overlay", "behind_subject")
         if not overlay and (accent["color"].lower() == answer["background"].lower()
                             or (x <= ax and y <= ay and x + w >= ax + aw and y + h >= ay + ah)):
             raise ValueError("배경 색면은 바탕과 구분되고 사진 밖에서 보여야 합니다")
@@ -253,6 +259,8 @@ def design_layers(answer, copy, size, fonts, folder):
         shape((left, top, left + aw - 1, top + ah - 1), fill=accent["color"])
         if overlay:
             graphic = {"file": "graphic.png", "x": ax, "y": ay, "w": aw, "h": ah}
+            if accent["layer"] == "behind_subject":
+                graphic["depth"] = "behind_subject"
             target.save(folder / graphic["file"])
     texts = layout_texts(answer, copy, size, fonts)
     render_texts(texts, size, folder)
@@ -364,6 +372,10 @@ def review_composition_plan(ai, product, design, layout, folder, inputs, images)
     photo_input = [to_float(first), *images]
     review_input = inputs | {"design": design, "rendered_text_bounds": rendered_text_bounds(layout, folder)}
     task = BLOCKING + "\n" + DESIGN_SCHEMA
+    if "layout_device" in inputs.get("revision_feedback", {}):
+        task += ("\nTest how revision_feedback.layout_device appears in the rendered draft. "
+                 "If it only exists in the written plan, move or resize the artwork, lettering or graphic "
+                 "until the visible relationship is present. Judge the intended effect at a small size.")
     if "source_framing" in inputs:
         task += "\nKeep the chosen source_framing. Adjust placement, scale and type around that photographed view."
     editable = {"concept", "focus", "background", "accent", "artwork_box", "subject_box", "crop", "source_crop",
@@ -441,6 +453,10 @@ def check_text_overlap(foreground, layout, folder):
         x, y = layer_info["x"], layer_info["y"]
         covered = mask[y:y + layer_info["h"], x:x + layer_info["w"]] & ink
         if layer_info.get("depth") == "behind_subject":
+            if layer_info is graphic:
+                if not covered.any() or not (ink & ~covered).any():
+                    raise ValueError("제품 뒤 색면은 제품과 맞닿고 바깥에서도 보여야 합니다")
+                continue
             if covered.any():
                 from scipy.ndimage import label
 
@@ -617,7 +633,8 @@ def preview_artwork(photo, artwork, canvas_size, design):
 
 
 def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview=False, proposal=None, previous=None,
-                  rejected=None, feedback=None, scene_issue=None, start_direction=None, viewpoint=None):
+                  rejected=None, feedback=None, scene_issue=None, start_direction=None, viewpoint=None,
+                  campaign_intent=None):
 
     if folder.exists():
         raise FileExistsError(folder)
@@ -629,6 +646,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         raise ValueError("보류한 후보를 전달하려면 비교 기준이 되는 완성본도 필요합니다")
     if feedback and not previous:
         raise ValueError("장면을 수정하려면 기준이 되는 완성본이 필요합니다")
+    if campaign_intent and (not previous or feedback):
+        raise ValueError("새 연출에는 기존 포스터와 하나의 연출 의도가 필요합니다")
     prior = load_layout(previous) if previous else None
     kept = prior or proposal
     if kept and kept["fields"] != fields:
@@ -654,6 +673,24 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         inputs["previous_art_direction"] = previous_design.get("art_direction", prior.get("scene_prompt"))
         inputs["previous_visual_review"] = prior.get("revision", {}).get("visual_review")
         critique_prompt, critique_images = CRITIQUE, [prior_image, *images]
+        fields_to_keep = ("weakness", "hypothesis")
+        campaign_viewpoints = {}
+        if campaign_intent:
+            inputs["editor_intent"] = campaign_intent
+            critique_prompt += ("\nDesign one replacement campaign from editor_intent. The full composition may change. "
+                                "Do not salvage the old subject placement or type merely for continuity. In hypothesis, "
+                                "describe a physically visible scene with the actual product. Also return layout_device "
+                                "(how positioning, type or a graphic makes that same idea visible) and visible_result "
+                                "(what must be apparent in the rendered poster at phone size). Use a layout device "
+                                "the editor can draw: straight headline lines, size, selective color, a rectangular or "
+                                "elliptical shape, or a small overlap behind the product. Do not plan curved lettering.")
+            fields_to_keep += ("layout_device", "visible_result")
+            campaign_viewpoints = available_viewpoints()
+            if campaign_viewpoints:
+                inputs["camera_viewpoints"] = campaign_viewpoints
+                critique_prompt += (" If the concept needs a visibly different camera position relative to the source, "
+                                    "return viewpoint as one key from camera_viewpoints. This will move the actual camera "
+                                    "reference. Return null when the scene does not need a new camera position.")
         if rejected:
             discarded = load_layout(rejected)
             if discarded["fields"] != fields:
@@ -666,7 +703,11 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 critique_images.append(to_float(rejected_image))
             critique_prompt += "\nThe last image is a rejected attempt. Address its weakness and avoid repeating it."
         criticism = ask_stage(ai, "ad_cycle_critique", critique_prompt, inputs, critique_images)
-        revision_info = {key: required_text(criticism, key, "완성본 검토") for key in ("weakness", "hypothesis")}
+        revision_info = {key: required_text(criticism, key, "완성본 검토") for key in fields_to_keep}
+        if campaign_viewpoints and (camera_choice := criticism.get("viewpoint")) is not None:
+            if not isinstance(camera_choice, str) or camera_choice not in campaign_viewpoints:
+                raise ValueError("새 연출에 사용할 촬영 시점을 확인하지 못했습니다")
+            viewpoint = camera_choice
     design_input = {"brief": brief, "copy": copy, "fonts": list(settings["fonts"]), "canvas_size": size}
     if revision_info:
         design_input.update(brief={"message": brief["message"], "evidence": brief.get("evidence")},
@@ -720,6 +761,9 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         elif revision_info:
             design_task += ("\nMake room for the visual idea in revision_feedback. Give the photography "
                             "and type a new shared composition with the same exact copy.")
+            if campaign_intent:
+                design_task += (" Use layout_device and show visible_result. Draw the relationship in the actual layout "
+                                "through relative scale, overlap or direction; a separate caption above a catalog shot is insufficient.")
         if moved_view is not None:
             design_images = [*design_images, to_float(moved_view)]
             design_task += ("\nThe final image shows the requested camera viewpoint with unreconstructed regions. "
@@ -780,6 +824,10 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 direction_task += ("\nThe last image is the requested viewpoint, with gray gaps to reconstruct. "
                                    "Describe the new scene at that actual angle. Keep the visible product identity and "
                                    "use the planned quiet regions for type. The camera view takes priority over angle_guide.")
+            if campaign_intent:
+                direction_task += ("\nLay out a real scene for the hypothesis and the approved headline position. "
+                                   "Describe the path, gesture or feature that points toward the planned design. "
+                                   "Keep layout_device to guide photography only: include no graphic or text in the photo.")
             direction = ask_stage(ai, "ad_scene_direction", direction_task, direction_input, direction_images)
             answer = answer | {"art_direction": required_text(direction, "scene", "촬영 연출")}
 

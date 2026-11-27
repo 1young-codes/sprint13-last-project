@@ -101,8 +101,32 @@ def compose(layout: dict, folder: Path) -> Image.Image:
     if artwork:
         paste_clipped(canvas, Image.open(folder / artwork["file"]).convert("RGBA"), artwork["x"], artwork["y"])
     graphic = layout.get("graphic")
+    foreground = None
+
+    def paste_design_layer(info):
+        nonlocal foreground
+        with Image.open(folder / info["file"]) as source:
+            layer = source.convert("RGBA")
+        if info.get("depth") == "behind_subject" and not layout.get("preview"):
+            if foreground is None:
+                with Image.open(folder / "foreground.png") as mask:
+                    foreground = mask.convert("L").point(lambda value: 255 if value > 128 else 0)
+            x, y = info["x"] - artwork["x"], info["y"] - artwork["y"]
+            visible = ImageChops.invert(foreground.crop((x, y, x + layer.width, y + layer.height)))
+            alpha = ImageChops.multiply(layer.getchannel("A"), visible)
+            if info is graphic:
+                left, top = info["x"], info["y"]
+                light = canvas.crop((left, top, left + layer.width, top + layer.height)).convert("L")
+                samples = np.asarray(light)[np.asarray(alpha) > 0]
+                if samples.size and (base_light := np.percentile(samples, 90)) > 0:
+                    # 원래 사진의 접지 그림자가 색면 경계에서 끊기지 않게 합니다.
+                    shade = light.point(lambda value: min(255, round(255 * value / base_light)))
+                    layer = ImageChops.multiply(layer.convert("RGB"), shade.convert("RGB"))
+            layer.putalpha(alpha)
+        paste_clipped(canvas, layer, info["x"], info["y"])
+
     if graphic:
-        paste_clipped(canvas, Image.open(folder / graphic["file"]).convert("RGBA"), graphic["x"], graphic["y"])
+        paste_design_layer(graphic)
     product = layout.get("product")
     if product:
         shadow = layout.get("shadow")
@@ -110,18 +134,8 @@ def compose(layout: dict, folder: Path) -> Image.Image:
             paste_clipped(canvas, Image.open(folder / shadow["file"]).convert("RGBA"),
                           product["x"] + shadow["dx"], product["y"] + shadow["dy"])
         paste_clipped(canvas, Image.open(folder / product["file"]).convert("RGBA"), product["x"], product["y"])
-    foreground = None
     for text in layout["texts"]:
-        with Image.open(folder / text["file"]) as source:
-            layer = source.convert("RGBA")
-        if text.get("depth") == "behind_subject" and not layout.get("preview"):
-            if foreground is None:
-                with Image.open(folder / "foreground.png") as mask:
-                    foreground = mask.convert("L").point(lambda value: 255 if value > 128 else 0)
-            x, y = text["x"] - artwork["x"], text["y"] - artwork["y"]
-            visible = ImageChops.invert(foreground.crop((x, y, x + layer.width, y + layer.height)))
-            layer.putalpha(ImageChops.multiply(layer.getchannel("A"), visible))
-        paste_clipped(canvas, layer, text["x"], text["y"])
+        paste_design_layer(text)
     return canvas.convert("RGB")
 
 

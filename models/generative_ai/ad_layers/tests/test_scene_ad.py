@@ -17,6 +17,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     fields = {"product_name": "수분 세럼", "price_krw": 32000}
     correction = "Show the cap held visibly by a hand."
     actual_light = "Grazing light from the left defines the small drop under the cap."
+    campaign_intent = "빛줄기와 제목을 같은 방향으로 연결합니다"
     expect_correction = False
     delegated_framing = False
 
@@ -76,9 +77,15 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 assert not np.array_equal(images[0], images[1])
                 return '{"choice":"detail","reason":"앰버 유리의 빛이 확대되어 보입니다"}'
             if step == "ad_cycle_critique":
-                assert len(images) == 4 and images[0][20, 15, 2] == 1
-                assert "병의 하단이 잘렸습니다" in prompt
-                return '{"weakness":"평평한 조명", "hypothesis":"A narrow beam through the glass"}'
+                data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
+                assert images[0][20, 15, 2] == 1
+                critique = {"weakness": "평평한 조명", "hypothesis": "A narrow beam through the glass"}
+                if "editor_intent" in data:
+                    assert len(images) == 3 and data["editor_intent"] == campaign_intent
+                    critique.update(layout_device="빛줄기와 제목을 나란히", visible_result="빛이 제목으로 이어짐")
+                else:
+                    assert len(images) == 4 and "병의 하단이 잘렸습니다" in prompt
+                return json.dumps(critique)
             if step == "ad_scene_direction":
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
                 assert data["design"]["artwork_box"] == [0, 0, 50, 100]
@@ -92,6 +99,8 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                     assert "Omit any instruction to keep the entire product" in prompt
                 if "hypothesis" in data:
                     assert data["hypothesis"] == "A narrow beam through the glass" and data["idea"] == "가벼운 아침 연출"
+                    if "layout_device" in data:
+                        assert data["visible_result"] == "빛이 제목으로 이어짐"
                     return '{"scene":"Narrow studio beam"}'
                 return '{"scene":"Amber reflections"}'
             if step == "ad_composition":
@@ -191,6 +200,12 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     assert revision["revision"]["weakness"] == "평평한 조명"
     assert revision["design"]["art_direction"] == "Narrow studio beam"
     assert revision["brief"]["headline"] == layout["brief"]["headline"]
+
+    calls.clear()
+    rebuilt = scene_ad.make_scene_ad(photo, fields, "가벼운 아침 연출", models, tmp_path / "rebuilt",
+                                     references=[reference], previous=folder, campaign_intent=campaign_intent)
+    assert rebuilt["revision"]["layout_device"] == "빛줄기와 제목을 나란히"
+    assert [item["text"] for item in rebuilt["texts"]] == [item["text"] for item in layout["texts"]]
 
     calls.clear()
     expect_correction = True
@@ -313,6 +328,23 @@ def test_graphic_goes_between_full_bleed_photo_and_type(tmp_path, monkeypatch):
     foreground[15, 15] = True
     with pytest.raises(ValueError, match="색면 레이어가 실제 제품을 가립니다"):
         scene_ad.check_text_overlap(foreground, layout, tmp_path)
+
+    answer["accent"]["layer"] = "behind_subject"
+    layout = scene_ad.design_layers(answer, dict.fromkeys(boxes, "광고"), (100, 100), ["noto_sans_kr"], tmp_path)
+    Image.fromarray(foreground).save(tmp_path / "foreground.png")
+    scene_ad.check_text_overlap(foreground, layout, tmp_path)
+    poster = scene_ad.compose(layout, tmp_path)
+    assert poster.getpixel((15, 15)) == (0, 0, 255)
+    assert poster.getpixel((16, 15)) == (255, 0, 0)
+    assert poster.getpixel((25, 25)) == (255, 255, 255)
+    photo = Image.new("RGB", (100, 100), "white")
+    photo.putpixel((16, 15), (128, 128, 128))
+    photo.save(tmp_path / "scene.png")
+    poster = scene_ad.compose(layout, tmp_path)
+    assert poster.getpixel((16, 15)) == (128, 0, 0)
+    assert poster.getpixel((17, 15)) == (255, 0, 0)
+    with pytest.raises(ValueError, match="바깥에서도 보여야"):
+        scene_ad.check_text_overlap(np.zeros_like(foreground), layout, tmp_path)
 
 
 def test_designed_line_break_reaches_html_renderer():

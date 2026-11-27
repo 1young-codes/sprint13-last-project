@@ -71,7 +71,10 @@ Return the treatment actually visible using one key from treatments. Enlarging t
 changing the background tone, or making the same arrangement crisper counts as catalog. Detail framing must
 give the advertised feature new prominence relative to the rest of the product, or reveal a useful view of it.
 For other treatments, name the specific changed area, interaction, or contour and how it shows the message.
-For photo_type, require a visible interaction with a particular contour, action or material, beyond standard alignment.
+For photo_type, require a visible interaction between lettering or a graphic shape and a particular contour, action
+or material that helps the headline express its idea. Standard alignment or a colored backing alone does not qualify.
+If planned_effect exists, locate it in the rendered images. If it is missing, describe what appears in its place.
+Treat the plan as a claim to verify against the pixels.
 Allow quiet minimalism when the specific treatment adds a visual point that disappears in the substitution.
 The phone preview contains only the poster at a smaller size. Trace the actual reading path from the headline and its photographic subject to the product
 name and price. Identify how the text groups relate by their visible edges, alignment, spacing or a shared
@@ -90,7 +93,7 @@ TREATMENTS = {
     "feature_framing": "A close-up or viewpoint makes the advertised detail substantially more prominent or visible.",
     "lighting": "Directed light, transmission or reflection reveals or singles out a specific selling detail.",
     "staging": "A credible action, setting, or arrangement shows a benefit or use absent from the source.",
-    "photo_type": "The lettering interacts with a distinct contour, movement or material and carries the visual idea.",
+    "photo_type": "Lettering or graphics interact with a distinct contour, movement or material to express the headline's idea.",
 }
 
 ACT = """Use the evidence in observation and the actual chosen poster (first image) to pick one action.
@@ -105,6 +108,8 @@ while changing its angle, foreground-to-background depth, or the way it is lit o
 When a specific change of camera height or side would reveal the selling detail, choose change_viewpoint if
 offered. Select the direction relative to the source photo from camera_viewpoints. Use revise_scene for changes
 to action, setting or light that do not need the camera to move around the subject.
+When composing another clean shot or changing the angle alone would preserve the same catalog idea, use rebuild_campaign.
+Choose one new design idea the photograph and headline can express together. Name the intended joint effect.
 Read the earlier edits and what remained visible after each comparison. If moving or enlarging the words
 left the same photo-and-copy disconnect, choose a different composition action or revise the photography
 when available. Do not repeat an earlier edit that left the same issue.
@@ -194,6 +199,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         check = ask_stage(ai, "studio_campaign_check", CAMPAIGN_CHECK, {
             "required_copy": required_copy, "rendered_text_bounds": rendered_text_bounds(candidate, selected),
             "has_source_study": bool(study), "treatments": TREATMENTS,
+            "planned_effect": candidate.get("revision", {}).get("visible_result"),
         }, [to_float(photo), to_float(poster), to_float(scene), to_float(phone_preview([poster])), *study, *sources])
         scene_review, layout_review = check.get("scene"), check.get("layout")
         treatment = scene_review.get("treatment") if isinstance(scene_review, dict) else None
@@ -264,7 +270,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         if finding == "ready":
             finding, observation = assess_campaign(visible, posters[order.index(visible)], required_copy)
         if (pending and visible == current and finding == "scene"
-                and attempts[-1]["action"] in ("revise_scene", "change_viewpoint")):
+                and attempts[-1]["action"] in ("revise_scene", "change_viewpoint", "rebuild_campaign")):
             alternative_finding, alternative_observation = assess_campaign(pending, posters[-1], required_copy)
             if alternative_finding in ("ready", "layout"):
                 visible, finding, observation = pending, alternative_finding, alternative_observation
@@ -288,7 +294,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
                 if generation is not None:
                     available.add("edit_region")
             if generation is not None:
-                available.add("revise_scene")
+                available.update(("revise_scene", "rebuild_campaign"))
                 if camera_viewpoints:
                     available.add("change_viewpoint")
         guides = find_actions(finding, available)
@@ -338,7 +344,10 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         new_id = f"v{turn + 2:02d}"
         revised = versions / new_id
         try:
-            if action in ("revise_scene", "change_viewpoint"):
+            if action == "rebuild_campaign":
+                make_scene_ad(photo, fields, idea, generation() | {"ai": ai}, revised, references=references,
+                              previous=base, campaign_intent=required_text(arguments, "intent", "광고 연출"))
+            elif action in ("revise_scene", "change_viewpoint"):
                 viewpoint = required_text(arguments, "viewpoint", "촬영 시점") if action == "change_viewpoint" else None
                 if viewpoint is not None and viewpoint not in camera_viewpoints:
                     raise ValueError("제공된 촬영 시점 중 하나를 선택하세요")

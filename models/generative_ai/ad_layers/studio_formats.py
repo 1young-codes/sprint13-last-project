@@ -37,7 +37,8 @@ Each style has font, align (left, center, or right), color (#RRGGBB), size, and 
 always 1 for price). Each box must be at least min_box_height_percent for its line count and needs more height
 for larger lettering. Allow enough width for any preferred_first_lines. For the headline only, optional
 depth behind_subject lets a small part of the headline tuck behind the product. An optional accent is null or an object
-with shape (rectangle or ellipse), box, color, and layer (overlay). Use the previous_layout and layout_error
+with shape (rectangle or ellipse), box, color, and layer (overlay or behind_subject when the shape deliberately
+meets the visible product silhouette). Use the previous_layout and layout_error
 to repair failed boxes while keeping the parts that fit."""
 
 COPY_BREAK = """검토할 광고 문구를 두 줄에 놓을 때 자연스러운 첫 줄을 고릅니다.

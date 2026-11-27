@@ -54,6 +54,13 @@ ACTION_GUIDES = {
         "arguments": {"viewpoint": "One key from camera_viewpoints.",
                       "instruction": "Describe the visible detail to reveal and how the scene should support it."},
     },
+    "rebuild_campaign": {
+        "findings": ("scene",),
+        "guide": "Replace a weak campaign concept. Use this when a cleaner shot or a new angle alone would still "
+                 "look like a catalog. Give the creative lead a new visual idea grounded in the source product. "
+                 "The photography, graphic device and layout may change together. Keep the exact copy and product facts.",
+        "arguments": {"intent": "The specific visual relationship the new photography and design must create."},
+    },
     "select": {
         "findings": ("ready",),
         "guide": "Select the strongest visible version when the product and message read together. "
