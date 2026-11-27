@@ -285,5 +285,9 @@ if __name__ == "__main__":
     if not args.no_models:
         # 요청을 받기 전에 불러온다. 실패하면 여기서 멈춰서, 모든 각도가 조용히 실패하는 서버가 뜨지 않는다.
         make_angle = load_angle_model()
-        retouch_photo = load_retouch_model()
+        try:
+            retouch_photo = load_retouch_model()
+        except Exception:
+            # 보정은 없어도 되는 기능이라 실패해도 서버는 켠다. 대표 사진은 원본으로 나간다(단비님 리뷰 반영).
+            log.exception("보정 모델을 불러오지 못했습니다. 보정 없이 켭니다.")
     uvicorn.run(create_app(), host="127.0.0.1", port=args.port)
