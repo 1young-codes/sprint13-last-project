@@ -10,7 +10,7 @@ from PIL import Image, ImageFilter, ImageOps
 from .creative_brief import ask_stage, required_text
 from .format_layout import format_measurements, measured_styles, outer_margins, position_options, preview_placement
 from .layers import compose, load_layout, load_settings, save_layout, to_float
-from .scene_ad import (check_text_overlap, design_layers, make_scene_ad, rendered_text_bounds, tighten_split_title,
+from .scene_ad import (check_text_overlap, design_layers, make_scene_ad, rendered_text_bounds, tighten_text_groups,
                        touches_photo_edge)
 from .staging import check_staged_identity
 from .studio_edits import foreground_mask, line_break_after, repair_staged_detail
@@ -393,7 +393,7 @@ def adapt_format(source, output, format_name, ai, expand=None):
                 revised.pop("subject_box", None)
                 candidate = design_layers(revised, copy, size, fonts, stage)
                 check_text_overlap(foreground, candidate, stage)
-                tighten_split_title(foreground, candidate, stage)
+                tighten_text_groups(foreground, candidate, stage)
                 ink = rendered_text_bounds(candidate, stage)
                 check_type_margin(size, ink)
             except ValueError as error:

@@ -160,17 +160,24 @@ layout_error using the actual photograph. Return revision: null only when the la
 
 FINISHED_COMPOSITION_COMPARE = """The first poster is the current one, and the second tries to fix the stated
 composition_issue. Compare the actual letter shapes, gaps, and their relationship to the photographed feature.
-Use the visible ink bounds to locate the type. A change in position, size or color alone is insufficient.
-Look at the full canvas in both. Compare the path through the headline, product and price and where any large
-empty area ends up. A split headline is not an improvement if stronger text rhythm is paid for by bunching
-all the text together, leaving a disconnected blank area, or removing a useful heading-to-photo progression.
+Use the visible ink bounds to locate the type. Count a change in position, size or color only when it makes
+the reading path or hierarchy clearer.
+When balanced_outer_space is present, image three keeps the first revision's type treatment with more modest
+placement changes. Compare all three actual posters before choosing. Any reference images come afterward.
+Start by looking at the full canvas in each poster. Use original_outer_space and revision_outer_space to inspect
+the areas outside both the words and product, especially the ends of the long axis. Moving text toward the
+product can reduce internal gaps while creating two bigger empty bands at the edges. Keep the current
+poster if the revision creates a large purposeless band, even when neighboring elements are closer.
+An enlarged margin can work if it visibly supports the photographed action, guides the eye or gives an
+important element emphasis. Explain that visible purpose when choosing a revision with more outer space.
 Use product_bounds alongside both ink maps. When the headline moves from above the product to below it or
 the reverse, explain what that move does to the entire reading path and the margin it leaves behind.
 Choose revision only when the affected parts now read together more clearly or the issue is visibly solved.
 If the request identifies several related problems, check each in both images. Keep the current poster if a
 requested relationship still looks broken or if the change solves one by worsening another.
 If the copy is readable in both, explain what happens to the advertised feature and title on the first glance.
-Return choice (original or revision) and a concrete Korean reason that describes what the images show."""
+Return choice (original, revision, or balanced when image three is an alternative) and a concrete Korean reason
+that describes what the images show."""
 
 CRITIQUE = """The first image is the previous finished ad, the second is the source product, and the rest are
 design references. Identify the most consequential visible weakness of the ad that changing the photograph
@@ -654,10 +661,9 @@ def check_text_overlap(foreground, layout, folder):
             raise ValueError(f"{name} 레이어가 실제 제품을 가립니다")
 
 
-def tighten_split_title(foreground, layout, folder):
-    lines = next((text["lines"] for text in layout["texts"]
-                  if text["role"] == "headline" and "lines" in text), ())
-    if len(lines) != 2 or any(line.get("depth") == "behind_subject" for line in lines):
+def tighten_aligned_stack(lines, foreground, layout, folder):
+    if (len(lines) != 2 or any(line.get("depth") == "behind_subject" for line in lines)
+            or lines[0]["y"] + lines[0]["h"] > lines[1]["y"]):
         return
     paths = [folder / line["file"] for line in lines]
     original = []
@@ -675,7 +681,7 @@ def tighten_split_title(foreground, layout, folder):
     desired = max(1, round(0.4 * min(first[3] - first[1], second[3] - second[1])))
     gap = lines[1]["y"] + second[1] - lines[0]["y"] - first[3]
     excess = max(0, gap - desired)
-    # Keep the emphasized lower line as close as possible to its planned position.
+    # Keep the lower line as close as possible to its planned position.
     down = min(excess, original[0].height - first[3])
     up = min(excess - down, second[1])
     if not (down or up):
@@ -689,6 +695,15 @@ def tighten_split_title(foreground, layout, folder):
     except ValueError:
         for path, layer in zip(paths, original, strict=True):
             layer.save(path)
+
+
+def tighten_text_groups(foreground, layout, folder, changed=None):
+    roles = {text["role"]: text for text in layout["texts"]}
+    if changed is None or "headline" in changed:
+        tighten_aligned_stack(roles["headline"].get("lines", ()), foreground, layout, folder)
+    if changed is None or {"product_name", "price"} <= changed.keys():
+        offer = tuple(sorted((roles["product_name"], roles["price"]), key=lambda text: text["y"]))
+        tighten_aligned_stack(offer, foreground, layout, folder)
 
 
 def rendered_text_bounds(layout, folder):
@@ -710,13 +725,34 @@ def rendered_text_bounds(layout, folder):
     return bounds_by_role
 
 
+def balanced_text_positions(original, revision, size, before, after):
+    axis, ends = (1, ("top", "bottom")) if size[1] >= size[0] else (0, ("left", "right"))
+    if any(after[edge] <= before[edge] for edge in ends):
+        return None
+    offsets = {role: round((original["boxes"][role][axis] - box[axis]) / 2)
+               for role, box in revision["boxes"].items()}
+
+    def shift(box, amount):
+        moved = box.copy()
+        moved[axis] += amount
+        return moved
+
+    styles = revision["styles"].copy()
+    headline = styles["headline"]
+    if "lines" in headline:
+        styles["headline"] = headline | {
+            "lines": [line | {"box": shift(line["box"], offsets["headline"])} for line in headline["lines"]]}
+    return revision | {"styles": styles,
+                       "boxes": {role: shift(box, offsets[role]) for role, box in revision["boxes"].items()}}
+
+
 def review_finished(ai, answer, layout, scene, foreground, folder, design_input, references, *,
                     assess_composition=False, keep_wrap=False):
     """완성 사진 위의 글자와 구도를 검사하고 사진을 유지한 채 배치를 고칩니다."""
     original_error = None
     try:
         check_text_overlap(foreground, layout, folder)
-        tighten_split_title(foreground, layout, folder)
+        tighten_text_groups(foreground, layout, folder)
     except ValueError as error:
         original_error = str(error)
     if original_error is None and not assess_composition:
@@ -734,11 +770,26 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
     task = FINAL_REVIEW
     needs_alternative = "composition_issue" in inputs
     if needs_alternative:
+        from .format_layout import outer_margins
+
+        inputs["original_outer_space"] = outer_margins(placement, inputs["rendered_text_bounds"].values())
         task += ("\nAddress composition_issue on the actual poster. Design the reading path as a whole: place the "
                  "headline by the photographic feature, then align and group the name and price so they do not "
                  "form an unrelated block. Blend an arbitrary seam that divides the reading path. If a panel "
                  "is appropriate, use its edge to align the elements. Give the headline enough scale for the phone feed. "
+                 "Check the whole canvas after moving type, including the larger outer margins a move can leave. "
                  "Return an actual alternative with at least one changed field. Both rendered posters will be compared later.")
+
+    def render_revision(plan, folder):
+        updated = design_layers(plan, design_input["copy"], size, design_input["fonts"], folder)
+        revised_scene = (scene if plan["edge"] == answer["edge"] else
+                         set_photo_edge(scene, foreground, artwork, size, plan["edge"]))
+        revised_scene.save(folder / artwork["file"])
+        Image.fromarray(foreground).save(folder / "foreground.png")
+        check_text_overlap(foreground, updated, folder)
+        tighten_text_groups(foreground, updated, folder)
+        return updated
+
     editable = ("boxes", "styles", "accent", "edge")
     for _ in range(2):
         review = ask_stage(ai, "ad_final_layout", task, inputs,
@@ -789,32 +840,51 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                 inputs["layout_error"] = f"{original_error}. {inputs['layout_error']}"
             continue
         with TemporaryDirectory(dir=folder) as staging:
-            candidate = Path(staging)
+            candidate = Path(staging) / "revision"
+            candidate.mkdir()
             try:
-                updated = design_layers(revised, design_input["copy"], size, design_input["fonts"], candidate)
-                revised_scene = (scene if revised["edge"] == answer["edge"] else
-                                 set_photo_edge(scene, foreground, artwork, size, revised["edge"]))
-                revised_scene.save(candidate / artwork["file"])
-                Image.fromarray(foreground).save(candidate / "foreground.png")
-                check_text_overlap(foreground, updated, candidate)
-                tighten_split_title(foreground, updated, candidate)
+                updated = render_revision(revised, candidate)
             except ValueError as error:
                 inputs = inputs | {"rejected_design" if needs_alternative else "design": revised,
                                    "layout_error": str(error)}
                 continue
             if needs_alternative and original_error is None:
-                comparison = ask_stage(ai, "ad_final_composition_compare", FINISHED_COMPOSITION_COMPARE, {
+                revision_ink = rendered_text_bounds(updated, candidate)
+                evidence = {
                     "composition_issue": inputs["composition_issue"], "copy": inputs["copy"],
                     "product_bounds": placement,
                     "original_ink": inputs["rendered_text_bounds"],
-                    "revision_ink": rendered_text_bounds(updated, candidate),
-                }, [to_float(first), to_float(compose(updated, candidate)), *references])
+                    "revision_ink": revision_ink,
+                    "original_outer_space": inputs["original_outer_space"],
+                    "revision_outer_space": outer_margins(placement, revision_ink.values()),
+                }
+                versions = {"revision": (revised, updated, candidate)}
+                pictures = [to_float(first), to_float(compose(updated, candidate))]
+                balanced = balanced_text_positions(answer, revised, size, evidence["original_outer_space"],
+                                                   evidence["revision_outer_space"])
+                if balanced is not None and balanced != revised:
+                    alternate = Path(staging) / "balanced"
+                    alternate.mkdir()
+                    try:
+                        balanced_layout = render_revision(balanced, alternate)
+                    except ValueError:
+                        pass
+                    else:
+                        balanced_ink = rendered_text_bounds(balanced_layout, alternate)
+                        evidence.update(balanced_ink=balanced_ink,
+                                        balanced_outer_space=outer_margins(placement, balanced_ink.values()))
+                        versions["balanced"] = (balanced, balanced_layout, alternate)
+                        pictures.append(to_float(compose(balanced_layout, alternate)))
+                comparison = ask_stage(ai, "ad_final_composition_compare", FINISHED_COMPOSITION_COMPARE, evidence,
+                                       [*pictures, *references])
                 reason = required_text(comparison, "reason", "완성 배치 비교")
-                if comparison.get("choice") not in ("original", "revision"):
-                    raise ValueError("어느 배치가 더 나은지 확인하지 못했습니다")
-                if comparison["choice"] == "original":
+                choice = comparison.get("choice")
+                if choice == "original":
                     inputs = inputs | {"rejected_design": revised, "layout_error": reason}
                     continue
+                if not isinstance(choice, str) or choice not in versions:
+                    raise ValueError("어느 배치가 더 나은지 확인하지 못했습니다")
+                revised, updated, candidate = versions[choice]
                 review["reason"] = reason
             first.save(folder / "before-typesetting.png")
             for path in candidate.iterdir():

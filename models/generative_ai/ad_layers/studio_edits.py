@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 from .creative_brief import TEXT_ROLES, ask_stage, required_text, validate_boxes
 from .layers import compose, load_layout, load_settings, save_layout, to_float
-from .scene_ad import check_text_overlap, layout_texts, pixel_box, review_finished, tighten_split_title
+from .scene_ad import check_text_overlap, layout_texts, pixel_box, review_finished, tighten_text_groups
 from .staging import padded_box, staged_evidence
 from .text_render import render_texts
 
@@ -189,8 +189,8 @@ def edit_version(source, output, action, arguments, generation, *, ai=None, refe
             raise ValueError("지원하지 않는 편집 작업입니다")
         foreground = foreground_mask(stage, layout)
         check_text_overlap(foreground, layout, stage)
-        if action == "edit_text" and "headline" in arguments["changes"]:
-            tighten_split_title(foreground, layout, stage)
+        if action == "edit_text":
+            tighten_text_groups(foreground, layout, stage, arguments["changes"])
         if action != "edit_composition":
             (stage / "before-typesetting.png").unlink(missing_ok=True)
         compose(layout, stage).save(stage / "ad.png")

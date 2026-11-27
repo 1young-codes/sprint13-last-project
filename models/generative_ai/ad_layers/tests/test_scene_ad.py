@@ -433,7 +433,7 @@ def test_split_title_closes_the_visible_gap_without_covering_the_product(tmp_pat
     foreground = np.zeros((100, 100), bool)
     foreground[25, 20] = blocked
     before = scene_ad.rendered_text_bounds(layout, tmp_path)
-    scene_ad.tighten_split_title(foreground, layout, tmp_path)
+    scene_ad.tighten_aligned_stack(lines, foreground, layout, tmp_path)
     after = scene_ad.rendered_text_bounds(layout, tmp_path)
     if blocked:
         assert after == before
@@ -441,8 +441,21 @@ def test_split_title_closes_the_visible_gap_without_covering_the_product(tmp_pat
         assert after["headline_line_2"][1] - after["headline_line_1"][3] == 3
         assert after["headline_line_1"][3] - after["headline_line_1"][1] == 7
         assert after["headline_line_2"][3] - after["headline_line_2"][1] == 13
-        scene_ad.tighten_split_title(foreground, layout, tmp_path)
+        scene_ad.tighten_aligned_stack(lines, foreground, layout, tmp_path)
         assert scene_ad.rendered_text_bounds(layout, tmp_path) == after
+
+
+def test_balanced_composition_keeps_line_edits_and_moderates_motion_toward_center():
+    original = {"boxes": {"headline": [8, 10, 80, 16], "price": [8, 82, 20, 5]}}
+    revised = {"boxes": {"headline": [8, 20, 80, 16], "price": [8, 74, 20, 5]},
+               "styles": {"headline": {"lines": [{"box": [8, 20, 80, 6], "size": 8},
+                                                 {"box": [8, 28, 80, 8], "size": 11}]}}}
+    before, after = {"top": 10, "bottom": 13}, {"top": 20, "bottom": 21}
+    blended = scene_ad.balanced_text_positions(original, revised, (100, 180), before, after)
+    assert blended["boxes"] == {"headline": [8, 15, 80, 16], "price": [8, 78, 20, 5]}
+    assert blended["styles"]["headline"]["lines"] == [{"box": [8, 15, 80, 6], "size": 8},
+                                                       {"box": [8, 23, 80, 8], "size": 11}]
+    assert scene_ad.balanced_text_positions(original, revised, (100, 180), before, after | {"bottom": 12}) is None
 
 
 def test_blended_photo_edges_keep_product_pixels_opaque():

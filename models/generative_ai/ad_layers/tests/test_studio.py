@@ -315,6 +315,8 @@ def test_composition_edit_softens_the_edge_without_repainting(tmp_path, draft):
                 return CAMPAIGN_READY
             if step == "ad_final_composition_compare":
                 assert data["original_ink"]["headline"][0] == 10 and data["revision_ink"]["headline"][0] == 27
+                assert data["original_outer_space"] == data["revision_outer_space"] == {
+                    "top": 10, "bottom": 20, "left": 10, "right": 15}
                 assert images[0][10, 10].tolist() != images[1][10, 10].tolist()
                 return '{"choice":"revision","reason":"사진 경계를 지나 제목과 제품이 이어집니다"}'
             if step == "ad_final_layout":
