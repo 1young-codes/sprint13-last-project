@@ -406,8 +406,8 @@ def test_designed_line_break_reaches_html_renderer():
 def test_split_headline_keeps_copy_and_checks_each_visible_line(tmp_path):
     boxes = {"headline": [0, 0, 90, 52], "product_name": [0, 60, 50, 15], "price": [0, 80, 50, 15]}
     style = {"font": "noto_sans_kr", "align": "left", "color": "#ffffff", "size": 10, "max_lines": 1}
-    lines = [{"box": [10, 10, 60, 12], "size": 6, "text": "따뜻한 빛으로"},
-             {"box": [25, 35, 60, 12], "color": "#ffa040"}]
+    lines = [{"box": [10, 10, 60, 12], "size": 6, "text": "따뜻한 빛으로", "break_after": 2},
+             {"box": [25, 35, 60, 12], "color": "#ffa040", "break_after": 2}]
     headline = style | {"max_lines": 2, "break_after": 2, "lines": lines,
                         "emphasis": {"phrase": "빛으로 저녁을", "color": "#e04030"}}
     answer = {"boxes": boxes, "styles": {"headline": headline, "product_name": style, "price": style}}
@@ -440,6 +440,10 @@ def test_split_headline_keeps_copy_and_checks_each_visible_line(tmp_path):
     mask[35, 25] = True
     with pytest.raises(ValueError, match="headline_line_2"):
         scene_ad.check_text_overlap(mask, layout, tmp_path)
+    lines[1]["break_after"] = 1
+    with pytest.raises(ValueError, match="제목 전체의 줄바꿈과 다릅니다"):
+        scene_ad.layout_texts(answer, copy, (100, 100), ["noto_sans_kr"])
+    del lines[1]["break_after"]
     lines[0]["text"] = "다른 문구"
     with pytest.raises(ValueError, match="확정된 원문"):
         scene_ad.layout_texts(answer, copy, (100, 100), ["noto_sans_kr"])

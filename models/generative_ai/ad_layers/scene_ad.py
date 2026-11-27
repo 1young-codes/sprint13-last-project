@@ -68,8 +68,8 @@ depth when the type belongs in clear space. For the headline only, optional emph
 the photograph draws attention to the corresponding words. Keep sufficient contrast. Use null to omit it.
 For a deliberately two-line headline, optional styles.headline.lines contains two objects in reading order.
 Each has a non-overlapping box inside the headline's outer box, in whole poster percentages, and may override
-size, align, color, font or depth. For an override, depth can be only front or behind_subject. Use break_after
-to choose the exact words on each line. Set distinct positions
+size, align, color, font or depth. For an override, depth can be only front or behind_subject. Set break_after
+once on the parent headline to choose the exact words on each line. Set distinct positions
 or scales only when each clause has a visible role, such as a quiet lead-in and a short line near the subject.
 If a prior design failed, address the reported issue."""
 
@@ -262,16 +262,19 @@ def headline_lines(layer, parent_style, canvas_size, fonts):
     styles = parent_style["lines"]
     if (not isinstance(styles, list) or len(styles) != 2 or "break_after" not in layer
             or any(not isinstance(style, dict)
-                   or style.keys() - {"box", "size", "font", "align", "color", "depth", "text"}
+                   or style.keys() - {"box", "size", "font", "align", "color", "depth", "text", "break_after"}
                    for style in styles)):
         raise ValueError("나눠 배치할 제목에는 줄바꿈과 두 줄의 위치 및 스타일을 지정해야 합니다")
+    split = layer["break_after"]
+    if any(type(style.get("break_after", split)) is not int or style.get("break_after", split) != split
+           for style in styles):
+        raise ValueError("제목 줄에 반복된 줄바꿈 위치가 제목 전체의 줄바꿈과 다릅니다")
     boxes = {str(index): style.get("box") for index, style in enumerate(styles, 1)}
     validate_boxes(boxes, tuple(boxes))
     if boxes["1"][1] + boxes["1"][3] > boxes["2"][1]:
         raise ValueError("제목의 첫 줄은 둘째 줄보다 위에 있어야 합니다")
     text = layer["text"]
     words = list(re.finditer(r"\S+", text))
-    split = layer["break_after"]
     parts = [(0, words[split - 1].end()), (words[split].start(), len(text))]
     output = []
     for index, ((start, end), style) in enumerate(zip(parts, styles, strict=True), 1):
