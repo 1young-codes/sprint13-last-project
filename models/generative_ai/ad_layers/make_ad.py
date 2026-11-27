@@ -4,10 +4,9 @@
 2. 언어모델이 사장님 한 줄을 긴 장면 설명으로 풀기
 3. 생성 모델이 제품 없는 배경을 그리기                       → background.png
 4. 제품 마스크에서 바닥에 닿는 그림자를 만들기               → shadow.png
-5. 합친 그림 위에 생성 모델이 가짜 글자 초안을 그리고, 바뀐 자리에서 글자 줄 위치·크기·색을 읽음
-6. 언어모델이 글자 자리마다 역할과 문구 초안을 씀 (가격은 입력값 그대로)
-7. 고정 폰트로 글자 줄마다 그림                              → text_*.png
-8. 합치기                                                    → ad.png, layout.json
+5. 제목·부제·가격 배치에 맞춰 문구를 준비 (가격은 입력값 그대로)
+6. 고정 폰트로 글자 줄마다 그림                              → text_*.png
+7. 합치기                                                    → ad.png, layout.json
 
     python -m models.generative_ai.ad_layers.make_ad 사진.png --name "딸기 생크림 케이크" --unit "1조각" --price 6500 \
         --usage "오후 커피와 함께" --mood all --idea "햇살 드는 카페 테이블"
@@ -21,8 +20,8 @@ from pathlib import Path
 from PIL import Image
 
 from .copywriter import scene_description, write_copy
-from .layers import (PROJECT_ROOT, compose, contact_shadow, find_text_boxes, load_layout, load_settings,
-                     place_product, product_canvas_mask, save_layout, template_boxes, to_float)
+from .layers import (PROJECT_ROOT, compose, contact_shadow, load_layout, load_settings, place_product,
+                     save_layout, template_boxes, to_float)
 from .text_render import render_texts
 
 
@@ -59,7 +58,6 @@ def make_ad(photo: Image.Image, fields: dict, mood_key: str, idea: str, models: 
     mask = product_mask(models["mask"], to_float(photo))
     product, x, y = place_product(photo, mask, size, settings["product"])
     product.save(folder / "product.png")
-    on_product = product_canvas_mask(product, x, y, size)
     start = Image.new("RGB", size, settings["canvas"]["background_color"])
     start.paste(product, (x, y), product)
     lap("product")
@@ -82,21 +80,7 @@ def make_ad(photo: Image.Image, fields: dict, mood_key: str, idea: str, models: 
     base.save(folder / "base.png")
     lap("shadow")
 
-    # 글자 자리나 크기가 부족하면 씨앗값을 바꿔 다시 그립니다.
-    rule = settings["text_boxes"]
-    base_pixels = to_float(base)
-    for attempt in range(rule["draft_tries"]):
-        draft = model.edit(base, generation["draft_prompt"].format(style=mood["style"]), seed + attempt,
-                           steps).resize(size)
-        draft_pixels = to_float(draft)
-        boxes = find_text_boxes(draft_pixels, base_pixels, on_product, rule)
-        if len(boxes) >= 2 and any(box["h"] >= rule["min_title_height"] * size[1] for box in boxes):
-            break
-    draft.save(folder / "draft.png")
-    layout["draft_tries"] = attempt + 1
-    lap("draft")
-
-    write_texts(folder, layout, ai, draft_pixels, base_pixels, boxes)
+    write_texts(folder, layout, ai, base)
     lap("text")
     layout["seconds"] = timings
     save_layout(layout, folder)
@@ -110,20 +94,15 @@ def save_shadow(folder: Path, product: Image.Image, view: str) -> dict:
     return {"file": "shadow.png", "dx": dx, "dy": dy}
 
 
-def write_texts(folder: Path, layout: dict, ai, draft, base, boxes: list[dict]) -> None:
-    """초안에서 읽은 자리에 문구를 쓰고, 제목과 가격이 들어가지 않으면 기본 배치로 바꿉니다."""
+def write_texts(folder: Path, layout: dict, ai, base: Image.Image) -> None:
+    """제목, 부제, 가격을 기본 배치에 맞춰 별도 글자 레이어로 그립니다."""
     settings = load_settings()
     mood = settings["moods"][layout["mood"]]
-    min_title = settings["text_boxes"]["min_title_height"] * layout["size"][1]
-    copy = write_copy(ai, draft, boxes, layout["fields"], mood) if len(boxes) >= 2 else []
-    roles = {line["role"] for box, line in zip(boxes, copy) if line["role"] != "title" or box["h"] >= min_title}
-    if {"title", "price"} <= roles:
-        layout["text_source"] = "draft"
-    else:
-        layout["text_source"] = "template"
-        boxes = template_boxes(base, settings["template"])
-        copy = write_copy(ai, base, boxes, layout["fields"], mood, template=True)
-    limits = settings["text_boxes"]["font_limits"]
+    layout["text_source"] = "template"
+    base_pixels = to_float(base)
+    boxes = template_boxes(base_pixels, settings["template"])
+    copy = write_copy(ai, base_pixels, boxes, layout["fields"], mood)
+    limits = settings["text_layout"]["font_limits"]
     layout["texts"] = [box | line | {"font": mood["fonts"][line["role"]], "file": f"text_{i}_{line['role']}.png",
                                      "max_font_size": round(limits[line["role"]] * layout["size"][1])}
                        for i, (box, line) in enumerate(zip(boxes, copy), start=1) if line["role"] != "skip"]
@@ -136,15 +115,14 @@ def write_texts(folder: Path, layout: dict, ai, draft, base, boxes: list[dict]) 
 
 
 def relayout(folder: Path, ai) -> None:
-    """저장된 배경과 초안으로 그림자와 글자를 다시 계산합니다."""
+    """저장된 배경과 제품 레이어로 그림자와 글자를 다시 계산합니다."""
     layout = load_layout(folder)
     product_info = layout["product"]
     with Image.open(folder / product_info["file"]) as product:
-        on_product = product_canvas_mask(product, product_info["x"], product_info["y"], tuple(layout["size"]))
         layout["shadow"] = save_shadow(folder, product, layout.get("view", "angled"))
-    draft, base = to_float(Image.open(folder / "draft.png")), to_float(Image.open(folder / "base.png"))
-    boxes = find_text_boxes(draft, base, on_product, load_settings()["text_boxes"])
-    write_texts(folder, layout, ai, draft, base, boxes)
+    base = compose(layout | {"texts": []}, folder)
+    base.save(folder / "base.png")
+    write_texts(folder, layout, ai, base)
     save_layout(layout, folder)
 
 

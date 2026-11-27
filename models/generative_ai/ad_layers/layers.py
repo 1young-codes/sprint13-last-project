@@ -1,4 +1,4 @@
-"""그래픽 카드 없이 도는 레이어 계산: 제품 놓기, 그림자 분리, 초안에서 글자 자리 찾기, 레이어 합치기.
+"""그래픽 카드 없이 도는 레이어 계산: 제품 놓기, 접지 그림자, 글자 배치, 레이어 합치기.
 
 레이어 정보(layout.json)는 아래 모양입니다. 위치는 화소, 파일은 같은 폴더의 투명 PNG입니다.
     {"size": [가로, 세로], "mood": "minimal",
@@ -16,7 +16,6 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageChops, ImageFilter
-from scipy import ndimage
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_DIR.parents[2]
@@ -50,13 +49,6 @@ def place_product(photo: Image.Image, mask: np.ndarray, size: tuple[int, int], r
     return product, x, y
 
 
-def product_canvas_mask(product: Image.Image, x: int, y: int, size: tuple[int, int]) -> np.ndarray:
-    """캔버스 크기의 제품 마스크 (0~1)."""
-    canvas = Image.new("L", size, 0)
-    canvas.paste(product.getchannel("A"), (x, y))
-    return np.asarray(canvas, np.float32) / 255
-
-
 def contact_shadow(product: Image.Image, overhead: bool) -> tuple[Image.Image, int, int]:
     """제품 마스크에서 바닥에 닿는 윤곽을 읽어 부드러운 그림자를 만듭니다."""
     width, height = product.size
@@ -84,61 +76,8 @@ def contact_shadow(product: Image.Image, overhead: bool) -> tuple[Image.Image, i
     return shadow.crop(box), offset + box[0], offset + box[1]
 
 
-def grown(solid: np.ndarray, distance: int) -> np.ndarray:
-    """solid를 distance 화소만큼 넓힙니다 (넓히기를 여러 번 반복하는 것보다 훨씬 빠름)."""
-    return ndimage.distance_transform_edt(~solid) <= distance if solid.any() else solid
-
-
-def blurred(values: np.ndarray, radius: int) -> np.ndarray:
-    from ..camera_angle_presets.fill_empty_area import box_blur
-
-    for _ in range(3):  # 상자 평균 세 번 ≈ 가우시안 흐림
-        values = box_blur(values, radius)
-    return values
-
-
-def find_text_boxes(draft: np.ndarray, base: np.ndarray, product_mask: np.ndarray, rule: dict) -> list[dict]:
-    """초안(base 위에 모델이 글자를 그린 그림)과 base의 차이로 글자 줄 자리와 색을 찾습니다. 큰 것부터 돌려줍니다."""
-    height, width = base.shape[:2]
-    # 생성 모델은 글자만 더하지 않고 그림 전체를 조금씩 다시 그립니다(색, 밝기, 나무 결).
-    # 넓게 번지는 차이는 흐려서 빼고, 글자처럼 좁고 선명한 차이만 남깁니다.
-    # 번지는 차이를 잴 때 글자처럼 크게 바뀐 화소는 빼고 잽니다. 넣으면 글자 둘레까지 차이가 번져 상자가 커집니다.
-    change = draft - base
-    calm = (np.abs(change).max(axis=2) <= rule["diff_threshold"]).astype(np.float32)
-    radius = max(1, round(rule["drift_blur"] * width / 3))
-    drift = blurred(change * calm[..., None], radius) / np.maximum(blurred(calm, radius), 1e-3)[..., None]
-    difference = np.abs(change - drift).max(axis=2)
-    keep_out = grown(product_mask > 0.1, max(1, round(rule["product_margin"] * width)))
-    changed = (difference > rule["diff_threshold"]) & ~keep_out
-    reach = np.ones((max(1, round(rule["merge_y"] * height)) * 2 + 1, max(1, round(rule["merge_x"] * width)) * 2 + 1), bool)
-    labels, _ = ndimage.label(ndimage.binary_dilation(changed, structure=reach))
-    boxes = []
-    for index, area in enumerate(ndimage.find_objects(labels), start=1):
-        inside = changed[area] & (labels[area] == index)
-        if inside.sum() < rule["min_area"] * width * height:
-            continue
-        rows, cols = inside.nonzero()
-        y0, x0 = area[0].start + rows.min(), area[1].start + cols.min()
-        y1, x1 = area[0].start + rows.max() + 1, area[1].start + cols.max() + 1
-        if (y1 - y0 < rule["min_height"] * height or x1 - x0 < rule["min_width"] * width
-                or keep_out[y0:y1, x0:x1].any()):
-            continue
-        if y1 - y0 > rule["max_height"] * height or (x1 - x0) * (y1 - y0) > rule["max_box_area"] * width * height:
-            continue  # 글자 한 줄로 보기엔 너무 큰 영역: 바닥 무늬나 물건이 통째로 바뀐 곳
-        edge = rule["border"] * width
-        if x0 < edge or y0 < edge or x1 > width - edge or y1 > height - edge:
-            continue  # 광고 글자는 캔버스 끝에 붙지 않습니다. 끝에 닿는 것은 대개 바닥 무늬나 빛이 바뀐 곳
-        # 글자 색: 바뀐 화소 중 가장 많이 바뀐 30%의 중앙값 (가장자리 흐림과 배경이 섞인 화소를 뺌)
-        strength = difference[area][inside]
-        colors = draft[area][inside][strength >= np.quantile(strength, 0.7)]
-        color = "#" + "".join(f"{round(v * 255):02x}" for v in np.median(colors, axis=0))
-        boxes.append({"x": int(x0), "y": int(y0), "w": int(x1 - x0), "h": int(y1 - y0), "color": color})
-    boxes.sort(key=lambda b: b["w"] * b["h"], reverse=True)
-    return sorted(boxes[:rule["max_boxes"]], key=lambda b: b["y"])  # 위에서 아래 순서 (언어모델이 읽는 순서)
-
-
 def template_boxes(base: np.ndarray, rule: list[dict]) -> list[dict]:
-    """생성 모델이 초안에 글자를 그리지 않았을 때 쓰는 기본 배치 틀. 글자 색은 그 자리 배경이 밝으면 검정, 어두우면 흰색."""
+    """기본 글자 배치에 배경 밝기에 맞는 색을 지정합니다."""
     height, width = base.shape[:2]
     boxes = []
     for slot in rule:

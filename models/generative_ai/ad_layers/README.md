@@ -17,14 +17,9 @@
 
 ## 한국어 글자를 깨지지 않게 하는 방법
 
-생성 모델이 그린 글자는 쓰지 않습니다.
-
-1. 배경, 그림자, 제품을 합친 그림 위에 생성 모델이 가짜 광고 글자를 그립니다(`draft.png`).
-2. 초안과 원래 그림이 달라진 곳을 묶어 글자 줄마다 위치, 크기, 색을 읽습니다. 너무 작거나 제품과 겹치는 상자는 버립니다.
-3. 언어모델이 줄마다 역할과 문구 초안을 정합니다. 제목이나 가격을 배치할 수 없으면 제품 위에 기본 배치 틀을 씁니다. 가격은 입력한 값을 그대로 표시합니다.
-4. 진짜 한글을 고정 폰트로 그 자리에 그립니다.
-
-배경은 처음부터 글자 없이 만들고 초안은 자리만 읽은 뒤 버리므로, 최종 결과에 생성 모델이 쓴 글자가 남지 않습니다.
+1. 제품 위 여백에 제목, 부제, 가격 자리를 두고 배경 밝기에 맞는 글자색을 고릅니다.
+2. 언어모델이 제목과 부제 초안을 씁니다. 가격은 입력한 값 그대로 표시합니다.
+3. 브라우저가 고정 한글 폰트로 줄마다 투명 레이어를 그립니다. `layout.json`의 문구나 위치를 고쳐 다시 합칠 수 있습니다.
 
 ## 분위기와 폰트
 
@@ -60,7 +55,7 @@ python -m models.generative_ai.ad_layers.make_ad 사진.png --name "딸기 생�
 python -m models.generative_ai.ad_layers.make_ad --recompose outputs/ad_layers/사진/minimal
 ```
 
-결과는 `outputs/ad_layers/<사진 이름>/<분위기>/`에 저장됩니다. `base.png`는 글자 없는 합성이고 `draft.png`는 가짜 글자 초안입니다. 단계별 걸린 시간은 `layout.json`의 `seconds`에 있습니다.
+결과는 `outputs/ad_layers/<사진 이름>/<분위기>/`에 저장됩니다. `base.png`는 글자를 얹기 전 합성입니다. 단계별 걸린 시간은 `layout.json`의 `seconds`에 있습니다.
 
 ## 아직 하지 않은 것
 
@@ -74,4 +69,4 @@ python -m models.generative_ai.ad_layers.make_ad --recompose outputs/ad_layers/�
 python -m pytest models/generative_ai/ad_layers/tests
 ```
 
-그래픽 카드 없이 제품 놓기, 그림자 분리, 글자 자리 찾기, 문구 다듬기, 합치기를 확인합니다.
+그래픽 카드 없이 제품 놓기, 접지 그림자, 글자 배치, 문구 다듬기, 합치기를 확인합니다.
