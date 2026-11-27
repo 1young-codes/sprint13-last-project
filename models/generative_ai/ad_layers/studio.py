@@ -13,6 +13,7 @@ from .art_direction import THEMES
 from .creative_brief import ask_stage, required_text
 from .layers import load_layout, load_settings, save_layout, to_float
 from .scene_ad import make_scene_ad, rendered_text_bounds
+from .staging import staged_evidence
 from .studio_edits import edit_version, foreground_mask
 from .studio_formats import FORMATS, adapt_format, fill_margin
 from .studio_guides import START_GUIDES, find_actions
@@ -208,18 +209,12 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         pre_shoot = selected / "composition.png"
         study = [to_float(read_image(pre_shoot))] if pre_shoot.is_file() else []
         revision = candidate.get("revision", {})
-        if (box := revision.get("staged_piece_box")) is not None:
-            if (not isinstance(box, list) or len(box) != 4 or any(type(value) is not int for value in box)
-                    or not (0 <= box[0] < box[2] <= scene.width and 0 <= box[1] < box[3] <= scene.height)):
-                raise ValueError("옮긴 상품을 확대할 영역을 확인하지 못했습니다")
-            x0, y0, x1, y1 = box
-            margin = max(x1 - x0, y1 - y0) // 4
-            detail = scene.crop((max(0, x0 - margin), max(0, y0 - margin),
-                                 min(scene.width, x1 + margin), min(scene.height, y1 + margin)))
+        if revision.get("staged_piece_box") is not None:
+            original, bounds = staged_evidence(selected, candidate, scene)
             identity = ask_stage(ai, "studio_staged_identity", STAGED_IDENTITY, {
                 "product_detail": candidate.get("art_direction_plan", {}).get("evidence"),
                 "staging_intent": revision.get("staging_intent"),
-            }, [to_float(read_image(selected / "staged-piece.png")), to_float(detail), to_float(scene)])
+            }, [to_float(original), to_float(scene.crop(bounds)), to_float(scene)])
             match = identity.get("match")
             if type(match) is not bool:
                 raise ValueError("옮긴 상품의 원본 대조 결과를 확인하지 못했습니다")
@@ -300,8 +295,10 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         observation = required_text(review, "observation", "시안 검토")
         if finding == "ready":
             finding, observation = assess_campaign(visible, posters[order.index(visible)], required_copy)
-        if (pending and visible == current and finding == "scene"
-                and attempts[-1]["action"] in ("revise_scene", "change_viewpoint", "rebuild_campaign")):
+        scene_retry = pending and finding == "scene" and attempts[-1]["action"] in (
+            "revise_scene", "change_viewpoint", "rebuild_campaign")
+        detail_retry = pending and finding == "product" and attempts[-1]["action"] == "repair_staged_detail"
+        if visible == current and (scene_retry or detail_retry):
             alternative_finding, alternative_observation = assess_campaign(pending, posters[-1], required_copy)
             if alternative_finding in ("ready", "layout"):
                 visible, finding, observation = pending, alternative_finding, alternative_observation
@@ -326,6 +323,8 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
                     available.add("edit_region")
             if generation is not None:
                 available.update(("revise_scene", "rebuild_campaign"))
+                if (base / "staged-piece.png").is_file() and layout.get("revision", {}).get("staged_piece_box"):
+                    available.add("repair_staged_detail")
                 if camera_viewpoints:
                     available.add("change_viewpoint")
         guides = find_actions(finding, available)

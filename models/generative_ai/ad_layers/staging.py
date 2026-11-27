@@ -42,6 +42,22 @@ def source_parts(mask):
     return np.where(np.isin(labels, visible), labels, 0)
 
 
+def padded_box(box, margin, size):
+    x0, y0, x1, y1 = box
+    return max(0, x0 - margin), max(0, y0 - margin), min(size[0], x1 + margin), min(size[1], y1 + margin)
+
+
+def staged_evidence(folder, layout, scene):
+    box = layout.get("revision", {}).get("staged_piece_box")
+    if (not isinstance(box, list) or len(box) != 4 or any(type(value) is not int for value in box)
+            or not (0 <= box[0] < box[2] <= scene.width and 0 <= box[1] < box[3] <= scene.height)):
+        raise ValueError("옮긴 상품을 확대할 영역을 확인하지 못했습니다")
+    with Image.open(folder / "staged-piece.png") as image:
+        original = image.convert("RGB")
+    margin = max(box[2] - box[0], box[3] - box[1]) // 4
+    return original, padded_box(box, margin, scene.size)
+
+
 def on_gray(subject):
     guide = Image.new("RGB", subject.size, "#808080")
     guide.paste(subject, mask=subject.getchannel("A"))

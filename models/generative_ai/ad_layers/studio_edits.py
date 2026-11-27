@@ -7,9 +7,10 @@ from tempfile import TemporaryDirectory
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
-from .creative_brief import TEXT_ROLES, required_text, validate_boxes
-from .layers import compose, load_layout, load_settings, save_layout
+from .creative_brief import TEXT_ROLES, ask_stage, required_text, validate_boxes
+from .layers import compose, load_layout, load_settings, save_layout, to_float
 from .scene_ad import check_text_overlap, layout_texts, pixel_box, review_finished
+from .staging import padded_box, staged_evidence
 from .text_render import render_texts
 
 
@@ -77,15 +78,82 @@ def change_region(stage, layout, arguments, generation):
               f"{instruction} Match the original lighting, texture, camera, and framing. Add no lettering.")
     candidate = model.edit(scene.convert("RGB"), prompt, settings["seed"], settings["steps"], size=scene.size)
     candidate = ImageOps.fit(candidate.convert("RGBA"), scene.size, Image.Resampling.LANCZOS)
-    margin = min(width, height) // 12
-    blend = Image.new("L", (width, height))
-    ImageDraw.Draw(blend).rectangle((margin, margin, width - margin - 1, height - margin - 1), fill=255)
+    paste_region(scene, candidate.crop(bounds), bounds)
+    scene.save(path)
+
+
+def paste_region(scene, patch, bounds):
+    margin = min(patch.size) // 12
+    blend = Image.new("L", patch.size)
+    ImageDraw.Draw(blend).rectangle((margin, margin, patch.width - margin - 1, patch.height - margin - 1), fill=255)
     if margin:
         blend = blend.filter(ImageFilter.GaussianBlur(margin / 2))
     # 사진 외곽을 합성할 때 쓰는 기존 투명도는 유지합니다.
     alpha = scene.getchannel("A")
-    scene.paste(candidate.crop(bounds), (x, y), blend)
+    scene.paste(patch, bounds[:2], blend)
     scene.putalpha(alpha)
+
+
+REPAIR_DETAIL = """Plan one local photo retouch. Image one is the real item. Image two shows the photographed
+area around the same item. Image three shows the whole new scene. Identify the tiny visible detail described
+by the editor, as it exists in the original, and where it belongs in image two. The target box must cover both
+the old defect and the expected footprint and contact of the restored part. Include any connected effect that
+needs to follow the new part, and leave edge room for blending. Keep unrelated contours and shadows. Return
+one JSON object with source_box, target_box, and instruction. Both boxes are JSON arrays of exactly four
+integers [left, top, width, height] in 0–100 percentages, relative to image one and image two respectively.
+Instruction describes the correct construction, its placement, and how it appears in the current action and
+lighting, in English. Set target_box to null if this needs more than a local retouch."""
+
+
+def repair_staged_detail(stage, layout, arguments, generation, ai):
+    issue = required_text(arguments, "instruction", "상품 일부 복원")
+    path = stage / layout["artwork"]["file"]
+    with Image.open(path) as image:
+        scene = image.convert("RGBA")
+    original, visible = staged_evidence(stage, layout, scene)
+    detail = scene.crop(visible)
+    data = {"issue": issue}
+    images = list(map(to_float, (original, detail, scene)))
+    for _ in range(2):
+        plan = ask_stage(ai, "studio_repair_detail", REPAIR_DETAIL, data, images)
+        if "target_box" in plan and plan["target_box"] is None:
+            raise ValueError("상품의 이 차이는 사진 일부만 고쳐 해결할 수 없습니다")
+        try:
+            for role in ("source_box", "target_box"):
+                validate_boxes({role: plan.get(role)}, (role,))
+            instruction = required_text(plan, "instruction", "상품 일부 복원")
+            break
+        except ValueError as error:
+            data.update(previous_plan=plan, correction=str(error))
+    else:
+        raise ValueError(data["correction"])
+    sx, sy, sw, sh = pixel_box(plan["source_box"], original.size)
+    tx, ty, w, h = pixel_box(plan["target_box"], detail.size)
+    if min(sw, sh, w, h) == 0:
+        raise ValueError("원본에서 확인되는 작은 상품 영역만 복원할 수 있습니다")
+    x, y = visible[0] + tx, visible[1] + ty
+    piece = layout["revision"]["staged_piece_box"]
+    short_side = min(piece[2] - piece[0], piece[3] - piece[1])
+    x, y, x1, y1 = padded_box((x, y, x + w, y + h), max(2, short_side // 18), scene.size)
+    target = (x, y, x1, y1)
+    if (x1 - x) * (y1 - y) > detail.width * detail.height // 3:
+        raise ValueError("원본에서 확인되는 작은 상품 영역만 복원할 수 있습니다")
+    left, top, right, bottom = padded_box(target, max(w, h, short_side // 2), scene.size)
+    window = (left, top, right, bottom)
+    context = ImageOps.contain(scene.crop(window).convert("RGB"), (576, 576))
+    source_window = padded_box((sx, sy, sx + sw, sy + sh), min(original.size) // 3, original.size)
+    reference = ImageOps.contain(original.crop(source_window), (320, 320))
+    model = generation()["generation"]
+    model.use_lora(None, 0)
+    settings = load_settings()["generation"]
+    region = tuple(round(100 * edge / length) for edge, length in zip(
+        (x - left, y - top, x1 - left, y1 - top), (right - left, bottom - top) * 2, strict=True))
+    prompt = ("The first image contains the authentic working detail. Retouch only the target region of the second "
+              f"image at percentages {region} (left, top, right, bottom). {instruction} "
+              "Preserve its angle, framing, surroundings and lighting. Add no lettering.")
+    candidate = model.edit_with_reference(reference, context, prompt, settings["seed"], settings["steps"])
+    patch = candidate.convert("RGBA").resize((right - left, bottom - top), Image.Resampling.LANCZOS)
+    paste_region(scene, patch.crop((x - left, y - top, x1 - left, y1 - top)), target)
     scene.save(path)
 
 
@@ -113,6 +181,8 @@ def edit_version(source, output, action, arguments, generation, *, ai=None, refe
             change_composition(stage, layout, arguments, ai, references)
         elif action == "edit_region":
             change_region(stage, layout, arguments, generation)
+        elif action == "repair_staged_detail" and ai is not None:
+            repair_staged_detail(stage, layout, arguments, generation, ai)
         else:
             raise ValueError("지원하지 않는 편집 작업입니다")
         check_text_overlap(foreground_mask(stage, layout), layout, stage)

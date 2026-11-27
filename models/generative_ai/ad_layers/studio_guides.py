@@ -38,6 +38,13 @@ ACTION_GUIDES = {
         "arguments": {"box": "[left,top,width,height] in whole poster percent, inside the photo",
                       "instruction": "Name the unwanted detail and the scenery that should fill its place."},
     },
+    "repair_staged_detail": {
+        "findings": ("product",),
+        "guide": "Repair one incorrect visible working part or mark on the moved item while keeping the rest of "
+                 "the photo. Use the actual isolated item as the source. Choose a scene revision for a wrong pose "
+                 "or a product that needs rebuilding over a large area.",
+        "arguments": {"instruction": "Name the specific visible mismatch and the original detail to recover."},
+    },
     "revise_scene": {
         "findings": ("scene", "product", "layout", "distraction"),
         "guide": "Rebuild the scene if the pose, product, light, or space for type fails across a large area. "

@@ -102,6 +102,44 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft):
         assert poster.size == (600, 600)
 
 
+def test_detail_repair_keeps_photo_pixels_and_lettering_outside_the_box(tmp_path, draft):
+    folder, _ = draft
+    layout = load_layout(folder)
+    layout["revision"] = {"staged_piece_box": [60, 40, 90, 70]}
+    save_layout(layout, folder)
+    Image.new("RGB", (60, 70), "orange").save(folder / "staged-piece.png")
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            assert step == "studio_repair_detail" and images[1].shape == (44, 44, 3)
+            if "previous_plan" not in request:
+                return '{"target_box":{"left":30,"top":30,"width":40,"height":40}}'
+            return ('{"source_box":[20,20,50,50],"target_box":[30,30,40,40],'
+                    '"instruction":"Restore the original broad rectangular upper part."}')
+
+    class Model:
+        def use_lora(self, weights, strength):
+            assert weights is None and strength == 0
+
+        def edit_with_reference(self, original, current, prompt, seed, steps):
+            assert original.getpixel((0, 0)) == (255, 165, 0) and current.getpixel((0, 0)) == (0, 0, 255)
+            assert "broad rectangular" in prompt
+            return Image.new("RGB", current.size, "green")
+
+    revised = tmp_path / "repaired"
+    studio_edits.edit_version(folder, revised, "repair_staged_detail", {"instruction": "원래 부품 복원"},
+                              lambda: {"generation": Model()}, ai=Agent())
+    with Image.open(revised / "scene.png") as image:
+        assert image.getbbox() == (0, 0, 100, 100)
+        assert image.getpixel((74, 54)) == (0, 128, 0, 255)
+        with Image.open(folder / "scene.png") as original:
+            reverted = image.copy()
+            target = (64, 44, 86, 66)
+            reverted.paste(original.crop(target), target[:2])
+            assert reverted.tobytes() == original.convert("RGBA").tobytes()
+    assert (revised / "text_price.png").read_bytes() == (folder / "text_price.png").read_bytes()
+
+
 def test_composition_edit_softens_the_edge_without_repainting(tmp_path, draft):
     folder, fields = draft
     layout = load_layout(folder)
