@@ -292,7 +292,7 @@ def preview_artwork(photo, artwork, canvas_size, design):
 
 
 def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview=False, proposal=None, previous=None,
-                  rejected=None):
+                  rejected=None, feedback=None):
 
     if folder.exists():
         raise FileExistsError(folder)
@@ -321,7 +321,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         previous_design = prior.get("design", {})
         inputs = {"brief": brief, "copy": copy, "previous_concept": previous_design.get("concept", brief["message"])}
         inputs["previous_art_direction"] = previous_design.get("art_direction", prior.get("scene_prompt"))
-        inputs["previous_visual_review"] = prior.get("revision", {}).get("visual_review")
+        inputs["previous_visual_review"] = feedback or prior.get("revision", {}).get("visual_review")
         critique_prompt, critique_images = CRITIQUE, [prior_image, *images]
         if rejected:
             discarded = load_layout(rejected)
@@ -396,6 +396,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             scene.save(result / artwork["file"])
             answer, layout, final_review_reason = review_finished(ai, answer, layout, scene, foreground, result,
                                                                   design_input, images[1:])
+            Image.fromarray(foreground).save(result / "foreground.png")
         layout.update(fields=fields, brief=brief, design=answer, scene_prompt=prompt, preview=preview,
                       final_review_reason=final_review_reason)
         if preview:

@@ -89,9 +89,21 @@ python -m models.generative_ai.ad_layers.scene_ad photos/items.json photos outpu
 
 도커로 실행할 때는 `docker build --target ad-layers -t sprint13-ad-layers .`로 브라우저까지 설치한 이미지를 만듭니다. 컨테이너에 `--gpus all`을 주고, SSD의 캐시를 `/data/models/hf_cache`에 연결해 같은 가중치를 사용합니다.
 
+## 시안을 보고 다음 작업 고르기
+
+`studio`는 [마케팅 스튜디오에서 조사한 흐름](marketing_studio_workflow.md)을 로컬 광고 도구로 연결합니다. 상품 정보와 사진을 받아 시안을 만들거나 기존 시안을 엽니다. `gpt-6-luna`가 시안의 사진과 글자를 보고 관찰 내용을 작성합니다. 문제와 사용 가능한 작업으로 가이드를 찾은 뒤, 글자 편집, 사진 영역 편집, 장면 재생성 중 필요한 동작을 실행합니다. 전후를 나란히 보고 다음 작업의 기준으로 쓸 버전을 고릅니다.
+
+```bash
+python -m models.generative_ai.ad_layers.studio 사진.png 상품.json outputs/studio \
+    --references 참고.png --formats 4:5 9:16 16:9 thumbnail --low-vram
+```
+
+`상품.json`은 개별 상품의 `fields` 형식입니다. 제목을 확정했으면 `headline`에 넣습니다. 가격과 확정 문구는 편집 중에도 고정합니다. 기존 시안에서 글자만 고칠 때는 `--draft`와 `--typography-only`를 사용합니다. 이전에 피사체 마스크를 별도로 저장했다면 `--foreground`로 함께 전달합니다.
+
+`events.jsonl`과 표준 출력에 시안, 관찰, 찾은 가이드, 실행한 작업을 함께 기록합니다. 후보는 `versions/`, 채택한 포스터는 `final/`에 있습니다. 요청한 추가 규격은 채택 후 `formats/`에 저장합니다. 제품이 잘리지 않는 범위에서 사진을 자르고, 제품을 다 담기 어려운 비율은 바탕을 확장합니다. 각 규격에 맞춰 글자 위치를 다시 정합니다. 썸네일 크기는 600×600입니다.
+
 ## 아직 하지 않은 것
 
-- 다른 크기(4:5, 9:16, 쇼핑몰 썸네일, 16:9)로 바꾸기. 지금은 정사각형 1024×1024 한 가지입니다.
 - 서버와 화면 연결.
 
 ## 참고 사진으로 광고 한 장을 통째로 생성해 비교하기

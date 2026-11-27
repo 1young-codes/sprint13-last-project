@@ -93,10 +93,13 @@ def plan_copy(ai, photo, fields, idea):
     direction = ask_stage(ai, "ad_direction", DIRECTION, inputs | {"idea": idea, "plan": plan}, photo_inputs)
     scene = required_text(direction, "scene", "연출")
 
-    writing = ask_stage(ai, "ad_headline", COPY, inputs | {"plan": plan, "scene": scene})
-    headline = " ".join(required_text(writing, "headline", "문구").split())
-    if len(headline) > MAX_HEADLINE_LENGTH:
-        raise ValueError(f"문구 단계에서 제목이 {MAX_HEADLINE_LENGTH}자를 넘겼습니다")
+    if "headline" in fields:
+        headline = required_text(fields, "headline", "확정 문구")
+    else:
+        writing = ask_stage(ai, "ad_headline", COPY, inputs | {"plan": plan, "scene": scene})
+        headline = " ".join(required_text(writing, "headline", "문구").split())
+        if len(headline) > MAX_HEADLINE_LENGTH:
+            raise ValueError(f"문구 단계에서 제목이 {MAX_HEADLINE_LENGTH}자를 넘겼습니다")
     return plan | {"scene": scene, "headline": headline}
 
 def brainstorm(ai, photo, fields, idea, price):
