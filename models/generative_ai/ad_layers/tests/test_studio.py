@@ -119,6 +119,27 @@ def test_reference_comparison_can_block_selection(tmp_path, draft):
     result = studio.run_studio(Image.new("RGB", (100, 100)), fields, "", output, Agent(), draft=folder,
                                references=[Image.new("RGB", (100, 100), "red")], edit_limit=0)
     assert result["status"] == "needs_review" and not (output / "final").exists()
+    held = result["image"].parent
+    assert load_layout(held)["pending_review"]["finding"] == "scene"
+
+    class Resume(Agent):
+        def ask(self, step, images, request, *, model):
+            assert step == "studio_action"
+            assert "원본 촛불과 다른 연출이 보이지 않습니다" in request
+            return super().ask(step, images, request, model=model)
+
+    resumed = studio.run_studio(Image.new("RGB", (100, 100)), fields, "", tmp_path / "resumed", Resume(),
+                                draft=held, edit_limit=0)
+    assert resumed["status"] == "needs_review" and not (tmp_path / "resumed/final").exists()
+
+    with Image.open(held / "ad.png") as poster:
+        changed = poster.copy()
+    changed.putpixel((0, 0), (255, 0, 0))
+    changed.save(held / "ad.png")
+    fresh = tmp_path / "fresh-review"
+    studio.run_studio(Image.new("RGB", (100, 100)), fields, "", fresh, Agent(), draft=held,
+                      references=[Image.new("RGB", (100, 100), "red")], edit_limit=0)
+    assert "resume_review" not in (fresh / "events.jsonl").read_text(encoding="utf-8")
 
 
 def test_region_edit_locks_product_and_rest_of_photo(tmp_path, draft):

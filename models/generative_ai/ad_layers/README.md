@@ -103,6 +103,8 @@ python -m models.generative_ai.ad_layers.scene_ad photos/items.json photos outpu
 
 참고 포스터가 있으면 채택 직전에 원본 상품 사진, 생성한 사진, 광고를 함께 대조합니다. 참고작에서 메시지를 전달하는 표현을 찾아 후보에도 상품의 특징을 더 잘 드러내는 촬영이나 배치가 보이는지 확인합니다. 비교 결과는 `events.jsonl`에 `campaign_check`로 남습니다.
 
+보류된 시안을 `--draft`로 다시 열면, 포스터 이미지가 그대로일 때 앞서 확인한 문제부터 수정합니다. 이미지가 달라졌으면 새로 검토합니다.
+
 ```bash
 python -m models.generative_ai.ad_layers.studio 사진.png 상품.json outputs/studio \
     --references 참고.png --formats 4:5 9:16 16:9 thumbnail --low-vram

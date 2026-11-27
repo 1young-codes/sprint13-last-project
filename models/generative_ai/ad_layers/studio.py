@@ -2,6 +2,7 @@
 
 import argparse
 from functools import cache
+from hashlib import sha256
 import json
 from pathlib import Path
 import shutil
@@ -10,7 +11,7 @@ from PIL import Image, ImageOps
 
 from .art_direction import THEMES
 from .creative_brief import ask_stage, required_text
-from .layers import load_layout, load_settings, to_float
+from .layers import load_layout, load_settings, save_layout, to_float
 from .scene_ad import make_scene_ad
 from .studio_edits import edit_version, foreground_mask
 from .studio_formats import FORMATS, adapt_format, fill_margin
@@ -99,6 +100,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
     if set(formats) - FORMATS.keys():
         raise ValueError("지원하지 않는 게시 규격입니다")
     source_version = None
+    pending_review = None
     if draft is not None:
         source_version = load_layout(draft)
         if source_version.get("preview") or source_version.get("fields") != fields:
@@ -109,6 +111,12 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
             expected["headline"] = required_text(fields, "headline", "확정 문구")
         if any(actual.get(role) != text for role, text in expected.items()):
             raise ValueError("시안의 상품명, 가격 또는 확정 문구가 입력과 다릅니다")
+        saved_review = source_version.get("pending_review")
+        if (isinstance(saved_review, dict) and isinstance(saved_review.get("finding"), str)
+                and saved_review["finding"] in FINDINGS and saved_review["finding"] != "ready"
+                and isinstance(saved_review.get("observation"), str) and saved_review["observation"].strip()
+                and saved_review.get("image_hash") == sha256((draft / "ad.png").read_bytes()).hexdigest()):
+            pending_review = saved_review
     output.mkdir(parents=True, exist_ok=False)
     versions = output / "versions"
     versions.mkdir()
@@ -160,9 +168,13 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
             direction = version.get("art_direction_plan")
             if direction and direction.get("theme") in THEMES:
                 directions[name] = direction | {"review_guide": THEMES[direction["theme"]]["review"]}
-        review = ask_stage(ai, "studio_look", LOOK, {"product_facts": fields, "required_copy": required_copy,
-                                                   "idea": idea, "version_order": order, "art_directions": directions},
-                           [to_float(photo), *pictures.values(), to_float(phone_preview(posters)), *sources])
+        if turn == 0 and pending_review:
+            review = pending_review | {"version": current}
+            record("resume_review", version=current, finding=review["finding"], observation=review["observation"])
+        else:
+            review = ask_stage(ai, "studio_look", LOOK, {"product_facts": fields, "required_copy": required_copy,
+                                                       "idea": idea, "version_order": order, "art_directions": directions},
+                               [to_float(photo), *pictures.values(), to_float(phone_preview(posters)), *sources])
         visible = review.get("version")
         finding = review.get("finding")
         if visible not in order or not isinstance(finding, str) or finding not in FINDINGS:
@@ -215,6 +227,8 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         if action == "select":
             final = output / "final"
             shutil.copytree(base, final)
+            if "pending_review" in layout:
+                save_layout({key: value for key, value in layout.items() if key != "pending_review"}, final)
             record("selected", version=current, image="final/ad.png", observation=observation)
             variants = {}
             for name in dict.fromkeys(formats):
@@ -254,6 +268,11 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         record("poster", version=new_id, parent=current, image=(revised / "ad.png").relative_to(output).as_posix())
 
     image = versions / current / "ad.png"
+    if finding != "ready":
+        saved = load_layout(image.parent)
+        saved["pending_review"] = {"finding": finding, "observation": observation,
+                                   "image_hash": sha256(image.read_bytes()).hexdigest()}
+        save_layout(saved, image.parent)
     record("needs_review", version=current, image=image.relative_to(output).as_posix(), observation=observation)
     return {"status": "needs_review", "version": current, "image": image}
 
