@@ -748,6 +748,28 @@ def test_format_options_use_measured_sizes_and_keep_clear_of_the_product(monkeyp
             assert not mask[y:y+h, x:x+w].any()
 
 
+def test_requested_format_repair_can_use_custom_layout_when_measured_options_exist(tmp_path, draft, monkeypatch):
+    folder, _ = draft
+    monkeypatch.setattr(studio_formats, "format_measurements", lambda *_: None)
+    monkeypatch.setattr(studio_formats, "position_options", lambda *_: {"measured": {}})
+    intent = "제목을 상품 옆의 여백으로 옮겨 주세요"
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            data = json.loads(request.split("Input JSON follows:\n", 1)[1])
+            if step == "studio_reframe":
+                assert data["intent"] == intent and "measured" in data["placement_options"]
+                revised = data["approved_design"]
+                revised["boxes"]["headline"] = [10, 20, 45, 10]
+                return json.dumps(revised)
+            assert step == "studio_format_reading"
+            return '{"finding":"ready","headline_touches_product":false,"observation":"상품 옆에 제목이 보입니다"}'
+
+    output = tmp_path / "reframed"
+    studio_formats.adapt_format(folder, output, "thumbnail", Agent(), intent=intent)
+    assert load_layout(output)["design"]["boxes"]["headline"] == [10, 20, 45, 10]
+
+
 def test_format_price_stays_secondary_except_when_the_price_is_the_focus(monkeypatch):
     styles = {"headline": {"size": 5, "lines": [{"size": 4}, {"size": 8}]},
               "product_name": {"size": 6}, "price": {"size": 7, "font": "noto_sans_kr_black"}}

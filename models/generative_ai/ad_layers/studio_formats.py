@@ -74,7 +74,10 @@ In a same-size repair, preserve the approved type's reading order and legibility
 centered, start by looking for a shared axis around it. Move the offer to a separate corner only when a visible
 line, action or contrast connects it to the reading path. Keep the offer comfortably readable at phone size.
 placement_options holds exact boxes checked against the product mask using the approved text sizes. If one
-is available, start by choosing its key as placement. You may also return colors as a map from a text role
+fits the requested composition, choose its key as placement. Look for a side position near the photographed
+point of interest when the intent calls for text on that side. If a one-line title would push everything into
+a top band, compare a natural two-line title and nearby offer in the side space. Use a custom layout when the
+measured choices would lose that reading path. You may also return colors as a map from a text role
 to a #RRGGBB when needed for contrast, including headline_line_1 or headline_line_2 for a split heading.
 Keep the measured boxes and font_sizes when selecting an option. If the
 available options do not fit after rendering, return a custom layout using boxes and styles instead.
@@ -119,6 +122,9 @@ legible by itself. Give the specific gap or missing visual connection in the obs
 If intent describes a same-size repair, check that the photographed feature is more legible and the
 unused region visibly shrank in the second image. Verify any requested relative position of the product and
 copy in the rendered result. Report layout if the wording missed its requested position and the photo can stay.
+For side-by-side copy and action, identify where the eye crosses from the words to the visible action. If all
+copy hugs the top while the focal detail sits farther down and the side space beside it remains unused, ask
+for placement closer to that detail when the image provides enough clear space.
 If photo_cue is provided, find that physical relationship or effect in the reframed photo. Use photo when
 the crop has removed it and a new composition is required to show it again.
 Read the long axis from edge to edge. An enlarged stretch of featureless wall, floor or surface has no
@@ -688,6 +694,8 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
     if intent:
         inputs["intent"] = intent
     inputs["placement_options"] = placements
+    if photo_cue:
+        inputs["photo_cue"] = photo_cue
     if position_info:
         inputs["framing"] = position_info
     line_height = minimum_font_size(size[0]) * LINE_HEIGHT
@@ -729,7 +737,7 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                 tried_offers.add(key)
             else:
                 answer = ask_stage(ai, "studio_reframe", REFRAME, inputs | {"preferred_first_lines": first_lines}, images)
-                if placements and "layout_error" not in inputs and answer.get("placement") is None:
+                if placements and not intent and "layout_error" not in inputs and answer.get("placement") is None:
                     answer = {"placement": next(iter(placements))}
                 try:
                     proposed = selected_placement(answer, placements, design)
