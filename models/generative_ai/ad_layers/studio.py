@@ -16,6 +16,7 @@ from .scene_ad import make_scene_ad, rendered_text_bounds
 from .studio_edits import edit_version, foreground_mask
 from .studio_formats import FORMATS, adapt_format, fill_margin
 from .studio_guides import START_GUIDES, find_actions
+from .viewpoint import available_viewpoints
 
 
 START = """Choose how to start one Korean product poster. Select one route from routes.
@@ -63,6 +64,8 @@ If there are reference posters, name one visible treatment that makes a referenc
 candidate's execution at that level, allowing for its own category and mood. First compare the raw source, the source study if available,
 and the new photograph. Imagine the original subject, resized and placed at the candidate's scale, replacing
 the new shot. If that substitution would make substantially the same visual point, report catalog.
+Report product_mismatch if the new shot materially changes the item's identity, included parts, or physically
+plausible use. A visibly different point of view is allowed when the product stays recognizable.
 Return the treatment actually visible using one key from treatments. Enlarging the entire unchanged subject,
 changing the background tone, or making the same arrangement crisper counts as catalog. Detail framing must
 give the advertised feature new prominence relative to the rest of the product, or reveal a useful view of it.
@@ -81,6 +84,7 @@ observation), and layout (ready boolean and observation). Each observation is a 
 State visible evidence for each separately. A strong photograph alone is insufficient to approve the layout."""
 
 TREATMENTS = {
+    "product_mismatch": "The shot materially changes the actual product, offer, or physically plausible use.",
     "catalog": "The same visual message survives replacing the shot with a resized source in the same placement.",
     "feature_framing": "A close-up or viewpoint makes the advertised detail substantially more prominent or visible.",
     "lighting": "Directed light, transmission or reflection reveals or singles out a specific selling detail.",
@@ -97,6 +101,9 @@ view only when the owner requires it or the message depends on the complete shap
 When the earlier photograph merely enlarged the original subject, describe what could actually change in angle,
 light or placement to make the exact headline visible. If a full arrangement matters, keep it recognizable
 while changing its angle, foreground-to-background depth, or the way it is lit or used.
+When a specific change of camera height or side would reveal the selling detail, choose change_viewpoint if
+offered. Select the direction relative to the source photo from camera_viewpoints. Use revise_scene for changes
+to action, setting or light that do not need the camera to move around the subject.
 Read the earlier edits and what remained visible after each comparison. If moving or enlarging the words
 left the same photo-and-copy disconnect, choose a different composition action or revise the photography
 when available. Do not repeat an earlier edit that left the same issue.
@@ -173,6 +180,35 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
     current = "v01"
     first = versions / current
     sources = [to_float(image) for image in references]
+    camera_viewpoints = available_viewpoints() if generation is not None and edit_limit else {}
+
+    def assess_campaign(name, poster, required_copy):
+        selected = versions / name
+        candidate = load_layout(selected)
+        scene = read_image(selected / candidate["artwork"]["file"])
+        pre_shoot = selected / "composition.png"
+        study = [to_float(read_image(pre_shoot))] if pre_shoot.is_file() else []
+        check = ask_stage(ai, "studio_campaign_check", CAMPAIGN_CHECK, {
+            "required_copy": required_copy, "rendered_text_bounds": rendered_text_bounds(candidate, selected),
+            "has_source_study": bool(study), "treatments": TREATMENTS,
+        }, [to_float(photo), to_float(poster), to_float(scene), to_float(phone_preview([poster])), *study, *sources])
+        scene_review, layout_review = check.get("scene"), check.get("layout")
+        treatment = scene_review.get("treatment") if isinstance(scene_review, dict) else None
+        if (not isinstance(treatment, str) or treatment not in TREATMENTS
+                or not isinstance(layout_review, dict) or type(layout_review.get("ready")) is not bool):
+            raise ValueError("참고 포스터와 비교한 결과를 확인하지 못했습니다")
+        photo_evidence = required_text(scene_review, "observation", "참고 포스터 비교")
+        layout_evidence = required_text(layout_review, "observation", "참고 포스터 비교")
+        finding = {"product_mismatch": "product", "catalog": "scene"}.get(treatment)
+        if finding is None:
+            finding = "ready" if layout_review["ready"] else "layout"
+        observation = {"product": photo_evidence, "scene": photo_evidence, "layout": layout_evidence,
+                       "ready": f"{photo_evidence} {layout_evidence}"}[finding]
+        record("campaign_check", version=name, finding=finding, observation=observation, treatment=treatment,
+               scene_observation=photo_evidence, layout_observation=layout_evidence,
+               reference_observation=required_text(check, "reference_observation", "참고 포스터 비교") if sources else None)
+        return finding, observation
+
     record("product", product_name=fields["product_name"], price_krw=fields["price_krw"])
     if source_version is not None:
         shutil.copytree(draft, first)
@@ -223,31 +259,12 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
             raise ValueError("비교할 시안이나 수정 이유를 확인하지 못했습니다")
         observation = required_text(review, "observation", "시안 검토")
         if finding == "ready":
-            selected = versions / visible
-            candidate = load_layout(selected)
-            scene = read_image(selected / candidate["artwork"]["file"])
-            pre_shoot = selected / "composition.png"
-            study = [to_float(read_image(pre_shoot))] if pre_shoot.is_file() else []
-            check = ask_stage(ai, "studio_campaign_check", CAMPAIGN_CHECK, {
-                "required_copy": required_copy, "rendered_text_bounds": rendered_text_bounds(candidate, selected),
-                "has_source_study": bool(study), "treatments": TREATMENTS,
-            }, [to_float(photo), pictures[visible], to_float(scene),
-                to_float(phone_preview([posters[order.index(visible)]])), *study, *sources])
-            scene_review, layout_review = check.get("scene"), check.get("layout")
-            treatment = scene_review.get("treatment") if isinstance(scene_review, dict) else None
-            if (not isinstance(treatment, str) or treatment not in TREATMENTS
-                    or not isinstance(layout_review, dict) or type(layout_review.get("ready")) is not bool):
-                raise ValueError("참고 포스터와 비교한 결과를 확인하지 못했습니다")
-            photo_evidence = required_text(scene_review, "observation", "참고 포스터 비교")
-            layout_evidence = required_text(layout_review, "observation", "참고 포스터 비교")
-            finding = "ready" if layout_review["ready"] else "layout"
-            if treatment == "catalog":
-                finding = "scene"
-            observation = {"scene": photo_evidence, "layout": layout_evidence,
-                           "ready": f"{photo_evidence} {layout_evidence}"}[finding]
-            record("campaign_check", version=visible, finding=finding, observation=observation,
-                   treatment=treatment, scene_observation=photo_evidence, layout_observation=layout_evidence,
-                   reference_observation=required_text(check, "reference_observation", "참고 포스터 비교") if sources else None)
+            finding, observation = assess_campaign(visible, posters[order.index(visible)], required_copy)
+        if (pending and visible == current and finding == "scene"
+                and attempts[-1]["action"] in ("revise_scene", "change_viewpoint")):
+            alternative_finding, alternative_observation = assess_campaign(pending, posters[-1], required_copy)
+            if alternative_finding in ("ready", "layout"):
+                visible, finding, observation = pending, alternative_finding, alternative_observation
         record("look", versions=order, version=visible, finding=finding, observation=observation)
         if pending:
             attempts[-1].update(preferred_version=visible, remaining_finding=finding, observation=observation)
@@ -269,6 +286,8 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
                     available.add("edit_region")
             if generation is not None:
                 available.add("revise_scene")
+                if camera_viewpoints:
+                    available.add("change_viewpoint")
         guides = find_actions(finding, available)
         record("guides", version=current, actions=list(guides))
         decision = ask_stage(ai, "studio_action", ACT,
@@ -276,6 +295,7 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
                               "owner_idea": idea,
                               "design": layout["design"], "actual_foreground_bounds": foreground_bounds,
                               "rendered_text_bounds": rendered_text_bounds(layout, base) if "edit_text" in guides else {},
+                              "camera_viewpoints": camera_viewpoints if "change_viewpoint" in guides else {},
                               "copy": [text["text"] for text in layout["texts"]],
                               "fonts": list(load_settings()["fonts"]), "last_edit_error": last_failure,
                               "earlier_edits": attempts}, [pictures[current], to_float(photo)])
@@ -315,10 +335,14 @@ def run_studio(photo, fields, idea, output, ai, generation=None, *, references=(
         new_id = f"v{turn + 2:02d}"
         revised = versions / new_id
         try:
-            if action == "revise_scene":
+            if action in ("revise_scene", "change_viewpoint"):
+                viewpoint = required_text(arguments, "viewpoint", "촬영 시점") if action == "change_viewpoint" else None
+                if viewpoint is not None and viewpoint not in camera_viewpoints:
+                    raise ValueError("제공된 촬영 시점 중 하나를 선택하세요")
+                camera = {"viewpoint": viewpoint} if viewpoint is not None else {}
                 make_scene_ad(photo, fields, idea, generation() | {"ai": ai}, revised, references=references,
                               previous=base, feedback=required_text(arguments, "instruction", "장면 편집"),
-                              scene_issue=observation if finding == "scene" else None)
+                              scene_issue=observation if finding == "scene" else None, **camera)
             else:
                 edit_version(base, revised, action, arguments, generation, ai=ai, references=sources)
         except ValueError as error:

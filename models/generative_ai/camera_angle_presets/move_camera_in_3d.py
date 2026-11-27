@@ -47,7 +47,8 @@ def orbit_camera_pose(subject_center: np.ndarray, orbit_yaw_deg: float,
 def render_from_moved_camera(photo: Image.Image, points: np.ndarray, valid: np.ndarray, fov_deg: float,
                              orbit_yaw_deg: float, orbit_pitch_deg: float, center_crop: float,
                              hole_color: str, point_size_px: int = 1,
-                             gap_fill_ratio: float = 0.0, background_depth_share: float = 1.0) -> tuple[Image.Image, Image.Image]:
+                             gap_fill_ratio: float = 0.0, background_depth_share: float = 1.0, *,
+                             subject_mask: np.ndarray | None = None) -> tuple[Image.Image, Image.Image]:
     """(새 시점 RGB, 구멍 마스크 L). 결과 크기는 원본과 같고, 마스크는 흰색(255)이 비어 있는 곳입니다.
 
     points: (H, W, 3) 카메라 기준 좌표, x 오른쪽, y 위, z 앞. valid: (H, W) 믿을 수 있는 점.
@@ -55,12 +56,21 @@ def render_from_moved_camera(photo: Image.Image, points: np.ndarray, valid: np.n
     생성 모델이 그 무늬를 물체로 착각하므로 점을 키워 틈을 메웁니다.
     gap_fill_ratio: 앞 물체 뒤에서 드러난 틈을 뒤쪽 배경으로 메울 최대 폭 (화면 가로 대비 비율). 0이면 메우지 않습니다.
     background_depth_share: 주변에서 가장 먼 깊이의 이 비율보다 먼 점만 뒤쪽 배경으로 봅니다.
+    subject_mask: 깊이 영상과 같은 크기의 상품 영역. 있으면 그 안의 점을 중심으로 카메라를 옮깁니다.
     """
     # ponytail: 점을 정사각형으로 찍는 방식. 물체 가장자리가 point_size_px만큼 두꺼워지며, 부족하면 삼각형 메시 렌더링으로 바꾼다.
     h, w = valid.shape
     colors = np.asarray(photo.convert("RGB").resize((w, h), Image.Resampling.LANCZOS), dtype=np.float32) / 255
-    rotation, position = orbit_camera_pose(find_subject_center(points, valid, center_crop),
-                                           orbit_yaw_deg, orbit_pitch_deg)
+    if subject_mask is None:
+        center = find_subject_center(points, valid, center_crop)
+    else:
+        if subject_mask.shape != valid.shape or subject_mask.dtype != np.bool_:
+            raise ValueError("상품 영역의 크기나 형식이 깊이 영상과 다릅니다")
+        subject = valid & subject_mask
+        if not subject.any():
+            raise ValueError("상품 영역에서 깊이를 추정한 점을 찾지 못했습니다")
+        center = np.median(points[subject], axis=0)
+    rotation, position = orbit_camera_pose(center, orbit_yaw_deg, orbit_pitch_deg)
     local = (points[valid] - position) @ rotation  # 각 점을 새 카메라 기준 좌표로
     tangent = math.tan(math.radians(fov_deg) / 2)
     z = local[:, 2]

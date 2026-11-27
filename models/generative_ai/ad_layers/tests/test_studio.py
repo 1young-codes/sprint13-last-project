@@ -233,6 +233,40 @@ def test_campaign_comparison_can_block_selection(tmp_path, draft, finding, obser
     assert "resume_review" not in (fresh / "events.jsonl").read_text(encoding="utf-8")
 
 
+def test_scene_action_can_use_a_prepared_camera_viewpoint(tmp_path, draft, monkeypatch):
+    folder, fields = draft
+    monkeypatch.setattr(studio, "available_viewpoints", lambda: {"high_angle": "하이 앵글"})
+    ai = object()
+    edits = []
+
+    def ask(agent, step, task, data, images):
+        assert agent is ai
+        if step == "studio_look":
+            return {"version": "v01", "finding": "scene", "observation": "윗면이 가려집니다"}
+        if step == "studio_campaign_check":
+            return {"scene": {"treatment": "feature_framing", "observation": "윗면이 보입니다"},
+                    "layout": {"ready": False, "observation": "가격을 상품명 가까이 옮겨야 합니다"}}
+        if "change_viewpoint" in data["actions"]:
+            assert data["camera_viewpoints"] == {"high_angle": "하이 앵글"}
+            return {"action": "change_viewpoint", "arguments": {"viewpoint": "high_angle",
+                    "instruction": "윗면이 보이도록 촬영"}, "reason": "윗면을 강조합니다"}
+        return {"action": "hold", "arguments": {}, "reason": "촬영 결과를 검토합니다"}
+
+    def remake(photo, facts, idea, models, output, **kwargs):
+        assert facts == fields and kwargs["scene_issue"] == "윗면이 가려집니다"
+        assert kwargs["viewpoint"] == "high_angle" and kwargs["feedback"] == "윗면이 보이도록 촬영"
+        edits.append(kwargs["previous"])
+        shutil.copytree(folder, output)
+
+    monkeypatch.setattr(studio, "ask_stage", ask)
+    monkeypatch.setattr(studio, "make_scene_ad", remake)
+    output = tmp_path / "camera-viewpoint"
+    result = studio.run_studio(Image.new("RGB", (100, 100)), fields, "", output, ai, dict,
+                               draft=folder, edit_limit=1)
+    assert edits == [output / "versions/v01"] and result["version"] == "v02"
+    assert load_layout(result["image"].parent)["pending_review"]["finding"] == "layout"
+
+
 def test_region_edit_locks_product_and_rest_of_photo(tmp_path, draft):
     folder, _ = draft
 

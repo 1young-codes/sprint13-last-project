@@ -13,6 +13,7 @@ from .art_direction import ANGLES, LIGHTING, SHOT_SCALES, THEMES, plan_art_direc
 from .creative_brief import LAYOUT_ROLES, TEXT_ROLES, ask_stage, plan_copy, required_text, validate_boxes
 from .layers import compose, cutout_product, load_layout, load_settings, save_layout, to_float
 from .text_render import minimum_font_size, render_texts
+from .viewpoint import camera_view, place_camera_view
 
 
 DESIGN = """Art-direct one complete Korean campaign poster before any artwork is generated. The first image
@@ -267,7 +268,9 @@ def extract_subject(photo, mask_model, threshold):
     from ..photo_retouch.product_mask import product_mask
 
     mask = product_mask(mask_model, to_float(photo))
-    return cutout_product(photo, mask, threshold) if (mask > threshold).any() else None
+    subject = Image.fromarray(mask > threshold)
+    product = cutout_product(photo, mask, threshold) if subject.getbbox() else None
+    return product, subject
 
 
 def crop_subject(product, design):
@@ -614,7 +617,7 @@ def preview_artwork(photo, artwork, canvas_size, design):
 
 
 def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview=False, proposal=None, previous=None,
-                  rejected=None, feedback=None, scene_issue=None, start_direction=None):
+                  rejected=None, feedback=None, scene_issue=None, start_direction=None, viewpoint=None):
 
     if folder.exists():
         raise FileExistsError(folder)
@@ -672,9 +675,16 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         ai, fields, design_input["brief"] | {"headline": copy["headline"]}, idea, images, revision_info)
     threshold = settings["product"]["mask_threshold"]
     mask_model = models.get("mask")
-    product = extract_subject(photo, mask_model, threshold) if mask_model is not None else None
+    product, source_mask = extract_subject(photo, mask_model, threshold) if mask_model is not None else (None, None)
+    moved_view = None
+    if viewpoint:
+        if product is None:
+            raise ValueError("새 시점에서 보여 줄 상품 영역을 찾지 못했습니다")
+        moved_view = camera_view(photo, source_mask, viewpoint)
     source_framing = proposal.get("source_framing") if proposal else None
-    if not proposal and product is not None:
+    if moved_view is not None:
+        source_framing = {"source_crop": None, "reason": "새 촬영 시점에서 상품의 구성을 유지합니다"}
+    elif not proposal and product is not None:
         framing_input = design_input | {"art_direction_plan": art_plan, "idea": idea}
         if scene_issue:
             framing_input = {"brief": brief, "copy": copy, "idea": idea, "scene_issue": scene_issue,
@@ -710,6 +720,10 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         elif revision_info:
             design_task += ("\nMake room for the visual idea in revision_feedback. Give the photography "
                             "and type a new shared composition with the same exact copy.")
+        if moved_view is not None:
+            design_images = [*design_images, to_float(moved_view)]
+            design_task += ("\nThe final image shows the requested camera viewpoint with unreconstructed regions. "
+                            "Plan space for the visible subject and type around that view.")
         answer = proposal["design"] if proposal else (
             ask_stage(ai, "ad_layout", design_task, design_input, design_images) | frame_fields)
         try:
@@ -760,6 +774,12 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                                        "Omit any instruction to keep the entire product in view.")
                 else:
                     direction_task += "\nDescribe the exact requested_scene_change and omit any conflicting design detail."
+            if moved_view is not None:
+                direction_input["viewpoint"] = viewpoint
+                direction_images.append(to_float(moved_view))
+                direction_task += ("\nThe last image is the requested viewpoint, with gray gaps to reconstruct. "
+                                   "Describe the new scene at that actual angle. Keep the visible product identity and "
+                                   "use the planned quiet regions for type. The camera view takes priority over angle_guide.")
             direction = ask_stage(ai, "ad_scene_direction", direction_task, direction_input, direction_images)
             answer = answer | {"art_direction": required_text(direction, "scene", "촬영 연출")}
 
@@ -787,6 +807,12 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             prompt += " Keep all of the product in frame with space around its edges."
         if detail_shot:
             prompt += " Keep the same close framing of the product detail shown in the reference."
+        if moved_view is not None:
+            prompt = ("Make one finished commercial photograph. The first image shows the original item and its details. "
+                      "Use the second image's camera viewpoint and visible arrangement. Gray gaps are missing pixels: "
+                      "complete them naturally with details consistent with the first image. Keep the changed angle. "
+                      f"{answer['art_direction']} Preserve the actual product, components and packaging. "
+                      "Add no writing, graphics or products not specified in the scene.")
         if preview:
             if (result / artwork["file"]).is_file():
                 with Image.open(result / artwork["file"]) as planned:
@@ -798,8 +824,15 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             model = models["generation"]
             model.use_lora(None, 0)
             generation = settings["generation"]
-            reference = product_reference(photo, effective, picture_size, subject_box, answer.get("source_crop"))
-            generated = model.edit(reference, prompt, generation["seed"], generation["steps"], size=picture_size)
+            if moved_view is not None:
+                placement_box = pixel_box(subject_box or [0, 0, 100, 100], picture_size)
+                guide = place_camera_view(moved_view, source_mask.getbbox(), photo.size, picture_size, placement_box)
+                guide.save(result / "viewpoint.png")
+                original = ImageOps.contain(photo, (640, 640), Image.Resampling.LANCZOS)
+                generated = model.edit_with_reference(original, guide, prompt, generation["seed"], generation["steps"])
+            else:
+                reference = product_reference(photo, effective, picture_size, subject_box, answer.get("source_crop"))
+                generated = model.edit(reference, prompt, generation["seed"], generation["steps"], size=picture_size)
             scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
             foreground = find_foreground(scene, models["mask"], threshold)
             if answer["edge"] == "blend":
@@ -823,6 +856,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         poster.save(result / "ad.png")
         if revision_info:
             layout["revision"] = revision_info
+        if viewpoint:
+            layout["viewpoint"] = viewpoint
         save_layout(layout, result)
         result.rename(folder)
     return layout

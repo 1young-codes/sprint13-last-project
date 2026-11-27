@@ -124,6 +124,20 @@ def test_orbit_keeps_subject_center_in_place():
     assert np.asarray(hole).mean() > 0  # 비스듬히 보면 벽 바깥 빈 곳이 생깁니다
 
 
+def test_orbit_keeps_an_off_center_product_at_its_own_pivot():
+    photo = Image.new("RGB", (240, 160), "white")
+    ImageDraw.Draw(photo).ellipse((144, 111, 156, 123), fill="red")
+    points, valid = flat_wall(photo)
+    subject = np.asarray(photo)[:, :, 1] == 0
+    centered, _ = render_from_moved_camera(photo, points, valid, FOV, 25, -30, 0.33, "#949494")
+    moved, _ = render_from_moved_camera(photo, points, valid, FOV, 25, -30, 0.33, "#949494",
+                                        subject_mask=subject)
+
+    target = red_dot_center(photo)
+    assert math.dist(red_dot_center(moved), target) < 2
+    assert math.dist(red_dot_center(centered), target) > 5
+
+
 def test_rotate_presets_run_end_to_end_without_models():
     photo = make_test_photo()
     names = [name for name, preset in load_angle_presets().items() if preset.method == "rotate"]

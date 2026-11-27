@@ -143,7 +143,8 @@ def unload_models(models: dict) -> None:
 
 def change_camera_angle(photo: Image.Image, preset_names: list[str], models: dict, scene_description: str = "",
                         seed: int | None = None, steps: int | None = None,
-                        photo_fov_deg: float | None = None) -> tuple[list[AngleResult], dict]:
+                        photo_fov_deg: float | None = None, *,
+                        subject_mask: Image.Image | None = None) -> tuple[list[AngleResult], dict]:
     """(결과 목록, 실행 정보). models: load_models()의 결과."""
     settings = load_settings()
     presets = select_presets(preset_names)
@@ -169,14 +170,19 @@ def change_camera_angle(photo: Image.Image, preset_names: list[str], models: dic
         seconds[preset.name] = round(time.perf_counter() - started, 1)
     orbit = settings["orbit"]
     orbit_presets = [p for p in presets if p.method == "orbit"]
+    pivot_mask = None
     if orbit_presets:
         solid_points = remove_depth_edge_points(depth.points, depth.valid, orbit["depth_edge_tolerance"])
+        if subject_mask is not None:
+            height, width = depth.valid.shape
+            pivot_mask = np.asarray(subject_mask.convert("1").resize((width, height), Image.Resampling.NEAREST))
     for preset in orbit_presets:
         started = time.perf_counter()
         moved, hole_mask = render_from_moved_camera(photo, depth.points, solid_points, depth.fov_deg,
                                                     preset.orbit_yaw_deg, preset.orbit_pitch_deg,
                                                     orbit["subject_crop"], orbit["hole_color"], orbit["point_size_px"],
-                                                    orbit["gap_fill_ratio"], orbit["background_depth_share"])
+                                                    orbit["gap_fill_ratio"], orbit["background_depth_share"],
+                                                    subject_mask=pivot_mask)
         size = output_size(photo, None, settings["photo"]["output_long_side"])
         moved = moved.resize(size, Image.Resampling.LANCZOS)
         image = moved

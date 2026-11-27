@@ -46,6 +46,14 @@ ACTION_GUIDES = {
                  "which other parts must remain identifiable. The product facts and exact copy stay fixed.",
         "arguments": {"instruction": "The visible problem and the specific photographic change to try."},
     },
+    "change_viewpoint": {
+        "findings": ("scene",),
+        "guide": "Move the camera around the original product before rebuilding the photograph. Choose this when "
+                 "a clearly different view will make a specific detail or arrangement easier to see. Name what the "
+                 "new view needs to reveal, and keep the actual product recognizable.",
+        "arguments": {"viewpoint": "One key from camera_viewpoints.",
+                      "instruction": "Describe the visible detail to reveal and how the scene should support it."},
+    },
     "select": {
         "findings": ("ready",),
         "guide": "Select the strongest visible version when the product and message read together. "
