@@ -10,7 +10,6 @@ from PIL import Image, ImageOps
 WORKFLOWS = {
     "moss": "MOSS-Image-SFT BF16 + Moss-Image-Edit, Euler/normal 30, CFG 4, SLG 22",
     "flux": "FLUX.3 [klein] FP8, native reference conditioning, 16 steps, prompt as provided",
-    "ideogram": "Ideogram 4 FP8 + BitPoet Inpaint V3 step 6400, RES multistep, CFG 3 (1 at sigma <= 0.1)",
 }
 
 
@@ -19,13 +18,9 @@ def generate(args, jobs):
         from . import reference_moss
 
         return reference_moss.generate_batch(jobs, args.moss_snapshot, args.weights / "moss")
-    if args.model == "flux":
-        from . import reference_flux
+    from . import reference_flux
 
-        return reference_flux.generate_batch(jobs, args.weights / "flux")
-    from . import reference_ideogram
-
-    return reference_ideogram.generate_batch(jobs, args.weights)
+    return reference_flux.generate_batch(jobs, args.weights / "flux")
 
 
 def main():

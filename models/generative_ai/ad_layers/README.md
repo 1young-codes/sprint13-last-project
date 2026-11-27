@@ -64,15 +64,14 @@ python -m models.generative_ai.ad_layers.make_ad --recompose outputs/ad_layers/�
 
 ## 참고 사진으로 광고 한 장을 통째로 생성해 비교하기
 
-먼저 실행한 Qwen-Image-2.1 결과의 `settings.json`에서 파일명, 실제 상품명과 가격, 프롬프트를 읽습니다. MOSS와 Ideogram은 편집용 LoRA를 사용합니다. 세 모델 모두 참고 사진을 받아 광고 전체를 다시 그립니다.
+먼저 실행한 Qwen-Image-2.1 결과의 `settings.json`에서 파일명, 실제 상품명과 가격, 프롬프트를 읽습니다. MOSS와 FLUX는 같은 참고 사진을 받아 광고 전체를 다시 그립니다.
 
 | 모델 | 실행 흐름 |
 | --- | --- |
 | MOSS-Image-SFT | 편집용 LoRA와 참고 사진을 양쪽 조건에 사용합니다. 원본 비율로 약 100만 화소를 만들고, 공개 예제의 Euler/normal 30단계, CFG 4와 22번 층 생략을 적용합니다. 이 실행기는 공식 BF16 기본 모델과 인코더를 사용합니다. [공개 워크플로](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_moss_image_edit.json), [LoRA 제작자 코드](https://github.com/Chenkin-x/Moss-Image-Edit) |
 | FLUX.3 [klein] | 공식 단독 실행 코드로 참고 사진을 넣습니다. FP8 증류 모델의 기본 16단계를 쓰고, 프롬프트 자동 확장은 끕니다. [공식 구현](https://github.com/black-forest-labs/flux-3-image-klein) |
-| Ideogram 4 FP8 | BitPoet 예제처럼 조건 모델에만 참고 사진과 편집 LoRA를 넣고, 별도 무조건 모델을 사용합니다. 예제의 확장 스케줄과 2차 샘플러를 씁니다. 제작자가 권장한 V3 6400 체크포인트와 광고 전체 영역을 사용합니다. [공개 워크플로](https://github.com/BitPoet/ComfyUI-bitpoet-IG4Inpaint/blob/main/workflows/ideogram4_reference_workflow.json), [LoRA](https://huggingface.co/BitPoet/Ideogram4-Inpaint-LoRA) |
 
-GPU 파이썬 환경의 `PYTHONPATH`에 MOSS 편집 코드의 저장소 루트와 FLUX 및 Ideogram 공식 코드의 `src`를 추가합니다. 이 실험에 사용한 소스 커밋은 각각 `d735569`, `bfc8889`, `990fe1c`입니다. Ideogram 공식 패키지는 가져올 때 `bitsandbytes`를 필요로 합니다.
+GPU 파이썬 환경의 `PYTHONPATH`에 MOSS 편집 코드의 저장소 루트와 FLUX 공식 코드의 `src`를 추가합니다. 이 실험에 사용한 소스 커밋은 각각 `d735569`, `bfc8889`입니다.
 
 가중치는 아래 구조에 둡니다. 가중치·토크나이저 파일명과 디렉터리는 배포본을 따릅니다.
 
@@ -80,16 +79,13 @@ GPU 파이썬 환경의 `PYTHONPATH`에 MOSS 편집 코드의 저장소 루트�
 | --- | --- |
 | `weights/moss/` | `chinoll/Moss-Image-Edit`의 어댑터 파일 두 개. 기본 모델 `OpenMOSS-Team/MOSS-Image-SFT`의 스냅샷은 별도로 지정합니다. |
 | `weights/flux/` | `Runware/flux-3-image-klein`의 `variants/fp8r/`, `text_encoder/`, `ae.safetensors`. |
-| `weights/ideo/` | `Comfy-Org/Ideogram-4`의 `diffusion_models/` FP8 파일 두 개와 `text_encoders/qwen3vl_8b_fp8_scaled.safetensors`, `vae/flux2-vae.safetensors`. `tokenizer/`에 `Qwen/Qwen3-VL-8B-Instruct`에서 받은 `config.json`, `tokenizer.json`, `tokenizer_config.json`을 둡니다. |
-| `weights/ideo_lora/` | `BitPoet/Ideogram4-Inpaint-LoRA`의 `V3/Ido4Inpaint_V3_1k_000006400.safetensors`. |
 
-같은 결과 폴더로 다시 실행하면 이미 생성한 PNG를 건너뜁니다. 모델마다 결과 폴더를 따로 지정합니다. Ideogram의 파이썬 함수에 `edit_box=(위, 왼쪽, 아래, 오른쪽)`을 전달하면 0–1000 좌표로 편집 영역을 지정할 수 있습니다.
+같은 결과 폴더로 다시 실행하면 이미 생성한 PNG를 건너뜁니다. 모델마다 결과 폴더를 따로 지정합니다.
 
 ```bash
 python -m models.generative_ai.ad_layers.compare_reference_ads moss qwen/settings.json photos comparison/moss weights \
     --moss-snapshot /path/to/MOSS-Image-SFT/snapshot
 python -m models.generative_ai.ad_layers.compare_reference_ads flux qwen/settings.json photos comparison/flux weights
-python -m models.generative_ai.ad_layers.compare_reference_ads ideogram qwen/settings.json photos comparison/ideogram weights
 ```
 
 ## 확인
