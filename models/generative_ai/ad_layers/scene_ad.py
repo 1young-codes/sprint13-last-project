@@ -201,7 +201,32 @@ request. Follow the agreed crop. State only what the generated photograph should
 graphics, coordinates or layout markup. Return JSON with 'scene' and 'photo_cue'. Write photo_cue as one
 short English sentence naming the visible relationship or effect that must be true for the scene to convey the
 message. For a demonstration, name the relative position and direction of the moving parts, not just their
-presence. The cue must be directly observable in the photograph without reading the headline."""
+presence. Choose a moment that makes the intended action distinguishable from its reverse or an unrelated
+gesture. Show the actual grip or support in frame and use a visible starting point and a separate destination,
+contact or outcome for that distinction. The cue must be directly observable without reading the headline."""
+
+PHOTO_OBSERVATION = """Describe this single photograph as a viewer seeing it without any caption.
+If someone handles an object, distinguish what holds or supports it, what visibly moves or is poised to move,
+and what surface or object appears to receive it. Name the destination the picture actually suggests. A still
+frame does not prove what happened before or after. For an unsupported tool, say it appears suspended rather
+than inferring a hand outside the frame. If no action is depicted, report the most salient details
+such as texture, shape, setting, or light. Return one JSON object with the exact key "observation" and no
+other keys. Its value is a concrete Korean sentence about the visible subject and direction where relevant."""
+
+PHOTO_MESSAGE = """Compare the exact Korean headline and message to an independent observer's description.
+Check physical direction only when the claim describes an action such as removing, applying or transferring
+something. A mood, occasion, material, or static detail has no direction requirement here. For a directional
+claim, state what should move and where it should go. Compare with where the observation says it visually
+leads. When the claim is about taking material from a source or putting it to use, motion aimed into that
+source is incompatible. The correct tool or product by itself does not show the action. If both readings
+would mean different actions, count an ambiguous direction as insufficient for the directional claim.
+An unsupported pose also fails when the claim depicts someone using the tool.
+Return message_supported (boolean) and message_observation (one Korean sentence). Use true for claims without
+a direction requirement. If false, return corrected_photo_cue and correction as English instructions for an
+observable action preserving the existing product and facts, plus visible_support (the actual visible contact
+that holds the moving tool or item), action_target (the distinct place that receives the material or shows the
+end of the movement), and reposition as a boolean. Describe support and target in English as visible positions
+or contact in a still frame. Words that merely imply movement do not describe either."""
 
 PHOTO_CUE_CHECK = """Compare the original product (first image) and the rendered photograph without type
 (second image). If has_approved_detail is true, the third image shows the selected source detail against
@@ -1238,7 +1263,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             design_input["art_direction_plan"]["shot_scale"] = "detail"
         artwork = layout["artwork"]
         if not proposal:
-            direction_input = {"message": brief["message"], "idea": idea, "design": answer}
+            direction_input = {"message": brief["message"], "headline": copy["headline"], "idea": idea, "design": answer}
             angle, scale = ANGLES[art_plan["angle"]], SHOT_SCALES[art_plan["shot_scale"]]
             lighting = art_plan["lighting"]
             direction_input.update(art_direction_plan=art_plan, angle_guide=angle, framing_guide=scale,
@@ -1382,24 +1407,33 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             approved_detail = on_gray(effective) if detail_shot and effective is not None else None
 
             def review_photo(candidate):
+                picture = to_float(candidate)
+                observed = ask_stage(ai, "ad_photo_observation", PHOTO_OBSERVATION, {}, [picture])
+                seen = required_text(observed, "observation", "사진 장면 관찰")
+                message = ask_stage(ai, "ad_photo_message", PHOTO_MESSAGE,
+                                    {"observation": seen, "headline": copy["headline"],
+                                     "message": brief.get("message", copy["headline"])})
                 check = ask_stage(ai, "ad_photo_cue_check", PHOTO_CUE_CHECK,
                                   {"photo_cue": photo_cue, "has_approved_detail": approved_detail is not None,
                                    "crop": answer["crop"], "product_facts": fields},
-                                  [images[0], to_float(candidate), *([to_float(approved_detail)] if approved_detail else [])])
+                                  [images[0], picture, *([to_float(approved_detail)] if approved_detail else [])])
                 observation = required_text(check, "observation", "촬영 결과 검토")
                 identity = check.get("identity_matches")
                 identity_observation = required_text(check, "identity_observation", "촬영 결과 검토")
                 visible = check.get("visible")
-                if type(visible) is not bool or type(identity) is not bool:
+                supported = message.get("message_supported")
+                if any(type(value) is not bool for value in (visible, identity, supported)):
                     raise ValueError("촬영한 사진에서 연출을 확인하지 못했습니다")
+                message_observation = required_text(message, "message_observation", "사진과 광고 문구 비교")
                 mark = check.get("stray_writing")
                 if "stray_writing" not in check or (mark is not None and not isinstance(mark, dict)):
                     raise ValueError("촬영한 사진에 새로 생긴 글자가 있는지 확인하지 못했습니다")
                 written = required_text(mark, "observation", "사진 글자 확인") if mark is not None else None
                 finding = {"visible": visible, "observation": observation, "identity_matches": identity,
-                           "identity_observation": identity_observation, "stray_writing": written}
+                           "identity_observation": identity_observation, "message_supported": supported,
+                           "observed_scene": seen, "message_observation": message_observation, "stray_writing": written}
                 photo_checks.append(finding)
-                return check, finding
+                return check, message, finding
 
             foreground = None
             for attempt in range(2):
@@ -1407,29 +1441,44 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
                 if not photo_cue:
                     break
-                check, finding = review_photo(scene)
-                if finding["visible"] and finding["identity_matches"] and finding["stray_writing"]:
+                check, message, finding = review_photo(scene)
+                matches = finding["visible"] and finding["identity_matches"] and finding["message_supported"]
+                if matches and finding["stray_writing"]:
                     mark = check["stray_writing"]
                     foreground = find_foreground(scene, models["mask"], threshold)
                     fixed = remove_photo_writing(scene, foreground, mark)
                     if fixed is not None:
                         scene = fixed
-                        check, finding = review_photo(scene)
-                if finding["visible"] and finding["identity_matches"] and not finding["stray_writing"]:
+                        check, message, finding = review_photo(scene)
+                        matches = finding["visible"] and finding["identity_matches"] and finding["message_supported"]
+                if matches and not finding["stray_writing"]:
                     break
                 foreground = None
                 if attempt:
                     if not finding["identity_matches"]:
                         raise ValueError(f"촬영한 사진의 상품이 원본과 다릅니다. {finding['identity_observation']}")
+                    if not finding["message_supported"]:
+                        raise ValueError(f"사진이 광고 문구를 뒷받침하지 않습니다. {finding['message_observation']}")
                     if finding["stray_writing"]:
                         raise ValueError(f"촬영한 사진에 의도하지 않은 글자가 남았습니다. {finding['stray_writing']}")
                     raise ValueError(f"사진에 의도한 연출이 보이지 않습니다. {finding['observation']}")
-                correction = required_text(check, "correction", "촬영 결과 검토")
-                reposition = check.get("reposition")
+                wrong_message = not finding["message_supported"]
+                instructions = message if wrong_message else check
+                correction = required_text(instructions, "correction", "촬영 결과 검토")
+                reposition = instructions.get("reposition")
                 if type(reposition) is not bool:
                     raise ValueError("촬영을 고칠 때 상품 배치를 바꿔야 하는지 확인하지 못했습니다")
-                if reposition and staged_view is None and moved_view is None:
-                    reference = photo.convert("RGB")
+                if wrong_message:
+                    if not finding["identity_matches"]:
+                        correction += " " + required_text(check, "correction", "상품 원형 보존")
+                    action_cue = required_text(message, "corrected_photo_cue", "광고 문구에 맞춘 촬영 수정")
+                    support = required_text(message, "visible_support", "움직이는 부분을 잡는 곳")
+                    target = required_text(message, "action_target", "동작이 닿는 곳")
+                    photo_cue = f"{action_cue} Visible support: {support} Visible destination: {target}"
+                    answer = answer | {"art_direction": correction}
+                if wrong_message or (reposition and staged_view is None and moved_view is None):
+                    if reposition and staged_view is None and moved_view is None:
+                        reference = photo.convert("RGB")
                     camera = (f"{ANGLES[art_plan['angle']]} {SHOT_SCALES[art_plan['shot_scale']]} "
                               f"{LIGHTING.get(art_plan['lighting'], art_plan['lighting'])} " if art_plan else "")
                     prompt = ("Make one finished commercial photograph. The reference identifies the original item, "

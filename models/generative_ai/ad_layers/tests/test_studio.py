@@ -219,6 +219,12 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
                 assert len(images) == (4 if staged else 3)
                 assert data["approved_photo_cue"] == approved["photo_cue"]
                 return '{"scene":"Warm lamp light guides the eye from the vessel.","photo_cue":"The rim casts a dark shadow."}'
+            if step == "ad_photo_observation":
+                assert not data and len(images) == 1
+                return '{"observation":"용기 옆에 램프가 보입니다"}'
+            if step == "ad_photo_message":
+                assert not images and data["observation"] == "용기 옆에 램프가 보입니다"
+                return '{"message_supported":true,"message_observation":"램프가 놓인 장면입니다"}'
             if step == "ad_photo_cue_check":
                 assert len(images) == 2 and data["photo_cue"] == "The vessel reflects a strip of lamp light."
                 return ('{"identity_matches":true,"identity_observation":"같은 용기입니다",'
@@ -269,7 +275,7 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
     review = (["studio_staged_identity"] if staged else [])
     review += ["studio_format_native_review"] if same_piece else ["studio_repair_detail"]
     assert calls == [*stages, *plans, "ad_composition", "ad_composition", *measured, "ad_scene_direction", "photo",
-                     "ad_photo_cue_check", "ad_final_layout", *review]
+                     "ad_photo_observation", "ad_photo_message", "ad_photo_cue_check", "ad_final_layout", *review]
 
 
 def test_native_detail_repair_recomposes_after_source_identity_passes(draft, monkeypatch):

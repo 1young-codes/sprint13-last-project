@@ -23,6 +23,11 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     reject_cue = False
     reject_identity = False
     repair_writing = False
+    repair_message = False
+    action_cue = "Soft sunlight falls across an in-use product beside a morning window."
+    support, target = "Fingers grasp the product cap in frame.", "The tool reaches a clean surface apart from the bottle."
+    corrected_cue = f"{action_cue} Visible support: {support} Visible destination: {target}"
+    semantic_correction = "Show the product in use near the window so the image carries the morning message."
     campaign_intent = "빛줄기와 제목을 같은 방향으로 연결합니다"
     expect_correction = False
     delegated_framing = False
@@ -43,6 +48,11 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
 
         def edit(self, reference, prompt, seed, steps, *, size):
             assert size == (512, 1024)
+            if repair_message and "ad_photo_cue_check" in calls:
+                assert reference.tobytes() == photo.tobytes()
+                assert corrected_cue in prompt and semantic_correction in prompt and cue not in prompt
+                calls.append("qwen")
+                return Image.new("RGB", size, "blue")
             if reject_cue and "ad_photo_cue_check" in calls:
                 assert reference.size == photo.size and reference.tobytes() == photo.tobytes()
                 assert "The reference identifies the original item" in prompt
@@ -72,6 +82,20 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     class Interpreter:
         def ask(self, step, images, prompt, *, model):
             assert model == "gpt-6-luna"
+            if step == "ad_photo_observation":
+                assert len(images) == 1 and json.loads(prompt.split("Input JSON follows:\n", 1)[1]) == {}
+                assert "부드러운 아침" not in prompt
+                return '{"observation":"유리 가장자리에 호박색 빛이 있습니다"}'
+            if step == "ad_photo_message":
+                data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
+                assert not images and data == {"headline": "부드러운 아침", "message": "아침에 쓰는 세럼",
+                                               "observation": "유리 가장자리에 호박색 빛이 있습니다"}
+                if repair_message and "ad_photo_cue_check" not in calls:
+                    return json.dumps({"message_supported": False, "message_observation": "아침 장면이 보이지 않습니다",
+                                       "correction": semantic_correction, "corrected_photo_cue": action_cue,
+                                       "visible_support": support, "action_target": target,
+                                       "reposition": True})
+                return '{"message_supported":true,"message_observation":"사진에 아침빛이 보입니다"}'
             calls.append(step)
             if step == "ad_plan":
                 return '{"message":"아침에 쓰는 세럼", "evidence":"입력 상품 정보"}'
@@ -106,6 +130,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 return json.dumps(critique)
             if step == "ad_scene_direction":
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
+                assert data["headline"] == "부드러운 아침"
                 assert data["design"]["artwork_box"] == [0, 0, 50, 100]
                 assert "vertical layers" in data["angle_guide"] and data["art_direction_plan"]["angle"] == "level"
                 assert (actual_light if expect_correction else "diffused light behind") in data["lighting_guide"]
@@ -123,7 +148,9 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 return json.dumps({"scene": "Amber reflections", "photo_cue": cue})
             if step == "ad_photo_cue_check":
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
-                assert data["photo_cue"] == cue and images[1].shape == (1024, 512, 3)
+                has_corrected_message = repair_message and calls.count(step) == 2
+                assert data["photo_cue"] == (corrected_cue if has_corrected_message else cue)
+                assert images[1].shape == (1024, 512, 3)
                 assert data["has_approved_detail"] is expect_correction and len(images) == (3 if expect_correction else 2)
                 identity = {"identity_matches": not reject_identity,
                             "identity_observation": "병이 검정색입니다" if reject_identity else "같은 앰버색 병입니다",
@@ -229,6 +256,14 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                                       references=[reference], proposal=layout)
     assert calls == ["render", "qwen", "ad_photo_cue_check"]
     assert accepted["design"] == layout["design"] and accepted["final_review_reason"] is None
+    repair_message = True
+    calls.clear()
+    corrected = scene_ad.make_scene_ad(photo, fields, "", models, tmp_path / "message-corrected", proposal=layout)
+    assert calls == ["render", "qwen", "ad_photo_cue_check", "qwen", "ad_photo_cue_check"]
+    assert [check["message_supported"] for check in corrected["photo_cue_checks"]] == [False, True]
+    assert corrected["photo_cue"] == corrected_cue and corrected["design"]["art_direction"] == semantic_correction
+    assert corrected["texts"] == layout["texts"]
+    repair_message = False
     reject_cue = True
     calls.clear()
     unapproved = tmp_path / "unapproved"
