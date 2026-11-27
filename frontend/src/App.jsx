@@ -95,6 +95,7 @@ export default function App() {
           store={store}
           onSave={changeStore}
           storeName={storeName}
+          storeBio={store.bio}
           feed={feed}
           onPublished={setFeed}
           onClearFeed={() => setFeed(clearFeed())}

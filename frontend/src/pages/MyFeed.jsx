@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { FeedGrid, FeedPostView, ProfileHead } from '../components/Feed.jsx'
 
 // 내 피드: 손님이 가게 프로필에 들어왔을 때 보게 될 모습. 게시한 게시글이 최신부터 쌓인다.
-//   storeName: 가게 이름, feed: 게시한 게시글 목록, onClearFeed(): 피드 비우기, onGoTo(tab): 다른 탭으로
-export default function MyFeed({ storeName, feed = [], onClearFeed, onGoTo }) {
+//   storeName: 가게 이름, storeBio: 한 줄 소개, feed: 게시한 게시글 목록, onClearFeed(): 피드 비우기, onGoTo(tab): 다른 탭으로
+export default function MyFeed({ storeName, storeBio, feed = [], onClearFeed, onGoTo }) {
   const [openId, setOpenId] = useState(null)
   const opened = feed.find((post) => post.id === openId)
 
@@ -22,7 +22,7 @@ export default function MyFeed({ storeName, feed = [], onClearFeed, onGoTo }) {
       {opened && <FeedPostView key={opened.id} post={opened} storeName={storeName} onClose={() => setOpenId(null)} />}
 
       <div className="card profile">
-        <ProfileHead storeName={storeName} count={feed.length} />
+        <ProfileHead storeName={storeName} bio={storeBio} count={feed.length} />
         {feed.length > 0 ? (
           <FeedGrid posts={feed} onOpen={(post) => setOpenId(post.id)} />
         ) : (

@@ -5,14 +5,14 @@ import { useEffect, useRef, useState } from 'react'
 
 const KIND_LABELS = { product: '제품 소개', usage: '활용 예시' }
 
-// 프로필 위쪽: 로고, 가게 이름, 소개글, 게시물 수
-export function ProfileHead({ storeName, count }) {
+// 프로필 위쪽: 로고, 가게 이름, 소개글(없으면 숨김), 게시물 수
+export function ProfileHead({ storeName, bio, count }) {
   return (
     <header className="profile-head">
       <span className="avatar large">로고</span>
       <div>
         <strong>{storeName}</strong>
-        <p className="hint">[프로필 소개글]</p>
+        {bio && <p className="profile-bio">{bio}</p>}
         {count !== undefined && <p className="profile-count">게시물 {count}</p>}
       </div>
     </header>

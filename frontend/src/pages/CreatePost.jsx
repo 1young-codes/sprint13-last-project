@@ -12,8 +12,8 @@ import { postProgress } from '../postProgress.js'
 // 이 파일은 컴퓨터 화면의 "모양"만 맡는다. 입력 검사, 상태 묻기, 사진 빼기 같은 동작은
 // hooks/useCreatePost.js에 있어서, 휴대폰 전용 화면을 만들어도 그대로 쓸 수 있다.
 //   storeName: 게시글 위쪽과 가게 프로필에 나오는 이름 (가게 설정에서 넣는다)
-//   feed: 게시한 게시글 목록, onPublished(feed): 게시해서 피드가 바뀌었을 때, onGoTo(tab): 다른 탭으로
-export default function CreatePost({ storeName, feed = [], onPublished, onGoTo }) {
+//   storeBio: 가게 프로필의 한 줄 소개, feed: 게시한 게시글 목록, onPublished(feed): 게시해서 피드가 바뀌었을 때, onGoTo(tab): 다른 탭으로
+export default function CreatePost({ storeName, storeBio, feed = [], onPublished, onGoTo }) {
   const {
     step,
     photoUrl,
@@ -132,7 +132,7 @@ export default function CreatePost({ storeName, feed = [], onPublished, onGoTo }
       )}
 
       {step === 2 && job?.status === 'ready' && (
-        <PublishedStep storeName={storeName} feed={feed} onMore={restart} onGoTo={onGoTo} />
+        <PublishedStep storeName={storeName} storeBio={storeBio} feed={feed} onMore={restart} onGoTo={onGoTo} />
       )}
     </section>
   )
@@ -203,7 +203,7 @@ function ResultStep({ job, storeName, excluded, onToggle, onBack, publishing, on
 // 게시 뒤: 방금 올린 2개에 "새 게시물" 표시, 그 뒤에 예전 게시글이 이어진다 (최대 4개 더)
 const PREVIOUS_SHOWN = 4
 
-function PublishedStep({ storeName, feed, onMore, onGoTo }) {
+function PublishedStep({ storeName, storeBio, feed, onMore, onGoTo }) {
   const shown = feed.slice(0, 2 + PREVIOUS_SHOWN)
 
   return (
@@ -214,7 +214,7 @@ function PublishedStep({ storeName, feed, onMore, onGoTo }) {
       </div>
 
       <div className="card profile">
-        <ProfileHead storeName={storeName} count={feed.length} />
+        <ProfileHead storeName={storeName} bio={storeBio} count={feed.length} />
         <FeedGrid
           posts={shown}
           newCount={2}

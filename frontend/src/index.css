@@ -610,6 +610,11 @@ input[type='text'] {
   color: var(--accent);
 }
 
+.profile-bio {
+  font-size: 14px;
+  white-space: pre-line;
+}
+
 .profile-count {
   font-size: 13px;
   font-weight: 600;
