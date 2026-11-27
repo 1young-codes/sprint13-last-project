@@ -2,6 +2,7 @@ import Stepper from '../components/Stepper.jsx'
 import PhotoDrop from '../components/PhotoDrop.jsx'
 import PostCard from '../components/PostCard.jsx'
 import AnglePicker from '../components/AnglePicker.jsx'
+import { FeedGrid, ProfileHead } from '../components/Feed.jsx'
 import { USE_SAMPLE } from '../api/postApi.js'
 import { estimateMinutes } from '../anglePresets.js'
 import { useCreatePost } from '../hooks/useCreatePost.js'
@@ -11,7 +12,8 @@ import { postProgress } from '../postProgress.js'
 // 이 파일은 컴퓨터 화면의 "모양"만 맡는다. 입력 검사, 상태 묻기, 사진 빼기 같은 동작은
 // hooks/useCreatePost.js에 있어서, 휴대폰 전용 화면을 만들어도 그대로 쓸 수 있다.
 //   storeName: 게시글 위쪽과 가게 프로필에 나오는 이름 (가게 설정에서 넣는다)
-export default function CreatePost({ storeName }) {
+//   feed: 게시한 게시글 목록, onPublished(feed): 게시해서 피드가 바뀌었을 때, onGoTo(tab): 다른 탭으로
+export default function CreatePost({ storeName, feed = [], onPublished, onGoTo }) {
   const {
     step,
     photoUrl,
@@ -30,9 +32,10 @@ export default function CreatePost({ storeName }) {
     excluded,
     toggleSlide,
     backToInput,
+    publishing,
     publish,
     restart,
-  } = useCreatePost()
+  } = useCreatePost({ onPublished })
 
   return (
     <section className="page">
@@ -123,18 +126,19 @@ export default function CreatePost({ storeName }) {
           excluded={excluded}
           onToggle={toggleSlide}
           onBack={backToInput}
+          publishing={publishing}
           onPublish={publish}
         />
       )}
 
       {step === 2 && job?.status === 'ready' && (
-        <PublishedStep job={job} storeName={storeName} excluded={excluded} onMore={restart} />
+        <PublishedStep storeName={storeName} feed={feed} onMore={restart} onGoTo={onGoTo} />
       )}
     </section>
   )
 }
 
-function ResultStep({ job, storeName, excluded, onToggle, onBack, onPublish }) {
+function ResultStep({ job, storeName, excluded, onToggle, onBack, publishing, onPublish }) {
   const { waiting, ready, product, requested, pendingAngles, chosen, statusText } = postProgress(job, excluded)
 
   return (
@@ -188,14 +192,19 @@ function ResultStep({ job, storeName, excluded, onToggle, onBack, onPublish }) {
       )}
       <div className="footer">
         <button type="button" className="secondary" onClick={onBack}>이전</button>
-        <button type="button" className="primary" disabled={!ready || chosen.length === 0} onClick={onPublish}>게시</button>
+        <button type="button" className="primary" disabled={!ready || chosen.length === 0 || publishing} onClick={onPublish}>
+          {publishing ? '올리는 중…' : '게시'}
+        </button>
       </div>
     </>
   )
 }
 
-function PublishedStep({ job, storeName, excluded, onMore }) {
-  const { chosen } = postProgress(job, excluded)
+// 게시 뒤: 방금 올린 2개에 "새 게시물" 표시, 그 뒤에 예전 게시글이 이어진다 (최대 4개 더)
+const PREVIOUS_SHOWN = 4
+
+function PublishedStep({ storeName, feed, onMore, onGoTo }) {
+  const shown = feed.slice(0, 2 + PREVIOUS_SHOWN)
 
   return (
     <>
@@ -205,36 +214,29 @@ function PublishedStep({ job, storeName, excluded, onMore }) {
       </div>
 
       <div className="card profile">
-        <header className="profile-head">
-          <span className="avatar large">로고</span>
-          <div>
-            <strong>{storeName}</strong>
-            <p className="hint">[프로필 소개글]</p>
-          </div>
-        </header>
-        <div className="grid">
-          <FeedTile label="제품 소개" url={chosen[0]?.url} count={chosen.length} />
-          <FeedTile label="활용 예시" url={job.usage_example.image_url} />
-          <div className="tile empty">다음 게시글이 여기에 쌓입니다</div>
-        </div>
+        <ProfileHead storeName={storeName} count={feed.length} />
+        <FeedGrid
+          posts={shown}
+          newCount={2}
+          tail={
+            feed.length > shown.length ? (
+              <button type="button" className="tile empty tile-button" onClick={() => onGoTo?.('feed')}>
+                내 피드에서 {feed.length - shown.length}개 더 보기
+              </button>
+            ) : (
+              <div className="tile empty">다음 게시글이 여기에 쌓입니다</div>
+            )
+          }
+        />
       </div>
 
       <div className="footer end">
         <button type="button" className="secondary" disabled title="인스타그램 연동 여부가 정해지면 연결합니다">
           인스타그램에서 확인하기
         </button>
+        <button type="button" className="secondary" onClick={() => onGoTo?.('feed')}>내 피드 보기</button>
         <button type="button" className="primary" onClick={onMore}>게시글 더 만들기</button>
       </div>
     </>
-  )
-}
-
-function FeedTile({ label, url, count = 1 }) {
-  return (
-    <div className="tile">
-      <span className="tile-badge">새 게시물</span>
-      {count > 1 && <span className="tile-many" title={`사진 ${count}장`}>⧉ {count}</span>}
-      {url ? <img src={url} alt={label} /> : <span>[{label} 사진]</span>}
-    </div>
   )
 }

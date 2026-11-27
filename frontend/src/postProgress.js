@@ -17,7 +17,8 @@ export function postProgress(job, excluded = []) {
   if (job.status === 'queued') {
     statusText = job.queue_position > 0 ? `순서를 기다리는 중입니다 (앞에 ${job.queue_position}개)` : '순서를 기다리는 중입니다'
   } else if (product && pendingAngles.length > 0) {
-    statusText = `각도 사진을 만드는 중입니다 (${finished} / ${requested.length})`
+    // 괄호 안 숫자는 줄이 바뀌어도 함께 다니게 띄어쓰기 대신 줄바꿈 없는 빈칸(\u00a0)을 쓴다
+    statusText = `각도 사진을 만드는 중입니다 (${finished}\u00a0/\u00a0${requested.length})`
   } else if (product) {
     statusText = '문구와 해시태그를 만드는 중입니다'
   }

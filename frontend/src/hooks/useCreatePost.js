@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
 import { createPostJob, getPostJob, POLL_MS } from '../api/postApi.js'
+import { publishPosts } from '../api/feedApi.js'
+import { postProgress } from '../postProgress.js'
 
 // 게시글 만들기의 "동작"만 모은 곳. 화면 모양은 들어 있지 않다.
 // 컴퓨터 화면(pages/CreatePost.jsx)과 나중에 만들 휴대폰 전용 화면이 이것을 같이 쓴다.
 //
 // 흐름: ① 입력 → start() → ② 결과 (2초마다 상태를 묻는다) → publish() → ③ 게시 → restart()
+//   onPublished(feed): 게시해서 피드가 바뀌었을 때 새 피드 목록을 받는다
 
 // 문구 생성 함수(유진님, generate_product_captions)가 받는 값과 같은 칸
 export const EMPTY_FORM = { productName: '', unit: '', price: '', usageExample: '', notes: '' }
@@ -28,7 +31,7 @@ export function missingFields(photo, form) {
   ].filter(Boolean)
 }
 
-export function useCreatePost() {
+export function useCreatePost({ onPublished } = {}) {
   const [step, setStep] = useState(0) // 0 입력, 1 결과, 2 게시
   const [photo, setPhoto] = useState(null)
   const [photoUrl, setPhotoUrl] = useState('')
@@ -38,6 +41,7 @@ export function useCreatePost() {
   const [excluded, setExcluded] = useState([]) // 결과에서 체크를 꺼서 뺀 사진 key 목록
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('') // 서버가 돌려준 한국어 문장
+  const [publishing, setPublishing] = useState(false)
 
   // 사진이 바뀌면 미리보기 주소를 새로 만들고, 이전 주소는 정리한다.
   function changePhoto(file) {
@@ -92,6 +96,24 @@ export function useCreatePost() {
     setExcluded((prev) => (prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key]))
   }
 
+  // 고른 사진과 문구를 피드에 올리고 ③ 게시로 넘어간다.
+  async function publish() {
+    setPublishing(true)
+    try {
+      const { chosen } = postProgress(job, excluded)
+      const feed = await publishPosts({
+        productName: form.productName.trim(),
+        productImages: chosen.map((slide) => slide.url),
+        product: job.product_photo,
+        usage: job.usage_example,
+      })
+      onPublished?.(feed)
+      setStep(2)
+    } finally {
+      setPublishing(false)
+    }
+  }
+
   function restart() {
     changePhoto(null)
     setForm(EMPTY_FORM)
@@ -122,7 +144,8 @@ export function useCreatePost() {
     excluded,
     toggleSlide,
     backToInput: () => setStep(0),
-    publish: () => setStep(2),
+    publishing,
+    publish,
     // ③ 게시
     restart,
   }

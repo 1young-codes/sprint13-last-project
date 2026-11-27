@@ -6,6 +6,7 @@ import CreatePost from './pages/CreatePost.jsx'
 import MyFeed from './pages/MyFeed.jsx'
 import { connectInstagram, disconnectInstagram, loadAccount } from './api/authApi.js'
 import { loadStore, saveStore } from './api/storeApi.js'
+import { clearFeed, loadFeed } from './api/feedApi.js'
 
 // 계정을 연결한 뒤 보이는 위쪽 탭 3개. 순서대로 보여준다.
 const TABS = [
@@ -19,6 +20,7 @@ export default function App() {
   const [showGuide, setShowGuide] = useState(false) // 계정 만드는 방법 화면을 보고 있는지
   const [connecting, setConnecting] = useState(false)
   const [store, setStore] = useState(loadStore) // 가게 정보 (가게 이름 등)
+  const [feed, setFeed] = useState(loadFeed) // 게시한 게시글 목록 (최신이 앞)
   const [current, setCurrent] = useState('post')
 
   async function connect() {
@@ -89,7 +91,15 @@ export default function App() {
         </span>
       </header>
       <main className="content">
-        <Page store={store} onSave={changeStore} storeName={storeName} />
+        <Page
+          store={store}
+          onSave={changeStore}
+          storeName={storeName}
+          feed={feed}
+          onPublished={setFeed}
+          onClearFeed={() => setFeed(clearFeed())}
+          onGoTo={setCurrent}
+        />
       </main>
     </div>
   )
