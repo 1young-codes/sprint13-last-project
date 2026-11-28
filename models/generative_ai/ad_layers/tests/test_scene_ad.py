@@ -164,12 +164,13 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             assert weights is None and strength == 0
 
         def edit(self, reference, prompt, seed, steps, *, size):
-            assert size == (512, 1024)
             if repair_scene_message and "ad_photo_cue_check" in calls:
-                assert reference.size == size and reference.getpixel((0, 0)) == (128, 128, 128)
+                assert size == reference.size and max(size) == 576
+                assert reference.getpixel((0, 0)) == (0, 0, 255)
                 assert scene_correction in prompt and scene_cue in prompt and "Visible destination" not in prompt
-                calls.append("qwen")
-                return Image.new("RGB", size, "blue")
+                calls.append("qwen-retouch")
+                return Image.new("RGB", size, "magenta")
+            assert size == (512, 1024)
             if bad_background_shots and "ad_photo_cue_check" in calls:
                 assert prompt.startswith("Priority reshoot correction.")
                 assert cleaner_scene in prompt and "Use only the named scene elements" in prompt
@@ -226,9 +227,16 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 if repair_scene_message and "ad_photo_cue_check" not in calls:
                     return json.dumps({"message_supported": False, "message_observation": "램프가 보이지 않습니다.",
                                        "correction": scene_correction, "corrected_photo_cue": scene_cue,
-                                       "repair_kind": "scene", "reposition": False})
+                                       "repair_kind": "scene", "reposition": False, "repair_box": [50, 0, 30, 30]})
                 return '{"message_supported":true,"message_observation":"사진에 아침빛이 보입니다"}'
             calls.append(step)
+            if step == "ad_photo_patch_check":
+                before, after, close = images
+                assert np.array_equal(before[307:], after[307:])
+                assert np.array_equal(before[:, :256], after[:, :256])
+                assert np.array_equal(before[:, 410:], after[:, 410:])
+                assert np.array_equal(close[0, 60], [1, 0, 1])
+                return '{"accepted":true,"observation":"새 조명이 주변과 자연스럽게 이어집니다"}'
             if step == "ad_plan":
                 return '{"message":"아침에 쓰는 세럼", "evidence":"입력 상품 정보"}'
             if step == "ad_direction":
@@ -428,7 +436,8 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     repair_scene_message = True
     calls.clear()
     corrected_scene = scene_ad.make_scene_ad(photo, fields, "", models, tmp_path / "scene-corrected", proposal=layout)
-    assert calls == ["render", "qwen", "ad_photo_cue_check", "qwen", "ad_photo_cue_check", "ad_photo_regions"]
+    assert calls == ["render", "qwen", "ad_photo_cue_check", "qwen-retouch", "ad_photo_cue_check",
+                     "ad_photo_patch_check", "ad_photo_regions"]
     assert [check["message_supported"] for check in corrected_scene["photo_cue_checks"]] == [False, True]
     assert corrected_scene["photo_cue"] == scene_cue and corrected_scene["texts"] == layout["texts"]
     repair_scene_message = False

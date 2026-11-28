@@ -5,10 +5,10 @@ import shutil
 from tempfile import TemporaryDirectory
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageOps
+from PIL import Image, ImageOps
 
 from .creative_brief import TEXT_ROLES, ask_stage, required_text, validate_boxes
-from .layers import compose, load_layout, load_settings, save_layout, to_float
+from .layers import compose, load_layout, load_settings, paste_region, save_layout, to_float
 from .scene_ad import (check_text_overlap, check_type_margin, find_photo_regions, layout_texts, pixel_box,
                        protected_photo_regions, rendered_text_bounds, review_finished, tighten_text_groups)
 from .staging import padded_box, staged_evidence
@@ -84,18 +84,6 @@ def change_region(stage, layout, arguments, generation):
     candidate = ImageOps.fit(candidate.convert("RGBA"), scene.size, Image.Resampling.LANCZOS)
     paste_region(scene, candidate.crop(bounds), bounds)
     scene.save(path)
-
-
-def paste_region(scene, patch, bounds):
-    margin = min(patch.size) // 12
-    blend = Image.new("L", patch.size)
-    ImageDraw.Draw(blend).rectangle((margin, margin, patch.width - margin - 1, patch.height - margin - 1), fill=255)
-    if margin:
-        blend = blend.filter(ImageFilter.GaussianBlur(margin / 2))
-    # 사진 외곽을 합성할 때 쓰는 기존 투명도는 유지합니다.
-    alpha = scene.getchannel("A")
-    scene.paste(patch, bounds[:2], blend)
-    scene.putalpha(alpha)
 
 
 REPAIR_DETAIL = """Plan one local photo retouch. Image one is the real item. Image two shows the photographed

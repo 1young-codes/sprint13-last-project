@@ -15,7 +15,7 @@ from functools import cache
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageChops, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_DIR.parents[2]
@@ -25,6 +25,21 @@ PROJECT_ROOT = PACKAGE_DIR.parents[2]
 def load_settings() -> dict:
     with open(PACKAGE_DIR / "settings.toml", "rb") as file:
         return tomllib.load(file)
+
+
+def paste_region(scene, patch, bounds):
+    left, top, right, bottom = bounds
+    margin = min(patch.size) // 12
+    blend = Image.new("L", patch.size)
+    ImageDraw.Draw(blend).rectangle((margin if left else 0, margin if top else 0,
+                                    patch.width - 1 - (margin if right < scene.width else 0),
+                                    patch.height - 1 - (margin if bottom < scene.height else 0)), fill=255)
+    if margin:
+        blend = blend.filter(ImageFilter.GaussianBlur(margin / 2))
+    alpha = scene.getchannel("A") if scene.mode == "RGBA" else None
+    scene.paste(patch, (left, top), blend)
+    if alpha is not None:
+        scene.putalpha(alpha)
 
 
 def to_float(image: Image.Image) -> np.ndarray:
