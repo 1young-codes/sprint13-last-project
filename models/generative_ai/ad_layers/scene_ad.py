@@ -15,8 +15,8 @@ from .art_direction import ANGLES, LIGHTING, SHOT_SCALES, THEMES, plan_art_direc
 from .creative_brief import LAYOUT_ROLES, MAX_HEADLINE_LENGTH, TEXT_ROLES, ask_stage, plan_copy, required_text, validate_boxes
 from .layers import compose, cutout_product, load_layout, load_settings, paste_region, save_layout, to_float
 from .staging import on_gray, padded_box, source_parts, stage_group, stage_subject
-from .text_render import minimum_font_size, render_texts
-from .type_contrast import ink_background, legible_tone, readable_offer_colors, readable_text_colors
+from .text_render import fitted_text_sizes, minimum_font_size, render_texts
+from .type_contrast import ink_background, legible_tone, readable_headline_colors, readable_offer_colors, readable_text_colors
 from .viewpoint import available_viewpoints, camera_view, place_camera_view
 
 
@@ -1636,6 +1636,92 @@ def review_related_offer(ai, design, layout, foreground, folder):
     return design, layout, None
 
 
+HEADLINE_SCALE_COMPARE = """같은 사진과 문구로 만든 휴대폰 크기 광고가 option_order 순서로 보입니다.
+제목의 시각적 비중만 비교하세요. 제목이 상품명과 가격에 묻히지 않고 사진의 실제 특징으로 시선을 이끌며,
+두 줄은 한 문구로 자연스럽게 읽혀야 합니다. 글자가 커져도 화면 끝이나 상품 윤곽에 달라붙으면 고르지 마세요.
+사진과 판매 정보의 자리는 같습니다. 기존이 더 균형 잡혔으면 original을 고르세요.
+choice(보기의 키)와 실제로 보이는 차이를 한국어로 설명한 reason을 JSON으로 반환하세요."""
+
+
+def review_headline_scale(ai, design, layout, foreground, folder, fonts):
+    if design.get("focus") != "headline" or design.get("accent") or layout.get("graphic"):
+        return design, layout, None
+    title = next(text for text in layout["texts"] if text["role"] == "headline")
+    lines = title.get("lines", [title])
+    if any(line.get("depth") == "behind_subject" or line["max_lines"] != 1 for line in lines):
+        return design, layout, None
+    ink = rendered_text_bounds(layout, folder, pixels=True)
+    roles = [line["role"] for line in lines]
+    if not {*roles, "product_name", "price"} <= ink.keys():
+        return design, layout, None
+    heights = {role: box[3] - box[1] for role, box in ink.items()}
+    width, height = size = tuple(layout["size"])
+    phone = (360, 640)
+    display_scale = min(phone[0] / width, phone[1] / height)
+    tallest = max(heights[role] for role in roles)
+    target = max(16 / display_scale, 1.2 * max(heights["product_name"], heights["price"]))
+    if tallest >= target:
+        return design, layout, None
+    try:
+        fitted = fitted_text_sizes(lines, size)
+    except ValueError:
+        return design, layout, None
+    style = design["styles"]["headline"]
+    first = compose(layout, folder)
+    backdrop = compose(layout | {"texts": []}, folder)
+    shared = [layout["background"]["file"], layout["artwork"]["file"],
+              *(text["file"] for text in layout["texts"] if text["role"] != "headline")]
+    growth = min(1.4, max(1.2, (target + 1) / tallest))
+    with TemporaryDirectory(dir=folder) as staging:
+        candidates = {}
+        pictures = [to_float(ImageOps.contain(first, phone, Image.Resampling.LANCZOS))]
+        for name, scale in (("larger", growth), ("stronger", min(1.5, growth * 1.12))):
+            scaled = {role: min(20, 100 * round(fitted[role] * scale) / width) for role in roles}
+            headline = style | {"size": max(scaled.values())}
+            if "lines" in style:
+                headline["lines"] = [row | {"size": scaled[role]}
+                                     for row, role in zip(style["lines"], roles, strict=True)]
+            plan = design | {"styles": design["styles"] | {"headline": headline}}
+            directory = Path(staging) / name
+            directory.mkdir()
+            for filename in shared:
+                copyfile(folder / filename, directory / filename)
+            try:
+                words = layout_texts(plan, {"headline": title["text"]}, size, fonts)
+                render_texts(words, size, directory)
+                revised = layout | {"texts": [words[0] if text is title else text for text in layout["texts"]]}
+                tighten_text_groups(foreground, revised, directory, {"headline": title["text"]})
+                check_text_overlap(foreground, revised, directory)
+                check_type_margin(size, rendered_text_bounds(revised, directory))
+                enlarged = rendered_text_bounds(revised, directory, pixels=True)
+                new_heights = [enlarged[role][3] - enlarged[role][1] for role in roles if role in enlarged]
+                if (len(new_heights) != len(roles) or max(new_heights) < max(tallest * 1.12, target)
+                        or max(new_heights) > min(size) * 0.14
+                        or any(new < heights[role] for new, role in zip(new_heights, roles, strict=True))):
+                    continue
+                unresolved = []
+                plan, revised = readable_headline_colors(plan, revised, backdrop, directory, foreground, unresolved,
+                                                         prefer_shared_tone=True)
+                if unresolved:
+                    continue
+            except ValueError:
+                continue
+            picture = to_float(ImageOps.contain(compose(revised, directory), phone, Image.Resampling.LANCZOS))
+            if not any(np.array_equal(picture, earlier) for earlier in pictures):
+                candidates[name] = plan, revised, directory
+                pictures.append(picture)
+        if candidates:
+            comparison = ask_stage(ai, "ad_headline_scale_compare", HEADLINE_SCALE_COMPARE,
+                                   {"option_order": ["original", *candidates], "headline": title["text"]}, pictures)
+            choice, reason = comparison.get("choice"), comparison.get("reason")
+            if isinstance(choice, str) and choice in candidates and isinstance(reason, str) and reason.strip():
+                plan, revised, directory = candidates[choice]
+                for line in lines:
+                    (directory / line["file"]).replace(folder / line["file"])
+                return plan, revised, reason
+    return design, layout, None
+
+
 def check_type_margin(size, ink):
     width, height = size
     clearance = min(size) / 40
@@ -2919,6 +3005,10 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                                                                   assess_visual_type=bool(art_plan and not proposal))
             answer, layout, offer_reason = review_crowded_offer(
                 ai, answer, layout, foreground, result, settings["fonts"])
+            answer, layout, headline_scale_reason = review_headline_scale(
+                ai, answer, layout, foreground, result, settings["fonts"])
+            if headline_scale_reason:
+                layout["headline_scale_review"] = headline_scale_reason
             answer, layout, related_offer_reason = review_related_offer(ai, answer, layout, foreground, result)
             if related_offer_reason:
                 layout["related_offer_review"] = related_offer_reason

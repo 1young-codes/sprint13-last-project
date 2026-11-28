@@ -1154,6 +1154,51 @@ def test_related_offer_moves_both_layers_without_changing_type_pixels(tmp_path, 
     assert [(tmp_path / layer["file"]).read_bytes() for layer in texts] == pixels
 
 
+@pytest.mark.parametrize("focus,blocked", [("headline", False), ("headline", True), ("price", False)])
+def test_headline_scale_keeps_the_original_photo_and_selling_information(tmp_path, monkeypatch, focus, blocked):
+    size = (200, 200)
+    fonts = ["noto_sans_kr"]
+    copy = {"headline": "저녁을 밝히는 빛", "product_name": "향초", "price": "18,000원"}
+    style = {"font": fonts[0], "align": "left", "color": "#FFFFFF", "size": 10, "max_lines": 1}
+    design = {"focus": focus, "boxes": {"headline": [15, 10, 60, 20], "product_name": [15, 47, 28, 14],
+                                        "price": [15, 64, 28, 14]},
+              "styles": {role: style.copy() for role in copy}}
+    texts = scene_ad.layout_texts(design, copy, size, fonts)
+
+    def draw(layer, path, bounds):
+        image = Image.new("RGBA", (layer["w"], layer["h"]))
+        image.paste("white", bounds)
+        image.save(path / layer["file"])
+
+    for text, bounds in zip(texts, ((1, 10, 54, 25), (1, 5, 41, 23), (1, 5, 51, 23)), strict=True):
+        draw(text, tmp_path, bounds)
+    for filename in ("background.png", "scene.png"):
+        Image.new("RGB", size, "#26201B").save(tmp_path / filename)
+    layout = {"size": list(size), "background": {"file": "background.png"}, "texts": texts,
+              "artwork": {"file": "scene.png", "x": 0, "y": 0, "w": 200, "h": 200}}
+    foreground = np.zeros(size, dtype=bool)
+    foreground[40, 100] = blocked
+    original = [(tmp_path / name).read_bytes() for name in ("scene.png", "text_product_name.png", "text_price.png")]
+
+    def render(words, size, folder):
+        assert len(words) == 1 and words[0]["max_font_size"] > texts[0]["max_font_size"]
+        draw(words[0], folder, (1, 6, 80, 30))
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            assert focus == "headline" and not blocked
+            assert step == "ad_headline_scale_compare" and len(images) == 2
+            return '{"choice":"larger","reason":"제목이 먼저 보입니다."}'
+
+    monkeypatch.setattr(scene_ad, "render_texts", render)
+    monkeypatch.setattr(scene_ad, "fitted_text_sizes", lambda *_: {"headline": 20})
+    revised, updated, reason = scene_ad.review_headline_scale(Agent(), design, layout, foreground, tmp_path, fonts)
+    assert bool(reason) == (focus == "headline" and not blocked)
+    assert revised["boxes"] == design["boxes"] and updated["texts"][1:] == texts[1:]
+    assert updated["texts"][0]["text"] == copy["headline"]
+    assert [(tmp_path / name).read_bytes() for name in ("scene.png", "text_product_name.png", "text_price.png")] == original
+
+
 def test_balanced_composition_keeps_line_edits_and_moderates_motion_toward_center():
     original = {"boxes": {"headline": [8, 10, 80, 16], "price": [8, 82, 20, 5]}}
     revised = {"boxes": {"headline": [8, 20, 80, 16], "price": [8, 74, 20, 5]},

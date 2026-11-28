@@ -14,7 +14,8 @@ from .format_layout import (format_measurements, format_type_hierarchy, measured
 from .layers import compose, load_layout, load_settings, save_layout, to_float
 from .scene_ad import (check_offer_spacing, check_text_overlap, check_type_margin, design_layers,
                        find_photo_regions, headline_breaks, make_scene_ad, photo_region_mask, pixel_box, rendered_text_bounds,
-                       review_crowded_offer, review_related_offer, tighten_text_groups, touches_photo_edge)
+                       review_crowded_offer, review_headline_scale, review_related_offer, tighten_text_groups,
+                       touches_photo_edge)
 from .staging import check_staged_identity
 from .studio_edits import edit_version, foreground_mask, line_break_after, repair_staged_detail
 from .text_render import LINE_HEIGHT, minimum_font_size
@@ -1093,9 +1094,12 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                 if contrast_issue:
                     revised, candidate, contrast_issue = readable_text_colors(revised, candidate, stage, foreground)
             related_offer_review = None
+            headline_scale_review = None
             if not contrast_issue:
+                revised, candidate, headline_scale_review = review_headline_scale(
+                    ai, revised, candidate, foreground, stage, fonts)
                 revised, candidate, related_offer_review = review_related_offer(ai, revised, candidate, foreground, stage)
-                if related_offer_review:
+                if headline_scale_review or related_offer_review:
                     ink = rendered_text_bounds(candidate, stage)
             poster = compose(candidate, stage)
             phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
@@ -1139,6 +1143,8 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                 (stage / "before-offer-reflow.png").unlink(missing_ok=True)
             if related_offer_review:
                 candidate["related_offer_review"] = related_offer_review
+            if headline_scale_review:
+                candidate["headline_scale_review"] = headline_scale_review
             if "art_direction_plan" in layout:
                 candidate["art_direction_plan"] = layout["art_direction_plan"]
             if "photo_cue" in layout:
