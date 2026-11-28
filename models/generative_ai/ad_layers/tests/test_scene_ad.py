@@ -10,6 +10,41 @@ from models.generative_ai.ad_layers.text_render import page_html
 from models.generative_ai.photo_retouch import product_mask
 
 
+@pytest.mark.parametrize("choice", ["cleaned", "original"])
+def test_photo_cleanup_preserves_action_support_and_compares_actual_repair(monkeypatch, choice):
+    from models.generative_ai.photo_retouch import cleanup
+
+    scene = Image.new("RGB", (100, 100), "#957a46")
+    foreground = np.zeros((100, 100), dtype=bool)
+    foreground[40:60, 40:60] = True
+    regions = [{"part": "잡고 있는 손", "points": [[65, 5], [85, 5], [85, 20], [65, 20]]}]
+    distractions = [{"box": [70, 9, 5, 5], "observation": "손에 닿은 모양"},
+                    {"box": [0, 30, 6, 10], "observation": "왼쪽에 잘린 장식"}]
+
+    def remove(model, original, repairs, subject, rule):
+        assert subject[10, 75] and subject[45, 45]
+        assert repairs == [{"box": [0, 300, 60, 400], "label": "왼쪽에 잘린 장식"}]
+        cleaned = original.copy()
+        cleaned[30:40, :6] = 0.5
+        return cleaned, [repairs[0]["label"]]
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            assert step == "ad_photo_cleanup_compare" and len(images) == 4
+            assert not np.array_equal(images[0], images[1]) and not np.array_equal(images[2], images[3])
+            return json.dumps({"choice": choice, "reason": "장면을 실제로 보았습니다."})
+
+    monkeypatch.setattr(cleanup, "load_inpaint_model", object)
+    monkeypatch.setattr(cleanup, "remove_distractions", remove)
+    photo, result = scene_ad.clean_photo_distractions(Agent(), scene, foreground, regions, distractions, "제품 쓰임")
+    if choice == "cleaned":
+        assert result["removed"] == ["왼쪽에 잘린 장식"]
+        assert photo.getpixel((2, 35)) != scene.getpixel((2, 35))
+    else:
+        assert result is None and photo is scene
+    assert photo.getpixel((75, 10)) == scene.getpixel((75, 10))
+
+
 def test_continuous_photo_exposes_the_scene_beneath_a_full_offer_panel():
     design = {"edge": "blend", "crop": "preserve", "artwork_box": [0, 0, 65, 100],
               "subject_box": [10, 15, 80, 70], "accent": {"box": [65, 20, 35, 60], "shape": "rectangle"}}

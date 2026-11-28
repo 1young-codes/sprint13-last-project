@@ -281,6 +281,13 @@ or blurred marks on props touching the edges. Compare the original image before 
 lettering already visible in it. Always return stray_writing, with null if absent or an object with observation
 (Korean) and box [left, top, width, height] in whole percentages of the full rendered photograph (image two).
 Cover only the visible mark and keep its box within that image.
+Return distractions as an array of up to two compact background objects that compete with the product or the
+planned lettering area without supporting the message. Look for unintended duplicates or isolated cut-off
+fragments with a strong edge or highlight. If two such objects are visible, box each one separately. Keep the
+props that establish the setting or make the advertised use readable. Never list the sold item, its container,
+supporting hands or tools needed for the action, cast shadows, or the supporting surface. Use an empty array when
+there is no dispensable distraction. Each item has observation (Korean) and box in the same coordinates as
+stray_writing. Describe the specific object and why it draws attention.
 Verify photo_cue from the actual pixels in the second image when supplied. If it is null, set visible to true
 and describe the visible arrangement without requiring a specific effect. For a gesture or motion, locate
 the two relevant points and check their relative positions and direction. For light or material, locate the
@@ -293,6 +300,15 @@ otherwise null). In those cases,
 also return reposition (boolean, true when the correction must change the relative position or orientation
 of product parts). Correct the failed findings while keeping anything that already works. Describe a physically
 complete arrangement when repositioning. Preserve the intended product scale and quiet area for lettering."""
+
+PHOTO_CLEANUP_COMPARE = """Compare the same photograph before and after a local cleanup. Use distractions to
+locate the changed areas. The first two images show the whole photograph before and after. Each following pair
+shows one changed area before and after at the same scale. Judge the specific marked object there. A different
+object outside that area may still belong to the scene. Choose cleaned only if the unintended objects are gone or less distracting and the
+surface, shadows, and edges still look naturally continuous. Look for obvious smears, repeats, or ghost outlines.
+Preserve the advertised subject, supporting objects, and the photographic evidence for the message. Keep original
+if the edit removes something meaningful or introduces a new defect. Return choice (original or cleaned) and
+reason (a concrete Korean sentence about the visible result)."""
 
 FORMAT_STAGING = """The first image is the source product, the second the approved campaign, and the
 third the isolated original product. Choose whether to physically move one already visible, independently
@@ -519,6 +535,54 @@ def remove_photo_writing(scene, foreground, mark):
     region = {"box": [10 * value for value in (x, y, x + width, y + height)], "label": "writing"}
     cleaned, removed = remove_distractions(model, to_float(scene), [region], foreground, rule)
     return Image.fromarray(np.rint(255 * cleaned).astype(np.uint8)) if removed else None
+
+
+def clean_photo_distractions(ai, scene, foreground, photo_regions, distractions, message):
+    from scipy.ndimage import binary_dilation
+    from ..photo_retouch.cleanup import box_pixels, load_inpaint_model, remove_distractions
+    from ..photo_retouch.settings import load_settings as retouch_settings
+
+    if not isinstance(distractions, list) or not 1 <= len(distractions) <= 2:
+        return scene, None
+    rule = retouch_settings()["cleanup"]
+    protected = foreground | photo_region_mask(photo_regions, scene.size)
+    keep = binary_dilation(protected, iterations=rule["subject_margin_px"])
+    width, height = scene.size
+    repairs = []
+    for item in distractions:
+        if not isinstance(item, dict):
+            continue
+        try:
+            label = required_text(item, "observation", "사진의 배경 소품 검토")
+            x, y, w, h = validate_boxes({"object": item.get("box")}, ("object",))["object"]
+        except ValueError:
+            continue
+        box = [10 * value for value in (x, y, x + w, y + h)]
+        left, top, right, bottom = box_pixels(box, width, height, rule["box_padding"])
+        if (right - left) * (bottom - top) > rule["max_box_share"] * width * height:
+            continue
+        if not keep[top:bottom, left:right].any():
+            repairs.append({"box": box, "label": label})
+    if not repairs:
+        return scene, None
+    try:
+        model = load_inpaint_model()
+    except FileNotFoundError:
+        return scene, None
+    original = to_float(scene)
+    cleaned, removed = remove_distractions(model, original, repairs, protected, rule)
+    if not removed:
+        return scene, None
+    details = []
+    for repair in repairs:
+        left, top, right, bottom = box_pixels(repair["box"], width, height, 0.5)
+        details.extend((original[top:bottom, left:right], cleaned[top:bottom, left:right]))
+    review = ask_stage(ai, "ad_photo_cleanup_compare", PHOTO_CLEANUP_COMPARE,
+                       {"distractions": repairs, "message": message}, [original, cleaned, *details])
+    reason = review.get("reason")
+    if review.get("choice") != "cleaned" or not isinstance(reason, str) or not reason.strip():
+        return scene, None
+    return Image.fromarray(np.rint(255 * cleaned).astype(np.uint8)), {"removed": removed, "reason": reason}
 
 
 def choose_source_framing(ai, product, inputs, images):
@@ -1830,7 +1894,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 # Check the observable motion from the reshoot without requiring the draft's exact grip or instant.
                 photo_inputs = {"photo_cue": seen if reshot_action else photo_cue,
                                 "has_approved_detail": approved_detail is not None,
-                                "crop": answer["crop"], "product_facts": fields}
+                                "crop": answer["crop"], "product_facts": fields, "message": brief.get("message"),
+                                "art_direction": answer["art_direction"]}
                 proof = [images[0], picture, *([to_float(approved_detail)] if approved_detail else []),
                          *photo_review_details(candidate)]
                 check = ask_stage(ai, "ad_photo_cue_check", PHOTO_CUE_CHECK, photo_inputs, proof)
@@ -1911,6 +1976,13 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                     prompt = f"Priority reshoot correction, replacing any conflicting placement instruction: {correction} {prompt}"
             if foreground is None:
                 foreground = find_foreground(scene, models["mask"], threshold)
+            distractions = check.get("distractions")
+            if isinstance(distractions, list) and 1 <= len(distractions) <= 2:
+                layout["photo_regions"] = find_photo_regions(ai, scene, photo_cue)
+                scene, cleanup = clean_photo_distractions(ai, scene, foreground, layout["photo_regions"],
+                                                          distractions, brief.get("message"))
+                if cleanup:
+                    photo_checks[-1]["cleanup"] = cleanup
             if answer["edge"] == "blend":
                 scene = blend_edges(scene, foreground, position=(artwork["x"], artwork["y"]), canvas_size=size)
             scene.save(result / artwork["file"])
