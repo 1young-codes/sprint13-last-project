@@ -190,6 +190,8 @@ def position_options(layout, size, foreground, product_bounds, measurement, *, f
 
     options = {}
 
+    group_alignment = {"left": 0, "center": 0.5, "right": 1}[title["align"]]
+
     def add(name, heading, offer, *, stack=stacked_offer):
         if not heading or not offer:
             return
@@ -197,6 +199,9 @@ def position_options(layout, size, foreground, product_bounds, measurement, *, f
         ox, oy = offer
         if stack:
             px, py = ox, oy + name_h + row_gap
+            stack_w = max(name_w, price_w)
+            ox += round((stack_w - name_w) * group_alignment)
+            px += round((stack_w - price_w) * group_alignment)
         else:
             px, py = ox + name_w + 1, oy + (offer_h - price_h) // 2
             oy += (offer_h - name_h) // 2
@@ -217,14 +222,25 @@ def position_options(layout, size, foreground, product_bounds, measurement, *, f
                           y_limits=(bottom + row_gap, 100))
     add("headline_above_offer_below", heading, offer)
 
-    if heading:
+    if heading and height > width:
+        x, y = heading
+        start = y + header_h + group_gap
+        offers = [("offer_stacked_under_headline", max(name_w, price_w), name_h + row_gap + price_h, True)]
+        if not stacked_offer:
+            offers.insert(0, ("offer_under_headline", offer_w, offer_h, False))
+        for name, w, h, stack in offers:
+            aligned_x = round(x + (header_w - w) * group_alignment)
+            nearby = free_position(integral, size, (w, h), (aligned_x, start),
+                                   x_limits=(aligned_x, aligned_x + w),
+                                   y_limits=(start, min(upper_half, start + h + group_gap)))
+            add(name, heading, nearby, stack=stack)
+    elif heading:
         x, y = heading
         nearby = free_position(integral, size, (offer_w, offer_h), (x, y + header_h + group_gap),
                                y_limits=(y, upper_half), avoid=(x, y, header_w, header_h))
         add("headline_with_nearby_offer", heading, nearby)
 
     column = (max(header_w, offer_w), header_h + group_gap + offer_h)
-    group_alignment = {"left": 0, "center": 0.5, "right": 1}[title["align"]]
     approved_near = (
         approved_x + (approved_width - column[0]) * group_alignment,
         approved_y + (approved_height - header_h) / 2,

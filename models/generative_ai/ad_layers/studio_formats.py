@@ -79,6 +79,9 @@ as a percentage of the new canvas width. Group the product name and price. Keep 
 secondary unless approved_design.focus is price.
 Read the new photo before choosing positions. In a tall canvas, do not separate title and product with a wide
 unused stretch of background. Place the nearest title line beside or near the feature in the actual framing.
+When a multi-line title is above the product in a tall canvas, keep the sale information on the title's
+alignment below its last line, or put it in a clear area by the product. Do not append it at the end of a title
+line just because the rectangles fit. The title should read as a single phrase before the sale information.
 In a wide canvas with no clear footer, keep the product name and price beside the headline or the product.
 When intent is provided, address that visible problem on the new photo without rewriting copy.
 In a same-size repair, preserve the approved type's reading order and legibility. When the focal feature is
@@ -131,7 +134,9 @@ glyphs and makes them look attached to the product contour, even when every lett
 purposeful intersection can work when headline_behind_subject is true and the entire line still reads cleanly.
 A large empty band between the title and subject, with no visible photographic cue
 across it, breaks the reading path. A pair of title lines needs to read as one phrase before the viewer reaches
-the product. Also use outer_margins to inspect the actual space outside the product and all the lettering.
+the product. In portrait, check whether the offer accidentally reads as the continuation of a title line.
+A close horizontal gap on the same line can create that effect even when the masks do not overlap.
+Also use outer_margins to inspect the actual space outside the product and all the lettering.
 An offer stranded apart from the headline and advertised detail is a layout defect even when every word is
 legible by itself. Give the specific gap or missing visual connection in the observation.
 If intent describes a same-size repair, check that the photographed feature is more legible and the
@@ -1115,17 +1120,14 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
             with TemporaryDirectory(dir=stage) as temporary:
                 folder = Path(temporary)
                 for name in list(placements)[:3]:
-                    if wrapped in placements:
-                        try:
-                            plan, candidate, _, _ = render_placement({"placement": name}, folder)
-                        except ValueError:
-                            continue
-                        framing.save(folder / candidate["artwork"]["file"])
-                        framing_mask.save(folder / "foreground.png")
-                        _, candidate, _ = readable_text_colors(plan, candidate, folder, foreground)
-                        preview = compose(candidate, folder)
-                    else:
-                        preview = preview_placement(framing, layout, source, placements[name])
+                    try:
+                        plan, candidate, _, _ = render_placement({"placement": name}, folder)
+                    except ValueError:
+                        continue
+                    framing.save(folder / candidate["artwork"]["file"])
+                    framing_mask.save(folder / "foreground.png")
+                    _, candidate, _ = readable_text_colors(plan, candidate, folder, foreground)
+                    preview = compose(candidate, folder)
                     preview_order.append(name)
                     placement_previews.append(to_float(ImageOps.contain(preview, (360, 640), Image.Resampling.LANCZOS)))
             inputs["placement_preview_order"] = preview_order

@@ -1215,6 +1215,27 @@ def test_finished_photo_can_place_type_along_the_actual_product_contour():
         assert not silhouette[y:y+h, x:x+w].any()
 
 
+def test_portrait_stacks_the_offer_below_the_title_when_a_row_hits_the_product():
+    title = {"role": "headline", "align": "left",
+             "lines": [{"role": f"headline_line_{i}", "align": "left"} for i in (1, 2)]}
+    layout = {"texts": [title, {"role": "product_name"}, {"role": "price"}],
+              "design": {"boxes": {"headline": [5, 3, 30, 21]}}}
+    silhouette = np.zeros((160, 100), dtype=bool)
+    silhouette[32:128, 43:97] = True
+    dimensions = {"headline_line_1": (22, 11), "headline_line_2": (27, 14),
+                  "product_name": (28, 7), "price": (18, 7)}
+
+    options = format_layout.position_options(layout, (100, 160), silhouette, [43, 20, 97, 80],
+                                             (dimensions, {}))
+
+    assert "offer_under_headline" not in options
+    boxes = options["offer_stacked_under_headline"]["boxes"]
+    headline, name, price = (boxes[role] for role in ("headline", "product_name", "price"))
+    assert headline[0] == name[0] == price[0]
+    assert headline[1] + headline[3] < name[1]
+    assert name[1] + name[3] < price[1]
+
+
 def test_format_reuses_the_approved_reading_axis_inside_the_protected_regions_bounds():
     layout = {"texts": [{"role": role, "align": "left"} for role in ("headline", "product_name", "price")],
               "design": {"boxes": {"headline": [51, 43, 44, 10]}}}
