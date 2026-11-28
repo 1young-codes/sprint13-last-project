@@ -132,6 +132,9 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     exercise_cue_retry = True
     reject_cue = False
     reject_identity = False
+    bad_background_shots = 0
+    omit_background_verdict = False
+    cleaner_scene = "A seamless softly lit gray backdrop continues behind the original glass bottle."
     repair_writing = False
     legacy_photo = False
     repair_message = False
@@ -159,6 +162,11 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
 
         def edit(self, reference, prompt, seed, steps, *, size):
             assert size == (512, 1024)
+            if bad_background_shots and "ad_photo_cue_check" in calls:
+                assert prompt.startswith("Priority reshoot correction.")
+                assert cleaner_scene in prompt and "Use only the named scene elements" in prompt
+                calls.append("qwen")
+                return Image.new("RGB", size, "blue")
             if repair_message and "ad_photo_cue_check" in calls:
                 assert reference.tobytes() == photo.tobytes()
                 assert corrected_cue in prompt and semantic_correction in prompt and cue not in prompt
@@ -272,6 +280,12 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 identity = {"identity_matches": not reject_identity,
                             "identity_observation": "병이 검정색입니다" if reject_identity else "같은 앰버색 병입니다",
                             "stray_writing": None}
+                if bad_background_shots and not omit_background_verdict:
+                    identity["blocking_distraction"] = None
+                if calls.count("qwen") <= bad_background_shots:
+                    return json.dumps(identity | {"visible": True, "observation": "상품은 같고 뒤에 상자가 있습니다.",
+                                                  "blocking_distraction": {"observation": "상품 뒤에 큰 상자가 있습니다.",
+                                                                           "scene": cleaner_scene}})
                 if legacy_photo and calls.count(step) == 1:
                     return '{"identity_matches":true,"visible":true,"identity_observation":"같은 병입니다","observation":"병이 보입니다"}'
                 if legacy_photo:
@@ -412,6 +426,29 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     assert calls == ["render", "qwen", "ad_photo_cue_check", "qwen", "ad_photo_cue_check"]
     assert not wrong_product.exists()
     reject_identity = False
+    bad_background_shots = 1
+    calls.clear()
+    clean_background = scene_ad.make_scene_ad(photo, fields, "", models, tmp_path / "clean-background", proposal=layout)
+    assert calls == ["render", "qwen", "ad_photo_cue_check", "qwen", "ad_photo_cue_check", "ad_photo_regions"]
+    first, final = clean_background["photo_cue_checks"]
+    assert first["blocking_distraction"] == "상품 뒤에 큰 상자가 있습니다." and "blocking_distraction" not in final
+    assert clean_background["texts"] == layout["texts"]
+    assert clean_background["design"]["art_direction"] == cleaner_scene
+    bad_background_shots = 2
+    calls.clear()
+    blocked = tmp_path / "blocked-background"
+    with pytest.raises(ValueError, match="상품과 경쟁하는 배경 물체가 남았습니다"):
+        scene_ad.make_scene_ad(photo, fields, "", models, blocked, proposal=layout)
+    assert calls.count("qwen") == 2 and not blocked.exists()
+    bad_background_shots = 1
+    omit_background_verdict = True
+    calls.clear()
+    unchecked = tmp_path / "unchecked-background"
+    with pytest.raises(ValueError, match="배경 물체가 정리됐는지 확인하지 못했습니다"):
+        scene_ad.make_scene_ad(photo, fields, "", models, unchecked, proposal=layout)
+    assert calls.count("qwen") == 2 and calls.count("ad_photo_cue_check") == 3 and not unchecked.exists()
+    omit_background_verdict = False
+    bad_background_shots = 0
     repair_writing = True
     calls.clear()
 

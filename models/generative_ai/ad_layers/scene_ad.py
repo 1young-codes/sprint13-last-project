@@ -281,6 +281,15 @@ or blurred marks on props touching the edges. Compare the original image before 
 lettering already visible in it. Always return stray_writing, with null if absent or an object with observation
 (Korean) and box [left, top, width, height] in whole percentages of the full rendered photograph (image two).
 Cover only the visible mark and keep its box within that image.
+Separately identify a blocking_distraction only when a distinct, dispensable object competes with the sold
+product by apparent size, placement, or strong contrast, or looks like an extra item being sold. Inspect the
+whole scene. This includes unexpected objects partly behind a correctly rendered product. Keep scene-defining
+surfaces, product containers, required tools, and parts that convey the approved idea or use. Keep identity_matches
+about the original product itself when a separate background object is the problem. Return null when there is
+no major distraction. Otherwise return blocking_distraction as an object with observation (a Korean sentence
+naming the object, its location and why it competes) and scene (a complete positive English description of the
+cleaned scene). In scene describe the material and lighting that should occupy the distracting area, keep the
+product pose and the photo cue, and do not name the object to be omitted.
 Return distractions as an array of up to two compact background objects that compete with the product or the
 planned lettering area without supporting the message. Look for unintended duplicates or isolated cut-off
 fragments with a strong edge or highlight. If two such objects are visible, box each one separately. Keep the
@@ -583,6 +592,18 @@ def clean_photo_distractions(ai, scene, foreground, photo_regions, distractions,
     if review.get("choice") != "cleaned" or not isinstance(reason, str) or not reason.strip():
         return scene, None
     return Image.fromarray(np.rint(255 * cleaned).astype(np.uint8)), {"removed": removed, "reason": reason}
+
+
+def blocking_distraction(check):
+    obstruction = check.get("blocking_distraction")
+    if not isinstance(obstruction, dict):
+        return None
+    try:
+        observation = required_text(obstruction, "observation", "촬영 배경 검토")
+        scene = required_text(obstruction, "scene", "촬영 배경 수정")
+    except ValueError:
+        return None
+    return observation, scene
 
 
 def choose_source_framing(ai, product, inputs, images):
@@ -1879,6 +1900,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
 
             approved_detail = on_gray(effective) if detail_shot and effective is not None else None
             reshot_action = False
+            reshot_background = False
 
             def review_photo(candidate):
                 picture = to_float(candidate)
@@ -1899,9 +1921,13 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 proof = [images[0], picture, *([to_float(approved_detail)] if approved_detail else []),
                          *photo_review_details(candidate)]
                 check = ask_stage(ai, "ad_photo_cue_check", PHOTO_CUE_CHECK, photo_inputs, proof)
-                if "stray_writing" not in check:
+                required = ("stray_writing", "blocking_distraction") if reshot_background else ("stray_writing",)
+                missing = " and ".join(key for key in required if key not in check)
+                if missing:
                     check = ask_stage(ai, "ad_photo_cue_check", PHOTO_CUE_CHECK +
-                                      "\nThe previous answer omitted stray_writing. Return it explicitly.", photo_inputs, proof)
+                                      f"\nThe previous answer omitted {missing}. Return it explicitly.", photo_inputs, proof)
+                if reshot_background and "blocking_distraction" not in check:
+                    raise ValueError("다시 촬영한 사진에서 배경 물체가 정리됐는지 확인하지 못했습니다")
                 observation = required_text(check, "observation", "촬영 결과 검토")
                 identity = check.get("identity_matches")
                 identity_observation = required_text(check, "identity_observation", "촬영 결과 검토")
@@ -1934,6 +1960,23 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                         check, message, finding = review_photo(scene)
                         matches = finding["visible"] and finding["identity_matches"] and finding["message_supported"]
                 if matches and not finding["stray_writing"]:
+                    obstruction = blocking_distraction(check)
+                    if reshot_background and check.get("blocking_distraction") is not None and obstruction is None:
+                        raise ValueError("다시 촬영한 사진에서 배경 물체가 정리됐는지 확인하지 못했습니다")
+                    if obstruction is not None:
+                        observation, corrected_scene = obstruction
+                        finding["blocking_distraction"] = observation
+                        if attempt:
+                            raise ValueError(f"촬영한 사진에 상품과 경쟁하는 배경 물체가 남았습니다. {observation}")
+                        answer = answer | {"art_direction": corrected_scene}
+                        photographic_goal = f" The photograph must show: {photo_cue}" if photo_cue else ""
+                        prompt = ("Priority reshoot correction. Make one finished commercial photograph from the "
+                                  "provided product reference. Keep its identity, product arrangement, scale and "
+                                  f"camera framing. {corrected_scene} Preserve quiet space for later typography. "
+                                  f"Use only the named scene elements. Add no advertising text or graphics.{photographic_goal}")
+                        foreground = None
+                        reshot_background = True
+                        continue
                     if reshot_action:
                         photo_cue = finding["observed_scene"]
                     break
