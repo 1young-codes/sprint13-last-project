@@ -120,6 +120,60 @@ def test_companion_crop_must_fit_the_product_relative_size_and_shadow(monkeypatc
     assert bounds == (45, 40, 95, 75)
 
 
+def test_companion_size_uses_the_visible_anchor_width():
+    scene = Image.new("RGB", (200, 100), "tan")
+    foreground = np.zeros((100, 200), dtype=bool)
+    foreground[25:60, 24:54] = True
+    companion = {"object": "open book", "cue": "Facing pages"}
+
+    class Agent:
+        def ask(self, step, images, prompt, *, model):
+            assert step == "ad_companion_scale"
+            return '{"anchor_box":[10,20,20,45],"projected_ratio":[2,0.6],"reference":"ceramic vessel","size":[2,2]}'
+
+    assert scene_ad.plan_companion_scale(Agent(), scene, foreground, companion, {}) == {
+        "size": [30, 18], "reference": "ceramic vessel"}
+    with pytest.raises(ValueError, match="실제 상품 영역"):
+        scene_ad.plan_companion_scale(Agent(), scene, np.fliplr(foreground), companion, {})
+
+
+def test_companion_reframe_reserves_space_without_shrinking_only_the_companion(tmp_path, monkeypatch):
+    scene = Image.new("RGB", (1024, 1024), "#A38B71")
+    foreground = np.zeros((1024, 1024), dtype=bool)
+    foreground[390:820, 93:1010] = True
+    lettering = {"headline": [8, 13, 42, 33], "product_name": [8, 90, 23, 96], "price": [25, 90, 38, 96]}
+    layout = {"artwork": {"x": 0, "y": 0, "w": 1024, "h": 1024}, "size": scene.size}
+    companion = {"object": "open book", "cue": "Facing pages", "box": [68, 67, 23, 24]}
+    monkeypatch.setattr(scene_ad, "rendered_text_bounds", lambda *_: lettering)
+
+    subject, reserve = scene_ad.companion_reframe(scene, foreground, companion, {"size": [42, 22]}, layout, tmp_path)
+
+    sx, sy, sw, sh = scene_ad.pixel_box(subject, scene.size)
+    placed_subject = Image.new("RGBA", scene.size)
+    placed_subject.paste("white", (sx, sy, sx + sw, sy + sh))
+    assert scene_ad.planned_companion({"companion": companion | {"box": reserve}}, layout["artwork"],
+                                      placed_subject, scene.size, lettering)["box"] == reserve
+    zoom = min(sw / 917, sh / 430)
+    assert 0.69 <= zoom <= 1.02
+    assert reserve[2] * 0.8 >= 42 * zoom and reserve[3] * 0.8 >= 22 * zoom
+
+    class Agent:
+        def ask(self, step, images, prompt, *, model):
+            assert step == "ad_companion_insertion"
+            data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
+            assert data["nearby_boxes"]["reserved"] == reserve
+            return '{"slot":"reserved","instruction":"Rest the open book on the table."}'
+
+    mask = np.asarray(placed_subject.getchannel("A")) > 0
+    scale = scene_ad.scale_companion_for_reframe({"size": [42, 22]}, foreground, mask)
+    assert scale["size"] == [round(42 * zoom), round(22 * zoom)]
+    with pytest.raises(ValueError, match="비율이나 배열"):
+        scene_ad.scale_companion_for_reframe(scale, foreground, foreground[:, ::2])
+    _, _, plan = scene_ad.plan_companion_insertion(Agent(), scene, companion | {"box": reserve}, mask,
+                                                   layout, tmp_path, None, scale=scale)
+    assert plan["box"] == reserve
+
+
 @pytest.mark.parametrize("decision", ["same_intent", "required_pairing", "unsupported", "intent_lost", "retry", "repeated_product"])
 def test_draft_copy_revision_requires_visual_confirmation(decision):
     photo = np.zeros((12, 12, 3))

@@ -277,13 +277,14 @@ surface where the companion will be added later. Do not name or depict the compa
 Choose a box on a believable support surface with enough room for the object, its shadow, and blending edges."""
 
 COMPANION_SCALE = """Estimate the natural visible size of the required companion in this actual photograph.
-Choose a clearly visible part of the main product whose size a viewer can compare with the companion.
-Use the expected real-world size relationship at a similar depth on the same support surface. An object
-slightly in front normally looks larger. Use the owner's size instructions when available. Never shrink
-the object just because the empty space is small, and do not invent precise real-world measurements.
-Return size [width, height] as integer percentages of the full photograph for the complete companion's
-silhouette, without the shadow. Account for the camera angle, including foreshortening of flat objects.
-Return reference, a short explanation naming the visible size reference and how the two objects compare."""
+Name one complete visible product or part that provides a clear scale reference. Return its tight anchor_box
+[left, top, width, height] in integer percentages of the photograph. Include neither nearby objects nor shadow.
+Return projected_ratio [width_factor, height_factor]. Both are measured against the width of that same anchor
+in the image: for example, a companion with that apparent width and half that apparent height returns [1, 0.5].
+Use realistic relative sizes at a comparable depth on the same support surface. Account for camera angle and
+foreshortening. Honor any size instructions from the owner, without inventing physical measurements. Do not
+shrink the object to fill a leftover corner. Return reference, the name or a short description of the visible
+anchor without repeating a second numeric size or ratio."""
 
 COMPANION_INSERTION = """Plan one local addition to this actual photograph. Preserve the product, lighting,
 camera and existing surfaces. Find a genuinely empty area on a suitable support surface for the required object.
@@ -292,7 +293,8 @@ the product and rendered type. Use product_bounds as a measured envelope of the 
 Leave at least four percent of the frame between the crop and each frame edge so the crop can blend.
 Use nearby_boxes to choose a crop on the same visible support surface, close enough that the product and
 companion read together. These boxes already clear the measured product and lettering with extra breathing
-space, but a clear box may be on the wrong surface. Prefer a compatible nearby box to a distant empty one.
+space, but a clear box may be on the wrong surface. The reserved option, when listed, is the region prepared
+for the secondary item. Use it if the same visible surface reaches it. Prefer a compatible nearby box to a distant empty one.
 Return its key as slot. If none fits the photograph, return a custom box with no_nearby_reason, one concrete
 observation about the listed crops' surfaces, proportions, or conflict with an explicitly requested placement.
 Use pairing_intent to connect the object to the visible feature that carries the campaign. When several
@@ -364,7 +366,10 @@ look for discontinuous materials, sharp patch edges, implausible light or shadow
 If secondary_object is provided, there must be visible space between its entire silhouette and the photo edges.
 Reject an object that is clipped or crowded against an edge even if the object can be identified. The corrected
 element should stay subordinate to the main product while retaining a plausible scale for its position and
-recognizable details at full-frame size. Reject a new unrelated object, duplicate, inset, border or colored
+recognizable details at full-frame size. When planned_scale is supplied, look at the full photograph and compare
+the secondary object against the recognizable product feature in planned_scale.reference, accounting for depth and
+camera angle. Reject a visibly miniature or oversized object even when the shape looks natural in the close-up.
+Reject a new unrelated object, duplicate, inset, border or colored
 halo that was absent from the original. Return accepted (boolean) and observation
 (a concrete Korean sentence about the result)."""
 
@@ -922,19 +927,26 @@ def planned_companion(direction, artwork, subject, canvas_size, lettering):
     return item | {"box": box}
 
 
+def companion_occupied(foreground, layout, lettering):
+    artwork = layout["artwork"]
+    height, width = foreground.shape
+    occupied = foreground.copy()
+    for left, top, right, bottom in lettering.values():
+        x, y, w, h = pixel_box([left, top, right - left, bottom - top], layout["size"])
+        x, y = x - artwork["x"], y - artwork["y"]
+        if x < width and y < height and x + w > 0 and y + h > 0:
+            occupied[max(0, y):min(height, y + h), max(0, x):min(width, x + w)] = True
+    return occupied
+
+
 def nearby_companion_boxes(foreground, layout, lettering, product_bounds, extent):
     from scipy.ndimage import binary_dilation
     from .format_layout import free_position
 
     artwork = layout["artwork"]
     size = artwork["w"], artwork["h"]
-    occupied = foreground.copy()
-    for left, top, right, bottom in lettering.values():
-        x, y, w, h = pixel_box([left, top, right - left, bottom - top], layout["size"])
-        x, y = x - artwork["x"], y - artwork["y"]
-        if x < size[0] and y < size[1] and x + w > 0 and y + h > 0:
-            occupied[max(0, y):y + h, max(0, x):x + w] = True
-    occupied = binary_dilation(occupied, iterations=max(1, round(min(size) / 100)))
+    occupied = binary_dilation(companion_occupied(foreground, layout, lettering),
+                               iterations=max(1, round(min(size) / 100)))
     integral = np.pad(np.cumsum(np.cumsum(occupied, axis=0, dtype=np.int32), axis=1), ((1, 0), (1, 0)))
 
     gap = round(min(size) * 0.04)
@@ -967,15 +979,28 @@ def nearby_companion_boxes(foreground, layout, lettering, product_bounds, extent
     return boxes
 
 
-def plan_companion_scale(ai, scene, companion, pairing_intent):
+def plan_companion_scale(ai, scene, foreground, companion, pairing_intent):
     answer = ask_stage(ai, "ad_companion_scale", COMPANION_SCALE,
                        {"companion": {key: companion[key] for key in ("object", "cue")},
                         "pairing_intent": pairing_intent}, [to_float(scene)])
-    dimensions = answer.get("size")
-    if (not isinstance(dimensions, list) or len(dimensions) != 2
-            or any(type(value) is not int or not 1 <= value <= 100 for value in dimensions)):
+    anchor = validate_boxes({"anchor": answer.get("anchor_box")}, ("anchor",))["anchor"]
+    ratio = answer.get("projected_ratio")
+    if (not isinstance(ratio, list) or len(ratio) != 2
+            or any(type(value) not in (int, float) or not 0 < value <= 100 for value in ratio)):
+        raise ValueError("기준 상품과 비교한 소품의 상대 크기를 확인하지 못했습니다")
+    x, y, w, h = pixel_box(anchor, scene.size)
+    measured = Image.fromarray(foreground[y:y + h, x:x + w]).getbbox()
+    if measured is None or measured[2] - measured[0] < 0.6 * w:
+        raise ValueError("소품의 크기 기준이 실제 상품 영역과 맞지 않습니다")
+    span = measured[2] - measured[0]
+    dimensions = [round(100 * factor * span / side) for factor, side in zip(ratio, scene.size, strict=True)]
+    if any(not 1 <= value <= 100 for value in dimensions):
         raise ValueError("상품과 비교한 소품의 크기를 확인하지 못했습니다")
     return {"size": dimensions, "reference": required_text(answer, "reference", "소품 크기의 비교 기준")}
+
+
+class CompanionPlacementError(ValueError):
+    pass
 
 
 def plan_companion_insertion(ai, scene, companion, foreground, layout, folder, feedback, *, rejected=None,
@@ -995,6 +1020,14 @@ def plan_companion_insertion(ai, scene, companion, foreground, layout, folder, f
 
     nearby = {name: box for name, box in nearby_companion_boxes(
         foreground, layout, lettering, product_bounds, extent).items() if has_room(box)}
+    if scale and has_room(companion["box"]):
+        try:
+            reserved = planned_companion({"companion": companion}, layout["artwork"], subject, layout["size"], lettering)
+        except ValueError:
+            pass
+        else:
+            box = reserved["box"]
+            nearby = {"reserved": box} | {key: value for key, value in nearby.items() if value != box}
     inputs = {"companion": companion, "artwork": layout["artwork"], "canvas_size": layout["size"],
               "product_bounds": product_bounds, "rendered_text_bounds": lettering, "nearby_boxes": nearby,
               "insertion_feedback": feedback, "pairing_intent": pairing_intent, "target_size": scale}
@@ -1009,7 +1042,7 @@ def plan_companion_insertion(ai, scene, companion, foreground, layout, folder, f
         if not custom:
             box = nearby.get(slot) if isinstance(slot, str) else None
         if custom and "box" in placement and box is None:
-            raise ValueError("완성 사진에 필수 소품을 자연스럽게 놓을 빈 면이 없습니다")
+            raise CompanionPlacementError("완성 사진에 필수 소품을 자연스럽게 놓을 빈 면이 없습니다")
         try:
             planned = planned_companion({"companion": companion | {"box": box}},
                                         layout["artwork"], subject, layout["size"], lettering)
@@ -1022,7 +1055,53 @@ def plan_companion_insertion(ai, scene, companion, foreground, layout, folder, f
             return (left, top, left + width, top + height), f"{instruction} Required visible detail: {planned['cue']}", planned
         except ValueError as error:
             inputs.update(previous_box=box, layout_error=str(error))
-    raise ValueError(inputs["layout_error"])
+    raise CompanionPlacementError(inputs["layout_error"])
+
+
+def companion_reframe(scene, foreground, companion, scale, layout, folder):
+    from .format_layout import free_position
+
+    width, height = scene.size
+    empty = companion_occupied(np.zeros_like(foreground), layout, rendered_text_bounds(layout, folder))
+    occupied = np.pad(empty.cumsum(axis=0, dtype=np.int32).cumsum(axis=1, dtype=np.int32), ((1, 0), (1, 0)))
+    left, top, right, bottom = Image.fromarray(foreground).getbbox()
+    subject_w = ceil(100 * (right - left) / width)
+    subject_h = ceil(100 * (bottom - top) / height)
+    origin = (100 * (left + right) / (2 * width), 100 * (top + bottom) / (2 * height))
+    bx, by, bw, bh = companion["box"]
+    gap = round(min(scene.size) * 0.04)
+    ix, iy = (ceil(100 * gap / dim) for dim in scene.size)
+    for zoom in (1, 0.9, 0.8, 0.7):
+        pw, ph = ceil(subject_w * zoom), ceil(subject_h * zoom)
+        sw, sh = (ceil(span * zoom / 0.72) for span in scale["size"])
+        target = (bx + (bw - sw) / 2, by + (bh - sh) / 2)
+        # Leave room beside or in front, at a comparable depth on the same surface.
+        front = 100 - iy - sh
+        placements = (target, (ix, front), (50 - sw / 2, front), (100 - ix - sw, front))
+        for near in placements:
+            area = free_position(occupied, scene.size, (sw, sh), near,
+                                 x_limits=(ix, 100 - ix), y_limits=(max(iy, int(origin[1]) - sh // 2), 100 - iy))
+            if area is None:
+                continue
+            x, y = area
+            avoid = (x - 2, y - 2, sw + 4, sh + 4)
+            subject = free_position(occupied, scene.size, (pw, ph), (origin[0] - pw / 2, origin[1] - ph / 2),
+                                    x_limits=(ix, 100 - ix), y_limits=(iy, 100 - iy), avoid=avoid)
+            if subject is not None:
+                return [*subject, pw, ph], [x, y, sw, sh]
+    raise ValueError("상품과 필수 소품을 실제 비율로 함께 담을 촬영 구도를 찾지 못했습니다")
+
+
+def scale_companion_for_reframe(scale, original_foreground, foreground):
+    before = Image.fromarray(original_foreground).getbbox()
+    after = Image.fromarray(foreground).getbbox()
+    horizontal = (after[2] - after[0]) / (before[2] - before[0])
+    vertical = (after[3] - after[1]) / (before[3] - before[1])
+    if not 0.75 <= horizontal / vertical <= 4 / 3:
+        raise ValueError("다시 촬영한 상품의 비율이나 배열이 달라 소품 크기를 이어서 맞출 수 없습니다")
+    zoom = sqrt(horizontal * vertical)
+    size = [max(1, round(value * zoom)) for value in scale["size"]]
+    return scale | {"size": size}
 
 
 def choose_source_framing(ai, product, inputs, images):
@@ -2582,7 +2661,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             art_plan = art_plan | {"shot_scale": "detail"}
             design_input["art_direction_plan"]["shot_scale"] = "detail"
         artwork = layout["artwork"]
-        companion = companion_scale = None
+        companion = companion_scale = reframed_for_companion = None
         if not proposal:
             direction_input = {"message": brief["message"], "headline": copy["headline"], "idea": idea, "design": answer,
                                "product_facts": fields, "headline_locked": "headline" in fields or prior is not None}
@@ -2813,20 +2892,48 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 return check, message, finding
 
             foreground = None
-            base_scene = None
             companion_feedback = None
+            if companion:
+                generated = photograph(prompt)
+                for framing_attempt in range(2):
+                    base_scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
+                    protected = find_foreground(base_scene, models["mask"], threshold)
+                    if framing_attempt:
+                        companion_scale = scale_companion_for_reframe(companion_scale, original_foreground, protected)
+                    else:
+                        original_foreground = protected
+                        companion_scale = plan_companion_scale(ai, base_scene, protected, companion, pairing_intent)
+                    target_size = pixel_box((0, 0, *companion_scale["size"]), base_scene.size)[2:]
+                    try:
+                        patch_bounds, instruction, companion = plan_companion_insertion(
+                            ai, base_scene, companion, protected, layout, result, companion_feedback,
+                            pairing_intent=pairing_intent, scale=companion_scale)
+                    except CompanionPlacementError as error:
+                        if framing_attempt:
+                            raise
+                        subject, reserve = companion_reframe(base_scene, protected, companion, companion_scale, layout, result)
+                        companion = companion | {"box": reserve}
+                        reframed_for_companion = {"subject_box": subject, "reserved_box": reserve, "reason": str(error)}
+                        product_only = cutout_product(base_scene, protected, threshold)
+                        guide = product_reference(base_scene, product_only, render_size, subject)
+                        x, y, w, h = reserve
+                        prompt = ("Make one real commercial photograph. The gray reference defines the products, their "
+                                  "view, arrangement, size and placement in the new frame. Preserve every visible product "
+                                  "exactly once and keep its shape and recognizable details. Keep the products and the "
+                                  "reserved foreground on the same physically continuous supporting surface. Leave the "
+                                  f"surface entirely empty between {x}% and {x+w}% across and {y}% and {y+h}% down. "
+                                  f"No {companion['object']}, extra object, writing or overlay. Use this original description "
+                                  f"for lighting, materials and mood only: {answer['art_direction']}")
+                        generated = model.edit(guide, prompt, generation["seed"], generation["steps"], size=render_size)
+                    else:
+                        break
             for attempt in range(2):
                 if companion:
-                    if base_scene is None:
-                        generated = photograph(prompt)
-                        base_scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
-                        protected = find_foreground(base_scene, models["mask"], threshold)
-                        companion_scale = plan_companion_scale(ai, base_scene, companion, pairing_intent)
-                        target_size = pixel_box((0, 0, *companion_scale["size"]), base_scene.size)[2:]
-                    patch_bounds, instruction, companion = plan_companion_insertion(
-                        ai, base_scene, companion, protected, layout, result, companion_feedback,
-                        rejected=scene if attempt and companion_feedback and scene is not None else None,
-                        pairing_intent=pairing_intent, scale=companion_scale)
+                    if attempt:
+                        patch_bounds, instruction, companion = plan_companion_insertion(
+                            ai, base_scene, companion, protected, layout, result, companion_feedback,
+                            rejected=scene if companion_feedback and scene is not None else None,
+                            pairing_intent=pairing_intent, scale=companion_scale)
                     original_scene = base_scene
                     secondary_object = companion["object"]
                     try:
@@ -2892,7 +2999,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 if matches and not finding["stray_writing"]:
                     if patch_bounds is not None:
                         repair = ask_stage(ai, "ad_photo_patch_check", PHOTO_PATCH_CHECK,
-                                           {"photo_cue": photo_cue, "secondary_object": secondary_object},
+                                           {"photo_cue": photo_cue, "secondary_object": secondary_object,
+                                            "planned_scale": companion_scale if companion else None},
                                            [to_float(original_scene), to_float(scene), to_float(scene.crop(patch_bounds))])
                         finding["scene_patch_review"] = required_text(repair, "observation", "사진 부분 수정 검토")
                         if repair.get("accepted") is not True:
@@ -3027,6 +3135,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             layout["photo_cue"] = photo_cue
         if companion:
             layout["photo_companion"] = companion | ({"scale": companion_scale} if companion_scale else {})
+            if reframed_for_companion:
+                layout["photo_companion"]["reframe"] = reframed_for_companion
         if photo_checks:
             layout["photo_cue_checks"] = photo_checks
         if source_framing:
