@@ -314,6 +314,21 @@ def test_companion_surface_matches_the_original_light_and_keeps_the_contact_shad
     assert balanced.getpixel((86, 50)) == surface.getpixel((86, 50))
 
 
+def test_companion_surface_keeps_an_attached_cast_shadow_but_not_a_detached_mark():
+    surface = Image.new("RGB", (180, 120), (138, 110, 82))
+    patch = surface.copy()
+    patch.paste((98, 78, 58), (26, 70, 111, 81))
+    patch.paste((98, 78, 58), (20, 41, 43, 48))
+    patch.paste((210, 200, 182), (94, 45, 133, 75))
+    mask = np.zeros((120, 180), dtype=bool)
+    mask[45:75, 94:133] = True
+
+    balanced = scene_ad.match_companion_surface(patch, surface, mask)
+
+    assert balanced.getpixel((62, 76))[0] < 0.85 * surface.getpixel((62, 76))[0]
+    assert balanced.getpixel((30, 44)) == surface.getpixel((30, 44))
+
+
 def test_scene_patch_rejects_a_tiny_companion_even_when_its_whole_outline_is_visible():
     scene = Image.new("RGB", (160, 160), "tan")
 

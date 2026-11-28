@@ -722,7 +722,7 @@ def fit_companion_patch(patch, mask, target_size=None):
 
 
 def match_companion_surface(patch, surface, mask):
-    from scipy.ndimage import distance_transform_edt
+    from scipy.ndimage import binary_propagation, distance_transform_edt, gaussian_filter
 
     if not mask.any():
         return surface
@@ -734,7 +734,8 @@ def match_companion_surface(patch, surface, mask):
     source_light, edited_light = original @ luma, edited @ luma
     original_chroma = original / np.maximum(original.sum(axis=2, keepdims=True), 0.01)
     edited_chroma = edited / np.maximum(edited.sum(axis=2, keepdims=True), 0.01)
-    match = (1 - np.abs(original_chroma - edited_chroma).sum(axis=2) / 0.20).clip(0, 1)
+    chroma_error = np.abs(original_chroma - edited_chroma).sum(axis=2)
+    match = (1 - chroma_error / 0.20).clip(0, 1)
     comparable = background & (match > 0.5)
     balanced = edited
     if comparable.mean() >= 0.15:
@@ -745,9 +746,16 @@ def match_companion_surface(patch, surface, mask):
         gain = plane @ np.linalg.lstsq(plane[comparable], samples, rcond=None)[0]
         balanced = edited * np.exp(-gain.clip(*np.percentile(samples, (5, 95))))[..., None]
 
-    # Outside the companion, transfer only a nearby shadow onto the original material.
-    edge = (1 - distance / (0.25 * radius)).clip(0, 1)
-    shadow = (1 - (balanced @ luma + 0.02) / (source_light + 0.02)).clip(0, 0.45) * match * edge ** 2
+    # Keep the cast shadow connected to the object without replacing the surrounding material.
+    darkening = (1 - (balanced @ luma + 0.02) / (source_light + 0.02)).clip(0, 0.60)
+    shadow_match = (1 - chroma_error / (0.20 + 0.36 * darkening)).clip(0, 1)
+    shadow_pixels = (~mask) & (darkening > 0.045) & (shadow_match > 0.45) & (distance < 0.72 * radius)
+    rows = np.flatnonzero(mask.any(axis=1))
+    contact = np.arange(mask.shape[0])[:, None] >= rows[-1] - 0.22 * (rows[-1] - rows[0])
+    seeds = shadow_pixels & contact & (distance <= max(2, radius / 45))
+    connected = binary_propagation(seeds, mask=shadow_pixels)
+    edge = ((0.72 * radius - distance) / (0.32 * radius)).clip(0, 1)
+    shadow = gaussian_filter(darkening * shadow_match * connected * edge, max(0.7, radius / 55))
     matte = Image.fromarray(mask.astype(np.uint8) * 255).filter(ImageFilter.GaussianBlur(max(0.6, radius / 220)))
     alpha = np.asarray(matte, dtype=np.float32)[..., None] / 255
     blended = balanced * alpha + original * ((1 - shadow[..., None]) * (1 - alpha))
