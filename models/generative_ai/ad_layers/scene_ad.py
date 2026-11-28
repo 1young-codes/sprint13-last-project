@@ -16,7 +16,7 @@ from .creative_brief import LAYOUT_ROLES, MAX_HEADLINE_LENGTH, TEXT_ROLES, ask_s
 from .layers import compose, cutout_product, load_layout, load_settings, paste_region, save_layout, to_float
 from .staging import on_gray, padded_box, source_parts, stage_group, stage_subject
 from .text_render import minimum_font_size, render_texts
-from .type_contrast import readable_offer_colors, readable_text_colors
+from .type_contrast import ink_background, legible_tone, readable_offer_colors, readable_text_colors
 from .viewpoint import available_viewpoints, camera_view, place_camera_view
 
 
@@ -1468,7 +1468,7 @@ def tighten_text_groups(foreground, layout, folder, changed=None):
         tighten_aligned_stack(offer, foreground, layout, folder)
 
 
-def rendered_text_bounds(layout, folder):
+def rendered_text_bounds(layout, folder, *, pixels=False):
     size = tuple(layout["size"])
     bounds_by_role = {}
     for text in layout["texts"]:
@@ -1477,8 +1477,9 @@ def rendered_text_bounds(layout, folder):
             with Image.open(folder / line["file"]) as image:
                 bounds = image.getchannel("A").getbbox()
             if bounds:
-                ink = [round(100 * (edge + offset) / side)
-                       for edge, offset, side in zip(bounds, (line["x"], line["y"]) * 2, size * 2, strict=True)]
+                ink = [edge + offset for edge, offset in zip(bounds, (line["x"], line["y"]) * 2, strict=True)]
+                if not pixels:
+                    ink = [round(100 * edge / side) for edge, side in zip(ink, size * 2, strict=True)]
                 bounds_by_role[line["role"]] = ink
                 line_bounds.append(ink)
         if "lines" in text and line_bounds:
@@ -1551,6 +1552,80 @@ def check_offer_spacing(ink, size):
     letter_height = max(first[3] - first[1], second[3] - second[1]) * height
     if gap > 3 * letter_height:
         raise ValueError("상품명과 가격 사이의 빈 공간이 너무 넓습니다. 제목과 사진은 두고 두 문구를 가까이 배치하세요")
+
+
+RELATED_OFFER_COMPARE = """같은 광고의 기존 배치와 간격을 좁힌 배치가 순서대로 보입니다.
+제목 끝을 상품명이 문법적으로 완성하는지 확인하세요. 제목만으로 문구가 완결되거나 상품명이 독립된
+판매 정보라면 original을 선택하세요. 제목과 상품명이 한 어구를 이루고, 가까워졌을 때 읽는 흐름이
+개선되며 가격은 구별되고 사진과도 여유가 있으면 joined를 선택하세요. 글자 크기, 색, 문구는 같습니다.
+choice(original 또는 joined)와 실제로 보이는 차이를 설명하는 한국어 reason을 JSON으로 반환하세요."""
+
+
+def review_related_offer(ai, design, layout, foreground, folder):
+    from scipy.ndimage import binary_dilation
+
+    if design.get("accent"):
+        return design, layout, None
+    size = tuple(layout["size"])
+    height = size[1]
+    layers = {text["role"]: text for text in layout["texts"]}
+    title = layers["headline"]
+    last_line = (title.get("lines") or [title])[-1]
+    if last_line.get("depth") == "behind_subject":
+        return design, layout, None
+    ink = rendered_text_bounds(layout, folder, pixels=True)
+    roles = ("product_name", "price")
+    if any(role not in ink for role in (last_line["role"], *roles)):
+        return design, layout, None
+    left, top, right, bottom = ink[last_line["role"]]
+    name_left, name_top, name_right, name_bottom = ink["product_name"]
+    letter_height = min(bottom - top, name_bottom - name_top)
+    gap = min(ink[role][1] for role in roles) - bottom
+    alignment = layers["product_name"]["align"]
+    at = {"left": 0, "center": 0.5, "right": 1}[alignment]
+    axis_distance = abs((left + (right - left) * at) - (name_left + (name_right - name_left) * at))
+    if alignment != last_line["align"] or axis_distance > letter_height / 2 or not letter_height <= gap <= 3 * letter_height:
+        return design, layout, None
+
+    boxes = design["boxes"]
+    title_end = boxes["headline"][1] + boxes["headline"][3]
+    shift = min(min(boxes[role][1] for role in roles) - title_end, floor(100 * (gap - 0.6 * letter_height) / height))
+    if shift * height < 25 * letter_height:
+        return design, layout, None
+    moved_boxes = boxes.copy()
+    texts = []
+    for text in layout["texts"]:
+        role = text["role"]
+        if role in roles:
+            x, y, w, h = boxes[role]
+            moved_boxes[role] = [x, y - shift, w, h]
+            dy = pixel_box(moved_boxes[role], size)[1] - pixel_box(boxes[role], size)[1]
+            text = text | {"y": text["y"] + dy}
+        texts.append(text)
+    candidate = layout | {"texts": texts}
+    try:
+        clearance = binary_dilation(foreground, iterations=max(1, round(min(size) / 100)))
+        check_text_overlap(clearance, candidate | {"texts": [text for text in texts if text["role"] in roles]}, folder)
+        candidate_ink = rendered_text_bounds(candidate, folder)
+        check_type_margin(size, candidate_ink)
+        check_offer_spacing(candidate_ink, size)
+    except ValueError:
+        return design, layout, None
+    backdrop = compose(layout | {"texts": []}, folder)
+    for text in texts:
+        if text["role"] in roles:
+            with Image.open(folder / text["file"]) as image:
+                background = ink_background(backdrop, text, np.asarray(image.getchannel("A")) >= 128)
+            if legible_tone(text["color"], background, 4.5) != text["color"]:
+                return design, layout, None
+    previews = [ImageOps.contain(compose(current, folder), (360, 640), Image.Resampling.LANCZOS)
+                for current in (layout, candidate)]
+    result = ask_stage(ai, "ad_related_offer_compare", RELATED_OFFER_COMPARE,
+                       {role: text["text"] for role, text in layers.items()}, [to_float(image) for image in previews])
+    reason = result.get("reason")
+    if result.get("choice") == "joined" and isinstance(reason, str) and reason.strip():
+        return design | {"boxes": moved_boxes}, candidate, reason
+    return design, layout, None
 
 
 def check_type_margin(size, ink):
@@ -2811,6 +2886,9 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                                                                   assess_visual_type=bool(art_plan and not proposal))
             answer, layout, offer_reason = review_crowded_offer(
                 ai, answer, layout, foreground, result, settings["fonts"])
+            answer, layout, related_offer_reason = review_related_offer(ai, answer, layout, foreground, result)
+            if related_offer_reason:
+                layout["related_offer_review"] = related_offer_reason
             final_review_reason = offer_reason or final_review_reason
         layout.update(fields=fields, brief=brief, design=answer, scene_prompt=prompt, preview=preview,
                       final_review_reason=final_review_reason)

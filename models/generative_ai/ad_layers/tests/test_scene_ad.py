@@ -1116,6 +1116,42 @@ def test_photo_type_check_uses_visible_size_and_counts_competing_color_treatment
     assert scene_ad.photo_type_issues(design | {"accent": None}, ink, (1024, 1024)) == []
 
 
+@pytest.mark.parametrize("outcome", ["joined", "original", "obstructed"])
+def test_related_offer_moves_both_layers_without_changing_type_pixels(tmp_path, outcome):
+    size = (200, 200)
+    fonts = ["noto_sans_kr"]
+    copy = {"headline": "부드럽게 펴 바르는", "product_name": "수분 크림", "price": "12,000원"}
+    style = {"font": fonts[0], "align": "left", "color": "#FFFFFF", "size": 10, "max_lines": 1}
+    design = {"boxes": {"headline": [20, 15, 60, 22], "product_name": [20, 46, 30, 12],
+                        "price": [58, 46, 24, 12]}, "styles": {role: style.copy() for role in copy}}
+    texts = scene_ad.layout_texts(design, copy, size, fonts)
+    for layer, area in zip(texts, ((0, 21, 70, 39), (0, 4, 54, 22), (0, 4, 40, 22)), strict=True):
+        image = Image.new("RGBA", (layer["w"], layer["h"]))
+        image.paste("white", area)
+        image.save(tmp_path / layer["file"])
+    for filename in ("background.png", "scene.png"):
+        Image.new("RGB", size, "#211B16").save(tmp_path / filename)
+    foreground = np.zeros(size, dtype=bool)
+    foreground[84, 42] = outcome == "obstructed"
+    layout = {"size": list(size), "background": {"file": "background.png"}, "texts": texts,
+              "artwork": {"file": "scene.png", "x": 0, "y": 0, "w": 200, "h": 200}}
+    pixels = [(tmp_path / layer["file"]).read_bytes() for layer in texts]
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            assert outcome != "obstructed" and step == "ad_related_offer_compare"
+            assert len(images) == 2 and not np.array_equal(*images)
+            return json.dumps({"choice": outcome, "reason": "상품명과 제목 사이의 간격을 확인했습니다."})
+
+    revised, candidate, reason = scene_ad.review_related_offer(Agent(), design, layout, foreground, tmp_path)
+    assert bool(reason) == (outcome == "joined")
+    assert revised["styles"] == design["styles"]
+    assert candidate["texts"][0] == texts[0]
+    assert [layer["y"] - text["y"] for layer, text in zip(candidate["texts"][1:], texts[1:], strict=True)] == (
+        [-16, -16] if reason else [0, 0])
+    assert [(tmp_path / layer["file"]).read_bytes() for layer in texts] == pixels
+
+
 def test_balanced_composition_keeps_line_edits_and_moderates_motion_toward_center():
     original = {"boxes": {"headline": [8, 10, 80, 16], "price": [8, 82, 20, 5]}}
     revised = {"boxes": {"headline": [8, 20, 80, 16], "price": [8, 74, 20, 5]},
