@@ -30,7 +30,7 @@ def legible_tone(color, background, minimum):
             shade = tuple(np.rint(original + (neutral - original) * step / 20).astype(int))
             if ink_contrast(color_lightness(shade), background) >= minimum:
                 return "#%02X%02X%02X" % shade
-    return color
+    return None
 
 
 def recolor_ink(path, alpha, color):
@@ -39,7 +39,7 @@ def recolor_ink(path, alpha, color):
     bitmap.save(path)
 
 
-def readable_headline_colors(design, layout, backdrop, folder, foreground):
+def readable_headline_colors(design, layout, backdrop, folder, foreground, unresolved=None):
     title = next(text for text in layout["texts"] if text["role"] == "headline")
     style = design["styles"]["headline"]
     original = title.get("lines", [title])
@@ -73,10 +73,14 @@ def readable_headline_colors(design, layout, backdrop, folder, foreground):
                 accent_background.append(background)
                 accent_minimum = max(accent_minimum, minimum)
         color = legible_tone(base, ink_background(backdrop, line, ink & ~marked), minimum)
-        samples.append((line, pixels, marked, color))
+        if color is None and unresolved is not None:
+            unresolved.append(f"제목 ‘{line['text']}’")
+        samples.append((line, pixels, marked, color or base))
 
     accent_color = (legible_tone(accent["color"], np.concatenate(accent_background), accent_minimum)
                     if accent and accent_background else None)
+    if accent and accent_background and accent_color is None and unresolved is not None:
+        unresolved.append(f"강조 문구 ‘{accent['phrase']}’")
     lines = []
     for line, pixels, marked, color in samples:
         changes = {}
@@ -109,21 +113,23 @@ def readable_headline_colors(design, layout, backdrop, folder, foreground):
         "texts": [title if text["role"] == "headline" else text for text in layout["texts"]]}
 
 
-def readable_offer_colors(design, layout, backdrop, folder):
+def readable_offer_colors(design, layout, backdrop, folder, unresolved=None):
     roles = ("product_name", "price")
     headline = design["styles"]["headline"]
     palette = [headline["color"], *(line.get("color", headline["color"]) for line in headline.get("lines") or [])]
     offer = [text for text in layout["texts"] if text["role"] in roles]
     colors = list(dict.fromkeys([*(text["color"] for text in offer), *palette, "#000000", "#FFFFFF"]))
     lightness = {color: color_lightness(ImageColor.getrgb(color)) for color in colors}
-    masks, contrasts = {}, {}
+    masks, backgrounds, contrasts = {}, {}, {}
     for text in offer:
         with Image.open(folder / text["file"]) as layer:
             alpha = layer.getchannel("A")
         background = ink_background(backdrop, text, np.asarray(alpha) >= 128)
         if background.size:
-            masks[text["role"]] = alpha
-            contrasts[text["role"]] = {
+            role = text["role"]
+            masks[role] = alpha
+            backgrounds[role] = background
+            contrasts[role] = {
                 color: ink_contrast(value, background) for color, value in lightness.items()
             }
     minimum = 4.5
@@ -141,8 +147,11 @@ def readable_offer_colors(design, layout, backdrop, folder):
         if role in contrasts and (common is not None or role in low):
             scores = contrasts[role]
             color = common or next((color for color in palette if scores[color] >= minimum), None)
+            color = color or legible_tone(current, backgrounds[role], minimum)
             if color is None:
                 color = max((current, "#000000", "#FFFFFF"), key=scores.__getitem__)
+                if unresolved is not None:
+                    unresolved.append(f"‘{text['text']}’")
             if color != current:
                 recolor_ink(folder / text["file"], masks[role], color)
                 styles[role] = styles[role] | {"color": color}
@@ -158,5 +167,11 @@ def readable_text_colors(design, layout, folder, foreground):
         mask = Image.new("1", backdrop.size)
         mask.paste(Image.fromarray(foreground), (artwork["x"], artwork["y"]))
         foreground = np.asarray(mask)
-    design, layout = readable_headline_colors(design, layout, backdrop, folder, foreground)
-    return readable_offer_colors(design, layout, backdrop, folder)
+    unresolved = []
+    design, layout = readable_headline_colors(design, layout, backdrop, folder, foreground, unresolved)
+    design, layout = readable_offer_colors(design, layout, backdrop, folder, unresolved)
+    issue = None
+    if unresolved:
+        issue = (f"{', '.join(unresolved)} 뒤의 밝기가 고르지 않아 글자색을 바꿔도 대비가 부족합니다. "
+                 "사진과 문구를 유지하고 문제가 있는 글자 묶음을 밝기가 고른 곳으로 옮겨 주세요.")
+    return design, layout, issue

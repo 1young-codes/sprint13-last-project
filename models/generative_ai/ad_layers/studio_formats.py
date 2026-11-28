@@ -138,6 +138,9 @@ If photo_cue is provided, find that physical relationship or effect in the refra
 the crop has removed it and a new composition is required to show it again.
 If context_feature is provided, check that enough of that original scene detail remains recognizable and
 still connects to the actual copy. Report photo if it vanished or is reduced to an unrecognizable sliver.
+If contrast_issue is supplied, inspect the named words in the phone preview and the enlarged detail. Ask to move
+the affected group into calmer space when the fading portion impedes reading. If it remains clear, judge the
+composition normally.
 Read the long axis from edge to edge. An enlarged stretch of featureless wall, floor or surface has no
 photographic purpose merely because it balances a matching empty stretch at the other end. Check whether
 the subject itself meaningfully fills the long axis and directs the eye. If the scene was originally arranged
@@ -200,6 +203,7 @@ that solves format_issue and connects the subject, headline and offer. A change 
 When photo_cue is supplied, locate it in the final composition and check the actual direction and position of
 the elements. Both parts can be visible while their planned relationship is absent.
 Check the required copy, its prominence and contrast at phone size, and the natural scene and edges at full size.
+When contrast_issue is supplied, inspect whether the named words can actually be read in the phone preview.
 Return ready (boolean) and observation (one concrete Korean sentence describing the visible improvement or defect)."""
 
 NATIVE_HEADLINE = """Compare the actual poster options in position_order. The photo, wording, product name, and
@@ -1016,13 +1020,14 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                             {"photo_cue": photo_cue, "intent": intent, "copy": copy})
                 tried_offers = {tuple(revised["boxes"][role][axis]
                                       for role in ("product_name", "price") for axis in (0, 1))}
-            revised, candidate = readable_text_colors(revised, candidate, stage, foreground)
+            revised, candidate, contrast_issue = readable_text_colors(revised, candidate, stage, foreground)
             poster = compose(candidate, stage)
             phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
             review = ask_stage(ai, "studio_format_reading", FORMAT_READING,
                                {"copy": copy, "focus": design["focus"], "product_bounds": bounds, "rendered_ink": ink,
                                 "outer_margins": outer_margins(bounds, ink.values()),
                                 "headline_behind_subject": headline_behind_subject,
+                                **({"contrast_issue": contrast_issue} if contrast_issue else {}),
                                 **({"photo_cue": layout["photo_cue"]} if layout.get("photo_cue") else {}),
                                 **({"context_feature": context_feature} if context_feature else {}),
                                 **({"intent": intent} if intent else {})},
@@ -1183,7 +1188,8 @@ def rebuild_format(source, output, format_name, photo, fields, idea, ai, models,
         restored = None
         if revision.get("staged_piece_box") is not None:
             restored = restore_format_detail(folder, layout, ai, models)
-        design, layout = readable_text_colors(layout["design"], layout, folder, foreground_mask(folder, layout))
+        design, layout, contrast_issue = readable_text_colors(
+            layout["design"], layout, folder, foreground_mask(folder, layout))
         layout["design"] = design
         save_layout(layout, folder)
         with Image.open(source / "ad.png") as reference:
@@ -1198,6 +1204,7 @@ def rebuild_format(source, output, format_name, photo, fields, idea, ai, models,
                 return ask_stage(ai, "studio_format_native_review", NATIVE_REVIEW,
                                  {"size": size, "format_issue": str(issue), "copy": copy,
                                   "has_attempted_resize": bool(before), "has_staged_group": bool(details),
+                                  **({"contrast_issue": contrast_issue} if contrast_issue else {}),
                                   **({"photo_cue": layout["photo_cue"]} if layout.get("photo_cue") else {})},
                                  [to_float(photo), to_float(reference), *before, *details,
                                   to_float(poster), to_float(phone)])

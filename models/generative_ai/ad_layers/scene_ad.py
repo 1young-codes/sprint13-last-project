@@ -978,14 +978,14 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
             if rebuilt_format:
                 check_offer_spacing(ink, candidate["size"])
 
-    original_error = None
+    original_error, contrast_issue = None, None
     try:
         check_layout(layout, folder)
     except ValueError as error:
         original_error = str(error)
     else:
-        answer, layout = readable_text_colors(answer, layout, folder, foreground)
-    if original_error is None and not assess_composition:
+        answer, layout, contrast_issue = readable_text_colors(answer, layout, folder, foreground)
+    if original_error is None and contrast_issue is None and not assess_composition:
         return answer, layout, None
     first = compose(layout, folder)
     artwork = layout["artwork"]
@@ -1010,6 +1010,14 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
         layout_references = [to_float(guide), *references]
     else:
         layout_references = references
+    requested_alternative = "composition_issue" in inputs
+    contrast_only = contrast_issue is not None and not requested_alternative
+    if contrast_issue:
+        inputs.setdefault("composition_issue", contrast_issue)
+        inputs["contrast_issue"] = contrast_issue
+        task += ("\nUse contrast_issue to move the affected words onto an area of consistent brightness. "
+                 "Keep the photograph and alignments that are already working. Move the product name and price "
+                 "together when both are used as one group.")
     needs_alternative = "composition_issue" in inputs
     if needs_alternative:
         from .format_layout import outer_margins
@@ -1030,9 +1038,12 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
         revised_scene.save(folder / artwork["file"])
         Image.fromarray(foreground).save(folder / "foreground.png")
         check_layout(updated, folder)
-        return readable_text_colors(plan, updated, folder, foreground)
+        plan, updated, remaining = readable_text_colors(plan, updated, folder, foreground)
+        if remaining:
+            raise ValueError(remaining)
+        return plan, updated
 
-    editable = ("boxes", "styles", "accent", "edge")
+    editable = ("boxes", "styles") if contrast_only else ("boxes", "styles", "accent", "edge")
     for _ in range(2):
         review = ask_stage(ai, "ad_final_layout", task, inputs,
                            [to_float(first), to_float(scene), *layout_references])
@@ -1147,7 +1158,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
             return revised, updated, review.get("reason")
     if original_error is not None:
         raise ValueError(original_error)
-    if needs_alternative:
+    if requested_alternative:
         raise ValueError(inputs["layout_error"])
     return answer, layout, None
 

@@ -1015,6 +1015,39 @@ def test_title_contrast_keeps_two_colors_inside_one_line(tmp_path):
         assert image.getpixel((38, 8))[:3] == ImageColor.getrgb(color)
 
 
+@pytest.mark.parametrize("move_title", [True, False])
+def test_mixed_background_triggers_a_rendered_layout_comparison(draft, move_title):
+    folder, _ = draft
+    layout = load_layout(folder)
+    original = layout["design"]
+    scene = Image.new("RGB", (100, 100), "#101010")
+    scene.paste("#909090", (11, 10, 14, 13))
+    scene.save(folder / "scene.png")
+    foreground = studio_edits.foreground_mask(folder, layout)
+    copy = {text["role"]: text["text"] for text in layout["texts"]}
+    calls = []
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            calls.append(step)
+            inputs = json.loads(request.split("Input JSON follows:\n", 1)[1])
+            if step == "ad_final_layout":
+                assert "‘포근한 겨울 저녁’" in inputs["contrast_issue"]
+                return json.dumps({"revision": {"boxes": original["boxes"] | {"headline": [10, 15, 45, 20]},
+                                                "edge": "blend"} if move_title else None})
+            assert step == "ad_final_composition_compare" and len(images) == 2
+            assert not np.array_equal(images[0], images[1])
+            return '{"choice":"revision","reason":"글자가 일정한 어두운 바탕 위로 올라왔습니다"}'
+
+    inputs = {"copy": copy, "fonts": ["noto_sans_kr"]}
+    revised, result, _ = scene_ad.review_finished(Agent(), original, layout, scene, foreground, folder, inputs, ())
+    assert result["texts"][0]["y"] == (15 if move_title else 10)
+    assert revised["edge"] == original["edge"]
+    assert calls == ["ad_final_layout", "ad_final_composition_compare" if move_title else "ad_final_layout"]
+    with Image.open(folder / "scene.png") as saved:
+        assert saved.tobytes() == scene.tobytes()
+
+
 def test_copy_position_comparison_keeps_the_shared_center_axis(draft):
     folder, _ = draft
     layout = load_layout(folder)
