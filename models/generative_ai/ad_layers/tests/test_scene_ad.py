@@ -132,7 +132,7 @@ def test_companion_size_uses_the_visible_anchor_width():
             return '{"anchor_box":[10,20,20,45],"projected_ratio":[2,0.6],"reference":"ceramic vessel","size":[2,2]}'
 
     assert scene_ad.plan_companion_scale(Agent(), scene, foreground, companion, {}) == {
-        "size": [30, 18], "reference": "ceramic vessel"}
+        "size": [30, 18], "reference": "ceramic vessel", "anchor_box": [10, 20, 20, 45]}
     with pytest.raises(ValueError, match="실제 상품 영역"):
         scene_ad.plan_companion_scale(Agent(), scene, np.fliplr(foreground), companion, {})
 
@@ -172,6 +172,39 @@ def test_companion_reframe_reserves_space_without_shrinking_only_the_companion(t
     _, _, plan = scene_ad.plan_companion_insertion(Agent(), scene, companion | {"box": reserve}, mask,
                                                    layout, tmp_path, None, scale=scale)
     assert plan["box"] == reserve
+
+
+def test_companion_location_guide_compares_the_nearest_product_detail_with_the_reserved_crop(tmp_path, monkeypatch):
+    scene = Image.new("RGB", (200, 200), "tan")
+    foreground = np.zeros((200, 200), dtype=bool)
+    foreground[64:112, 32:62] = True
+    foreground[65:110, 124:174] = True
+    layout = {"artwork": {"x": 0, "y": 0, "w": 200, "h": 200}, "size": scene.size}
+    companion = {"object": "a book", "cue": "two facing pages", "box": [67, 71, 25, 22]}
+    scale = {"size": [14, 11], "reference": "the left vessel", "anchor_box": [16, 32, 15, 24]}
+    monkeypatch.setattr(scene_ad, "rendered_text_bounds", lambda *_: {})
+
+    class Agent:
+        def ask(self, step, images, prompt, *, model):
+            data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
+            assert step == "ad_companion_insertion" and data["has_placement_guide"] and len(images) == 2
+            assert [67, 71, 25, 22] == data["nearby_boxes"]["reserved"]
+            box = data["nearby_boxes"]["in_front_left"]
+            assert box[0] + box[2] / 2 < 32 and box[1] < 71
+            guide = np.rint(images[1] * 255).astype(np.uint8)
+            assert np.any(np.all(guide == [86, 232, 255], axis=-1))
+            assert np.any(np.all(guide == [249, 154, 255], axis=-1))
+            return '{"slot":"in_front_left","instruction":"Set the book on the same table."}'
+
+    _, _, placed = scene_ad.plan_companion_insertion(Agent(), scene, companion, foreground, layout, tmp_path, None,
+                                                     scale=scale)
+    assert placed["box"][0] < 32
+
+    recropped = np.zeros_like(foreground)
+    recropped[30:150, 20:180] = True
+    before = np.zeros_like(foreground)
+    before[20:140, 30:190] = True
+    assert scene_ad.scale_companion_for_reframe(scale, before, recropped)["anchor_box"] == [11, 37, 15, 24]
 
 
 @pytest.mark.parametrize("decision", ["same_intent", "required_pairing", "unsupported", "intent_lost", "retry", "repeated_product"])

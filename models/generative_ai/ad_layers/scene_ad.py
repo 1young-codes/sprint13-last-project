@@ -294,7 +294,12 @@ Leave at least four percent of the frame between the crop and each frame edge so
 Use nearby_boxes to choose a crop on the same visible support surface, close enough that the product and
 companion read together. These boxes already clear the measured product and lettering with extra breathing
 space, but a clear box may be on the wrong surface. The reserved option, when listed, is the region prepared
-for the secondary item. Use it if the same visible surface reaches it. Prefer a compatible nearby box to a distant empty one.
+for the secondary item. Compare it on equal terms with the other choices. When has_placement_guide is true,
+each tile shows the same photograph, with a cyan outline around the scale anchor, a white crop outline and a
+pink box for the projected object inside the crop. The outlines are planning marks only. Judge the pair at full
+image scale. Prefer the object and the relevant visible product detail sharing the same support and light, with
+enough separation to read both. Avoid a distant corner that makes them look unrelated, and avoid promoting the
+prop ahead of the product merely because it is closer to camera. Honor explicit placement from the owner.
 Return its key as slot. If none fits the photograph, return a custom box with no_nearby_reason, one concrete
 observation about the listed crops' surfaces, proportions, or conflict with an explicitly requested placement.
 Use pairing_intent to connect the object to the visible feature that carries the campaign. When several
@@ -307,7 +312,7 @@ only the box you selected. Use target_size, the expected full-frame dimensions, 
 contain the object and its shadow. Use a nearby surface at a similar depth when possible so the
 two objects read as a pair. Its defining detail must be readable without zooming in. The
 renderer specifies the object's size and centers it in the crop; omit size and position directions from
-instruction. Mention no object that is outside the crop. If a second image is supplied, it is the rejected
+instruction. Mention no object that is outside the crop. If has_rejected is true, the last image is the rejected
 addition. Use it and insertion_feedback to correct the position, scale or visible detail. Return box null
 when no suitable surface exists."""
 
@@ -939,7 +944,7 @@ def companion_occupied(foreground, layout, lettering):
     return occupied
 
 
-def nearby_companion_boxes(foreground, layout, lettering, product_bounds, extent):
+def nearby_companion_boxes(foreground, layout, lettering, product_bounds, extent, *, anchor=None):
     from scipy.ndimage import binary_dilation
     from .format_layout import free_position
 
@@ -951,7 +956,11 @@ def nearby_companion_boxes(foreground, layout, lettering, product_bounds, extent
 
     gap = round(min(size) * 0.04)
     ix, iy = (ceil(100 * gap / side) for side in size)
-    left, top, right, bottom = product_bounds
+    if anchor:
+        left, top, anchor_width, anchor_height = anchor
+        right, bottom = left + anchor_width, top + anchor_height
+    else:
+        left, top, right, bottom = product_bounds
     mid = (left + right) // 2
     boxes = {}
     # Try a wider or taller crop at the same area when the planned proportions do not fit.
@@ -996,11 +1005,33 @@ def plan_companion_scale(ai, scene, foreground, companion, pairing_intent):
     dimensions = [round(100 * factor * span / side) for factor, side in zip(ratio, scene.size, strict=True)]
     if any(not 1 <= value <= 100 for value in dimensions):
         raise ValueError("상품과 비교한 소품의 크기를 확인하지 못했습니다")
-    return {"size": dimensions, "reference": required_text(answer, "reference", "소품 크기의 비교 기준")}
+    return {"size": dimensions, "reference": required_text(answer, "reference", "소품 크기의 비교 기준"),
+            "anchor_box": anchor}
 
 
 class CompanionPlacementError(ValueError):
     pass
+
+
+def companion_placement_guide(scene, nearby, anchor, target_size):
+    tile = ImageOps.contain(scene, (320, 280), Image.Resampling.LANCZOS)
+    width, height = tile.size
+    columns = min(3, len(nearby))
+    card = Image.new("RGB", (columns * (width + 8), ceil(len(nearby) / columns) * (height + 26)), "#181818")
+    draw = ImageDraw.Draw(card)
+    target_w, target_h = (round(span * side / source) for span, side, source in
+                          zip(target_size, tile.size, scene.size, strict=True))
+    ax, ay, aw, ah = pixel_box(anchor, tile.size)
+    for index, (name, box) in enumerate(nearby.items()):
+        x, y = (index % columns) * (width + 8) + 4, (index // columns) * (height + 26) + 22
+        card.paste(tile, (x, y))
+        draw.text((x, y - 17), name, fill="white")
+        draw.rectangle((x + ax, y + ay, x + ax + aw, y + ay + ah), outline="#56E8FF", width=2)
+        bx, by, bw, bh = pixel_box(box, tile.size)
+        draw.rectangle((x + bx, y + by, x + bx + bw, y + by + bh), outline="white", width=1)
+        left, top = x + bx + (bw - target_w) // 2, y + by + (bh - target_h) // 2
+        draw.rectangle((left, top, left + target_w, top + target_h), outline="#F99AFF", width=2)
+    return card
 
 
 def plan_companion_insertion(ai, scene, companion, foreground, layout, folder, feedback, *, rejected=None,
@@ -1013,13 +1044,14 @@ def plan_companion_insertion(ai, scene, companion, foreground, layout, folder, f
     lettering = rendered_text_bounds(layout, folder)
     extent = [ceil(value / 0.72) for value in scale["size"]] if scale else companion["box"][2:]
     target_size = pixel_box((0, 0, *scale["size"]), scene.size)[2:] if scale else None
+    anchor = scale.get("anchor_box") if scale else None
 
     def has_room(box):
         return not target_size or all(span <= 0.80 * length for span, length in
                                       zip(target_size, pixel_box(box, scene.size)[2:], strict=True))
 
     nearby = {name: box for name, box in nearby_companion_boxes(
-        foreground, layout, lettering, product_bounds, extent).items() if has_room(box)}
+        foreground, layout, lettering, product_bounds, extent, anchor=anchor).items() if has_room(box)}
     if scale and has_room(companion["box"]):
         try:
             reserved = planned_companion({"companion": companion}, layout["artwork"], subject, layout["size"], lettering)
@@ -1030,8 +1062,11 @@ def plan_companion_insertion(ai, scene, companion, foreground, layout, folder, f
             nearby = {"reserved": box} | {key: value for key, value in nearby.items() if value != box}
     inputs = {"companion": companion, "artwork": layout["artwork"], "canvas_size": layout["size"],
               "product_bounds": product_bounds, "rendered_text_bounds": lettering, "nearby_boxes": nearby,
-              "insertion_feedback": feedback, "pairing_intent": pairing_intent, "target_size": scale}
+              "insertion_feedback": feedback, "pairing_intent": pairing_intent, "target_size": scale,
+              "has_placement_guide": bool(anchor and nearby), "has_rejected": rejected is not None}
     images = [to_float(scene)]
+    if anchor and nearby:
+        images.append(to_float(companion_placement_guide(scene, nearby, anchor, target_size)))
     if rejected is not None:
         images.append(to_float(rejected))
     for _ in range(2):
@@ -1101,7 +1136,17 @@ def scale_companion_for_reframe(scale, original_foreground, foreground):
         raise ValueError("다시 촬영한 상품의 비율이나 배열이 달라 소품 크기를 이어서 맞출 수 없습니다")
     zoom = sqrt(horizontal * vertical)
     size = [max(1, round(value * zoom)) for value in scale["size"]]
-    return scale | {"size": size}
+    adjusted = scale | {"size": size}
+    if anchor := scale.get("anchor_box"):
+        x, y, w, h = pixel_box(anchor, original_foreground.shape[::-1])
+        projected = (after[0] + (x - before[0]) * horizontal, after[1] + (y - before[1]) * vertical,
+                     after[0] + (x + w - before[0]) * horizontal, after[1] + (y + h - before[1]) * vertical)
+        left, top, right, bottom = (min(100, max(0, round(100 * edge / side))) for edge, side in
+                                    zip(projected, foreground.shape[::-1] * 2, strict=True))
+        adjusted.pop("anchor_box")
+        if left < right and top < bottom:
+            adjusted["anchor_box"] = [left, top, right - left, bottom - top]
+    return adjusted
 
 
 def choose_source_framing(ai, product, inputs, images):
