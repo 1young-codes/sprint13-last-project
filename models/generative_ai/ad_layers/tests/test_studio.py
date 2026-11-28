@@ -165,6 +165,8 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
                 layer.save(output / row["file"])
 
     monkeypatch.setattr(scene_ad, "render_texts", render_native)
+    monkeypatch.setattr(format_layout, "fitted_text_sizes", lambda rows, _: {
+        row["role"]: row["max_font_size"] for row in rows})
     approved = load_layout(folder)
     approved["photo_cue"] = "The vessel reflects a strip of lamp light."
     approved["brief"] = {"headline": "다듬기 전 제목", "message": "포근한 겨울 저녁을 보여 줍니다"}
@@ -255,6 +257,9 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
             if step == "ad_photo_regions":
                 assert len(images) == 1
                 return '{"regions":[]}'
+            if step == "ad_photo_type_placement":
+                assert data["option_order"][0] == "original" and len(images) == len(data["option_order"])
+                return '{"choice":"original","reason":"원래 여백에서 제목이 자연스럽습니다."}'
             if step == "ad_final_layout":
                 return '{"revision":null}'
             if step == "studio_staged_identity":
@@ -304,8 +309,10 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
     measured = ["ad_format_measured_layout"] if staged else []
     review = (["studio_staged_identity"] if staged else [])
     review += ["studio_format_native_review"] if same_piece else ["studio_repair_detail"]
-    assert calls == [*stages, *plans, "ad_composition", "ad_composition", *measured, "ad_scene_direction", "photo",
-                     "ad_photo_observation", "ad_photo_message", "ad_photo_cue_check", "ad_photo_regions", "ad_final_layout", *review]
+    assert calls.count("ad_photo_type_placement") <= 1
+    assert [step for step in calls if step != "ad_photo_type_placement"] == [
+        *stages, *plans, "ad_composition", "ad_composition", *measured, "ad_scene_direction", "photo",
+        "ad_photo_observation", "ad_photo_message", "ad_photo_cue_check", "ad_photo_regions", "ad_final_layout", *review]
 
 
 def test_native_detail_repair_recomposes_after_source_identity_passes(draft, monkeypatch):
@@ -1149,6 +1156,25 @@ def test_format_options_use_measured_sizes_and_keep_clear_of_the_product(monkeyp
     for option in options.values():
         for x, y, w, h in option["boxes"].values():
             assert not mask[y:y+h, x:x+w].any()
+
+
+def test_finished_photo_can_place_type_along_the_actual_product_contour():
+    style = {"align": "left"}
+    layout = {"texts": [{"role": role} | style for role in ("headline", "product_name", "price")],
+              "design": {"boxes": {"headline": [4, 5, 35, 10]}}}
+    silhouette = np.zeros((100, 100), dtype=bool)
+    silhouette[24:66, 38:75] = True
+    silhouette[24:29, 25:38] = True
+    measurement = ({"headline": (28, 8), "product_name": (27, 8), "price": (16, 8)},
+                   {"headline": 8, "product_name": 5, "price": 5})
+    options = format_layout.position_options(layout, (100, 100), silhouette, [25, 24, 75, 66], measurement,
+                                             finished_photo=True)
+    boxes = options["headline_beside_left"]["boxes"]
+    headline, name, price = (boxes[role] for role in ("headline", "product_name", "price"))
+    assert headline[0] + headline[2] > 25 and 29 <= headline[1] < 66
+    assert headline[0] == name[0] == price[0] and name[1] < price[1]
+    for x, y, w, h in boxes.values():
+        assert not silhouette[y:y+h, x:x+w].any()
 
 
 @pytest.mark.parametrize("move", [False, True])

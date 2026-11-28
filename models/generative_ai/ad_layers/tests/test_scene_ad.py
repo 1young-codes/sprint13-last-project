@@ -581,6 +581,9 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             if step == "ad_composition_compare":
                 assert len(images) == 3 and not np.array_equal(images[0], images[1])
                 return '{"choice":"original","reason":"기존 위치에서 제목이 더 자연스럽게 읽힙니다"}'
+            if step == "ad_photo_type_placement":
+                assert len(images) >= 2
+                return '{"choice":"original","reason":"정리한 제목 배치를 유지합니다."}'
             if step == "ad_final_layout":
                 assert len(images) == 3 and images[1][0, 0, 2] == 1
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
@@ -631,9 +634,11 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     folder = tmp_path / "result"
     models = {"ai": Interpreter(), "generation": Model(), "mask": "mask"}
     layout = scene_ad.make_scene_ad(photo, fields, "", models, folder, references=[reference])
-    assert calls == ["ad_plan", "ad_direction", "ad_headline", "ad_art_direction", "ad_source_framing", "ad_layout",
-                     "ad_layout", "render", "ad_composition", "render", "ad_composition_compare", "ad_scene_direction", "qwen",
-                     "ad_photo_cue_check", "qwen", "ad_photo_cue_check", "ad_photo_regions", "ad_final_layout", "render"]
+    expected = ["ad_plan", "ad_direction", "ad_headline", "ad_art_direction", "ad_source_framing", "ad_layout",
+                "ad_layout", "render", "ad_composition", "render", "ad_composition_compare", "ad_scene_direction", "qwen",
+                "ad_photo_cue_check", "qwen", "ad_photo_cue_check", "ad_photo_regions", "ad_final_layout", "render"]
+    assert calls[:len(expected)] == expected
+    assert set(calls[len(expected):]) <= {"render", "ad_photo_type_placement"}
     assert layout["photo_cue"] == cue and [check["visible"] for check in layout["photo_cue_checks"]] == [False, True]
     exercise_cue_retry = False
     assert layout["design"]["accent"] is None
@@ -742,9 +747,11 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     (rejected / "layout.json").write_text(json.dumps(rejected_layout), encoding="utf-8")
     revision = scene_ad.make_scene_ad(photo, fields, "가벼운 아침 연출", models, tmp_path / "revision", references=[reference],
                                       previous=folder, rejected=rejected)
-    assert calls == ["ad_cycle_critique", "ad_art_direction", "ad_source_framing", "ad_layout", "ad_layout", "render", "ad_composition",
-                     "render", "ad_composition_compare", "ad_scene_direction", "qwen", "ad_photo_cue_check",
-                     "ad_photo_regions", "ad_final_layout", "render"]
+    expected = ["ad_cycle_critique", "ad_art_direction", "ad_source_framing", "ad_layout", "ad_layout", "render",
+                "ad_composition", "render", "ad_composition_compare", "ad_scene_direction", "qwen", "ad_photo_cue_check",
+                "ad_photo_regions", "ad_final_layout", "render"]
+    assert calls[:len(expected)] == expected
+    assert set(calls[len(expected):]) <= {"render", "ad_photo_type_placement"}
     assert revision["revision"]["weakness"] == "평평한 조명"
     assert revision["design"]["art_direction"] == "Narrow studio beam"
     assert revision["brief"]["headline"] == layout["brief"]["headline"]

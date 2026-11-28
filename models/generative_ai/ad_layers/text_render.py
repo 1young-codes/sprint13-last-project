@@ -139,6 +139,15 @@ def measure_texts(texts, size):
     return {text["role"]: tuple(extent) for text, extent in zip(texts, dimensions, strict=True)}
 
 
+def fitted_text_sizes(texts, size):
+    with typography_page(texts, size) as page:
+        failed = page.evaluate(FIT_SCRIPT)
+        if failed:
+            raise ValueError("기존 배치에서 글자 크기를 확인할 수 없습니다")
+        sizes = page.evaluate("() => Array.from(document.querySelectorAll('.t'), el => parseInt(el.style.fontSize, 10))")
+    return {text["role"]: pixels for text, pixels in zip(texts, sizes, strict=True)}
+
+
 def render_texts(texts: list[dict], size: tuple[int, int], folder: Path) -> None:
     """texts의 각 줄을 folder/<file>로 저장합니다. 줄마다 x, y, w, h, text, font, color, file이 있어야 합니다."""
     texts = [line for text in texts for line in text.get("lines", (text,))]

@@ -217,6 +217,15 @@ has weakened the title as a whole or opened up an unhelpful gap between the head
 Return choice (original, revision, or balanced when image three is an alternative) and a concrete Korean reason
 that describes what the images show."""
 
+PHOTO_TYPE_PLACEMENT_COMPARE = """The posters follow option_order. Their photograph and exact Korean copy are
+the same. Choose the reading path that makes the headline, photographed subject and selling information feel
+like one advertisement. Identify the product contour, line of light, motion or shared axis that visibly
+connects the words to the photo. Check that the title has enough presence at phone size and the name and price
+stay subordinate unless the offer leads. Do not reward proximity alone: avoid crammed text, awkward gaps,
+competition for attention, or a new empty band on an edge. Keep original if the alternatives only rearrange
+the same disconnection or weaken the photograph. Return choice (one option_order key) and reason
+(a concrete Korean sentence naming the visible relationship)."""
+
 CROWDED_OFFER_COMPARE = """The posters follow option_order. They use the same photograph, headline, product
 name, and exact price. Compare how the eye moves from the subject to the offer and whether both pieces of
 information can be read together at phone-feed size. Prefer the option that gives them breathing room without
@@ -1650,7 +1659,7 @@ def balanced_text_positions(original, revision, size, before, after):
 def review_finished(ai, answer, layout, scene, foreground, folder, design_input, references, *,
                     assess_composition=False, keep_wrap=False, assess_visual_type=False):
     """완성 사진 위의 글자와 구도를 검사하고 사진을 유지한 채 배치를 고칩니다."""
-    from .format_layout import outer_margins
+    from .format_layout import format_measurements, measured_styles, outer_margins, position_options
 
     if "photo_regions" not in layout:
         layout["photo_regions"] = find_photo_regions(ai, scene, layout.get("photo_cue"))
@@ -1742,7 +1751,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                  "Check the whole canvas after moving type, including the larger outer margins a move can leave. "
                  "Return an actual alternative with at least one changed field. Both rendered posters will be compared later.")
 
-    def render_revision(plan, folder):
+    def render_revision(plan, directory, *, keep_photo=False):
         if use_shared_palette:
             styles = {role: style.copy() for role, style in plan["styles"].items()}
             title = styles["headline"]
@@ -1753,22 +1762,85 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
             for role in ("product_name", "price"):
                 styles[role]["color"] = color
             plan = plan | {"styles": styles, "accent": None}
-        updated = design_layers(plan, design_input["copy"], size, design_input["fonts"], folder)
+        updated = design_layers(plan, design_input["copy"], size, design_input["fonts"], directory)
         updated.update({key: layout[key] for key in ("action_regions", "photo_regions") if key in layout})
-        revised_scene = (scene if plan["edge"] == answer["edge"] else
-                         set_photo_edge(scene, foreground, artwork, size, plan["edge"]))
-        revised_scene.save(folder / artwork["file"])
-        Image.fromarray(foreground).save(folder / "foreground.png")
-        check_layout(updated, folder)
-        plan, updated, remaining = readable_text_colors(plan, updated, folder, foreground,
+        if keep_photo:
+            copyfile(folder / artwork["file"], directory / artwork["file"])
+        else:
+            revised_scene = (scene if plan["edge"] == answer["edge"] else
+                             set_photo_edge(scene, foreground, artwork, size, plan["edge"]))
+            revised_scene.save(directory / artwork["file"])
+        Image.fromarray(foreground).save(directory / "foreground.png")
+        check_layout(updated, directory)
+        plan, updated, remaining = readable_text_colors(plan, updated, directory, foreground,
                                                         prefer_shared_tone=assess_visual_type)
         if remaining:
             raise ValueError(remaining)
         if assess_visual_type:
-            issues = photo_type_issues(plan, rendered_text_bounds(updated, folder), size)
+            issues = photo_type_issues(plan, rendered_text_bounds(updated, directory), size)
             if issues:
                 raise ValueError(" ".join(issues))
         return plan, updated
+
+    def save_revision(plan, updated, directory, reason):
+        first.save(folder / "before-typesetting.png")
+        for path in directory.iterdir():
+            path.replace(folder / path.name)
+        if "graphic" in layout and "graphic" not in updated:
+            (folder / layout["graphic"]["file"]).unlink(missing_ok=True)
+        return plan, updated, reason
+
+    def compare_photo_positions(plan, current, reason):
+        if (not assess_visual_type or plan.get("accent")
+                or any(row.get("depth") == "behind_subject"
+                       for text in current["texts"] for row in text.get("lines", (text,)))):
+            return plan, current, reason
+        from scipy.ndimage import binary_dilation
+
+        width, height = size
+        occupied = np.zeros((height, width), dtype=bool)
+        ax, ay, aw, ah = (artwork[key] for key in ("x", "y", "w", "h"))
+        occupied[ay:ay + ah, ax:ax + aw] = foreground | photo_region_mask(regions, (aw, ah))
+        occupied = binary_dilation(occupied, iterations=max(1, round(min(size) / 100)))
+        measured = current | {"design": plan}
+        try:
+            measurement = format_measurements(measured, size, finished_photo=True)
+        except ValueError:
+            return plan, current, reason
+        options = position_options(measured, size, occupied, placement, measurement, finished_photo=True)
+        original_space = outer_margins(placement, rendered_text_bounds(current, folder).values())
+        with TemporaryDirectory(dir=folder) as staging:
+            pictures, choices = [to_float(compose(current, folder))], {}
+            for name in ("headline_beside_left", "headline_beside_right", "copy_below",
+                         "headline_above_offer_below", "copy_left", "copy_right"):
+                if name not in options or len(choices) == 3:
+                    continue
+                option = options[name]
+                directory = Path(staging) / name
+                directory.mkdir()
+                candidate_plan = plan | {"boxes": option["boxes"], "styles": measured_styles(plan, option)}
+                try:
+                    candidate_plan, candidate = render_revision(candidate_plan, directory, keep_photo=True)
+                    candidate_ink = rendered_text_bounds(candidate, directory)
+                    check_type_margin(size, candidate_ink)
+                    if priority and weaker_headline_focus(candidate, candidate_ink, priority["phrase"]):
+                        continue
+                    margin = outer_margins(placement, candidate_ink.values())
+                    new_gaps = expanded_outer_margins(original_space, margin)
+                    if any(amount > 6 for amount in new_gaps.values()):
+                        continue
+                except ValueError:
+                    continue
+                pictures.append(to_float(compose(candidate, directory)))
+                choices[name] = (candidate_plan, candidate, directory)
+            if choices:
+                comparison = ask_stage(ai, "ad_photo_type_placement", PHOTO_TYPE_PLACEMENT_COMPARE,
+                                       {"option_order": ["original", *choices], "copy": inputs["copy"]}, pictures)
+                choice = comparison.get("choice")
+                if isinstance(choice, str) and choice in choices:
+                    reason = required_text(comparison, "reason", "완성 배치 비교")
+                    return save_revision(*choices[choice], reason)
+        return plan, current, reason
 
     typography_only = not requested_alternative and (contrast_issue or priority)
     editable = ("boxes", "styles") if typography_only else ("boxes", "styles", "accent", "edge")
@@ -1898,17 +1970,12 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                     raise ValueError("어느 배치가 더 나은지 확인하지 못했습니다")
                 revised, updated, candidate = versions[choice]
                 review["reason"] = reason
-            first.save(folder / "before-typesetting.png")
-            for path in candidate.iterdir():
-                path.replace(folder / path.name)
-            if "graphic" in layout and "graphic" not in updated:
-                (folder / layout["graphic"]["file"]).unlink()
-            return revised, updated, review.get("reason")
+            return compare_photo_positions(*save_revision(revised, updated, candidate, review.get("reason")))
     if original_error is not None:
         raise ValueError(original_error)
     if requested_alternative:
         raise ValueError(inputs["layout_error"])
-    return answer, layout, None
+    return compare_photo_positions(answer, layout, None)
 
 
 def review_crowded_offer(ai, design, layout, foreground, folder, fonts):

@@ -7,7 +7,7 @@ from PIL import Image
 
 from .layers import paste_clipped
 from .scene_ad import pixel_box
-from .text_render import measure_texts, minimum_font_size
+from .text_render import fitted_text_sizes, measure_texts, minimum_font_size
 
 
 def free_position(integral, size, extent, near, *, x_limits=(0, 100), y_limits=(0, 100), avoid=None):
@@ -110,16 +110,19 @@ def format_type_hierarchy(styles, focus):
     return styles if adjusted == price else styles | {"price": styles["price"] | {"size": adjusted}}
 
 
-def format_measurements(layout, size):
+def format_measurements(layout, size, *, finished_photo=False):
     width, height = size
     scale = width / layout["size"][0]
     heading_scale = min(scale, sqrt(scale * height / layout["size"][1]))
     tokens = [row for text in layout["texts"] for row in text.get("lines", (text,))]
-    pixels_by_role = {}
-    for text in tokens:
-        ratio = heading_scale if text["role"].startswith("headline") else scale
-        pixels = min(int(width * 0.2), max(minimum_font_size(width), round(text["max_font_size"] * ratio)))
-        pixels_by_role[text["role"]] = pixels
+    if finished_photo:
+        pixels_by_role = fitted_text_sizes(tokens, size)
+    else:
+        pixels_by_role = {}
+        for text in tokens:
+            ratio = heading_scale if text["role"].startswith("headline") else scale
+            pixels = min(int(width * 0.2), max(minimum_font_size(width), round(text["max_font_size"] * ratio)))
+            pixels_by_role[text["role"]] = pixels
     focus = layout.get("design", {}).get("focus")
     lead = (pixels_by_role.get("product_name") if focus == "product_name" else
             max((pixels for role, pixels in pixels_by_role.items() if role.startswith("headline")), default=None))
@@ -129,7 +132,7 @@ def format_measurements(layout, size):
     return measure_texts(probes, size), {text["role"]: max(2, 100 * text["max_font_size"] / width) for text in probes}
 
 
-def position_options(layout, size, foreground, product_bounds, measurement):
+def position_options(layout, size, foreground, product_bounds, measurement, *, finished_photo=False):
     width, height = size
     dimensions, font_sizes = measurement
     layers = {text["role"]: text for text in layout["texts"]}
@@ -159,12 +162,12 @@ def position_options(layout, size, foreground, product_bounds, measurement):
 
     options = {}
 
-    def add(name, heading, offer):
+    def add(name, heading, offer, *, stack=stacked_offer):
         if not heading or not offer:
             return
         x, y = heading
         ox, oy = offer
-        if stacked_offer:
+        if stack:
             px, py = ox, oy + name_h + row_gap
         else:
             px, py = ox + name_w + 1, oy + (offer_h - price_h) // 2
@@ -204,6 +207,28 @@ def position_options(layout, size, foreground, product_bounds, measurement):
             horizontal_offset = (column[0] - header_w) // 2 if title["align"] == "center" else 0
             offer_offset = (column[0] - offer_w) // 2 if title["align"] == "center" else 0
             add(f"copy_{name}", (x + horizontal_offset, y), (x + offer_offset, y + header_h + group_gap))
+
+    if finished_photo:
+        mid = round(center)
+        for name, limits, x in (("left", (0, mid), max(anchor, left - header_w - 1)),
+                                ("right", (mid, 100), right)):
+            beside = free_position(integral, size, (header_w, header_h),
+                                   (x, top + 0.4 * (bottom - top) - header_h / 2), x_limits=limits,
+                                   y_limits=(top, bottom))
+            if beside:
+                hx, hy = beside
+                compact = (max(name_w, price_w), name_h + row_gap + price_h)
+                supporting = free_position(integral, size, compact, (hx, hy + header_h + group_gap),
+                                           y_limits=(hy + header_h, 100))
+                add(f"headline_beside_{name}", beside, supporting, stack=True)
+
+        below = free_position(integral, size, column, (center - column[0] / 2, bottom + group_gap),
+                              y_limits=(bottom + row_gap, 100))
+        if below:
+            x, y = below
+            heading_x = x + (column[0] - header_w) // 2 if title["align"] == "center" else x
+            offer_x = x + (column[0] - offer_w) // 2 if title["align"] == "center" else x
+            add("copy_below", (heading_x, y), (offer_x, y + header_h + group_gap))
 
     return options
 
