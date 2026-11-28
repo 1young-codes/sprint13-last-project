@@ -253,11 +253,28 @@ a headline with headline_locked=true, requires to communicate a pairing or situa
 draft-only idea, decorative objects, mood alone, or parts involved in a
 product demonstration. Otherwise give companion with object (short name), cue (which recognizable detail must be
 visible), and box [left, top, width, height] in whole percentages of the photograph, relative to the artwork only.
+In cue require only details needed for recognition and the owner's message. An optional color, shape or feature
+of the styling is not a required detail unless the owner supplied it.
 Keep that box fully inside the frame with margin, separate from the product and away from the type. The object
 must have room for its complete silhouette and enough detail to identify it in the full view. Adapt the camera
 height slightly if a necessary opening or surface would be hidden. Keep optional foreground details subordinate.
-In scene describe the companion as required, away from every frame edge. Do not describe it at or near an edge,
-even if the box is off-center. Avoid language that would crop it or obscure its identity."""
+When companion is required, scene is the first photograph: describe the product and setting with an empty
+surface where the companion will be added later. Do not name or depict the companion in this first photograph.
+Choose a box on a believable support surface with enough room for the object, its shadow, and blending edges."""
+
+COMPANION_INSERTION = """Plan one local addition to this actual photograph. Preserve the product, lighting,
+camera and existing surfaces. Find a genuinely empty area on a suitable support surface for the required object.
+The proposed box is a suggestion. Adjust it if the photograph has a different usable surface. Keep away from
+the product and rendered type. The box must contain the whole object, its shadow and spare background for a
+seamless blend. The object should be small enough to remain secondary. Return box [left, top, width, height]
+in whole percentages of the photograph and instruction, an English instruction for only that crop. Describe the
+object, its material and the actual local angle and placement on the existing surface. The image model sees
+only the box you selected. Choose its size so an object occupying about three fifths of its longer axis looks
+plausible at that depth relative to the product. Its defining detail must be readable without zooming in. The
+renderer specifies the object's size and centers it in the crop; omit size and position directions from
+instruction. Mention no object that is outside the crop. If a second image is supplied, it is the rejected
+addition. Use it and insertion_feedback to correct the position, scale or visible detail. Return box null
+when no suitable surface exists."""
 
 PHOTO_OBSERVATION = """Describe this single photograph as a viewer seeing it without any caption.
 If someone handles an object, distinguish what holds or supports it, what visibly moves or is poised to move,
@@ -307,8 +324,11 @@ image two is the repaired photo, image three is the edited area up close. Verify
 look for discontinuous materials, sharp patch edges, implausible light or shadow, and remnants at the frame edge.
 If secondary_object is provided, there must be visible space between its entire silhouette and the photo edges.
 Reject an object that is clipped or crowded against an edge even if the object can be identified. The corrected
-element should stay subordinate to the main product. Return accepted (boolean) and observation
-(a concrete Korean sentence about the result)."""
+element should stay subordinate to the main product while retaining a plausible scale for its position and
+recognizable details at full-frame size. Return accepted (boolean) and observation
+(a concrete Korean sentence about the result). When measure_object is true, also return object_box [left, top,
+width, height] in integer percentages of image three, bounding the entire visible object without its shadow.
+Return object_box null if the object cannot be identified."""
 
 DRAFT_PHOTO_COPY = f"""Reconsider a first, unapproved campaign draft after seeing the actual photograph.
 Image one is the source product and image two is the photograph to keep. Change the headline only if the
@@ -617,9 +637,11 @@ def remove_photo_writing(scene, foreground, mark):
     return Image.fromarray(np.rint(255 * cleaned).astype(np.uint8)) if removed else None
 
 
-def repair_scene_patch(model, scene, bounds, instruction, generation, *, secondary_object=None, foreground=None):
+def repair_scene_patch(model, scene, bounds, instruction, generation, *, secondary_object=None, foreground=None,
+                       crop_only=False):
     x, y, right, bottom = bounds
-    left, top, end_x, end_y = padded_box(bounds, min(right - x, bottom - y) // 2, scene.size)
+    margin = 0 if crop_only else min(right - x, bottom - y) // 2
+    left, top, end_x, end_y = padded_box(bounds, margin, scene.size)
     if secondary_object and foreground is not None and foreground[top:end_y, left:end_x].any():
         left, top, end_x, end_y = bounds
     window = scene.crop((left, top, end_x, end_y))
@@ -641,8 +663,13 @@ def repair_scene_patch(model, scene, bounds, instruction, generation, *, seconda
         object_area = percentages((x0 - left, y0 - top, x1 - left, y1 - top))
         placement = (f"Fit the complete silhouette inside {object_area} percent of this view. "
                      f"Intended object: {secondary_object}\n"
-                     "Reduce its scale or move it inward as needed. Keep the existing surface continuous around "
+                     "Keep the existing surface continuous around "
                      "the object. Add no other items, repeated products, new surface edges or borders. ")
+        if crop_only:
+            placement += ("Center the object. Its longer axis should fill about three fifths of that axis of this crop. "
+                          "Leave visible surface on all sides, including around its contact shadow. ")
+        else:
+            placement += "Reduce its scale or move it inward as needed. "
     prompt = (f"Make a local commercial-photo retouch within {region} in percent (left, top, right, bottom). "
               f"{instruction} {placement}Keep the surrounding material, camera view, depth of field and light continuous. "
               "Keep the entire replacement and its shadow inside the edit area. Add no lettering or graphics.")
@@ -773,6 +800,38 @@ def planned_companion(direction, artwork, subject, canvas_size, lettering):
                 and max(y * 100, text_top * canvas_size[1]) < min((y + height) * 100, text_bottom * canvas_size[1])):
             raise ValueError("촬영 소품의 위치가 실제 글자와 겹칩니다")
     return item | {"box": box}
+
+
+def plan_companion_insertion(ai, scene, companion, foreground, layout, folder, feedback, rejected=None):
+    subject = Image.new("RGBA", scene.size)
+    subject.putalpha(Image.fromarray(foreground).convert("L"))
+    lettering = rendered_text_bounds(layout, folder)
+    inputs = {"companion": companion, "artwork": layout["artwork"], "canvas_size": layout["size"],
+              "rendered_text_bounds": lettering, "insertion_feedback": feedback}
+    images = [to_float(scene)]
+    if rejected is not None:
+        images.append(to_float(rejected))
+    for _ in range(2):
+        placement = ask_stage(ai, "ad_companion_insertion", COMPANION_INSERTION, inputs, images)
+        if "box" in placement and placement["box"] is None:
+            raise ValueError("완성 사진에 필수 소품을 자연스럽게 놓을 빈 면이 없습니다")
+        try:
+            planned = planned_companion({"companion": companion | {"box": placement.get("box")}},
+                                        layout["artwork"], subject, layout["size"], lettering)
+            instruction = required_text(placement, "instruction", "촬영 소품 부분 편집")
+            left, top, width, height = pixel_box(planned["box"], scene.size)
+            return (left, top, left + width, top + height), instruction, planned
+        except ValueError as error:
+            inputs.update(previous_box=placement.get("box"), layout_error=str(error))
+    raise ValueError(inputs["layout_error"])
+
+
+def companion_has_visible_scale(box):
+    try:
+        accepted = validate_boxes({"object": box}, ("object",))["object"]
+    except ValueError:
+        return False
+    return max(accepted[2:]) >= 40
 
 
 def choose_source_framing(ai, product, inputs, images):
@@ -2063,11 +2122,9 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                     if direction_attempt:
                         raise ValueError("필수 소품의 수정된 촬영 위치를 확인하지 못했습니다")
                     break
-                framed = (frame_subject(effective, (artwork["w"], artwork["h"]), answer["subject_box"],
-                                        answer.get("source_crop")) if effective is not None and answer.get("subject_box") else None)
                 try:
                     lettering = rendered_text_bounds(layout, result)
-                    companion = planned_companion(direction, artwork, framed, size, lettering)
+                    companion = planned_companion(direction, artwork, None, size, lettering)
                     break
                 except ValueError as error:
                     if direction_attempt:
@@ -2122,14 +2179,14 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 orientation = "square"
             prompt = (f"Compose for this {orientation} photograph, filling its {picture_size[0]} by "
                       f"{picture_size[1]} frame with the planned composition. {prompt}")
-        if photo_cue:
+        if photo_cue and companion is None:
             prompt += f" The finished photo must visibly show: {photo_cue}"
         if companion:
             left, top, width, height = companion["box"]
-            prompt += (f" Set a single {companion['object']} inside the rectangle from {left}% to {left + width}% "
-                       f"across and {top}% to {top + height}% down from the top-left of the camera frame. "
-                       "Show the entire item at the planned small scale with visible background around its silhouette. "
-                       "Use a light depth blur only if its distinguishing detail can still be seen. This is a scene prop.")
+            prompt = (f"Photograph the product on its own first. Leave bare continuous supporting surface at "
+                      f"{left}%–{left + width}% across and {top}%–{top + height}% down, with no {companion['object']} "
+                      "or substitute there or elsewhere in frame. A secondary object will be added in a separate edit. "
+                      f"{prompt}")
         if preview:
             if (result / artwork["file"]).is_file():
                 with Image.open(result / artwork["file"]) as planned:
@@ -2221,8 +2278,22 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 return check, message, finding
 
             foreground = None
+            base_scene = None
+            companion_feedback = None
             for attempt in range(2):
-                if patch_bounds is None:
+                if companion:
+                    if base_scene is None:
+                        generated = photograph(prompt)
+                        base_scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
+                        protected = find_foreground(base_scene, models["mask"], threshold)
+                    patch_bounds, instruction, companion = plan_companion_insertion(
+                        ai, base_scene, companion, protected, layout, result, companion_feedback,
+                        rejected=scene if attempt else None)
+                    original_scene = base_scene
+                    secondary_object = companion["object"]
+                    scene = repair_scene_patch(model, original_scene, patch_bounds, instruction, generation,
+                                               secondary_object=secondary_object, foreground=protected, crop_only=True)
+                elif patch_bounds is None:
                     generated = photograph(prompt)
                     scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
                 else:
@@ -2274,10 +2345,20 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 if matches and not finding["stray_writing"]:
                     if patch_bounds is not None:
                         repair = ask_stage(ai, "ad_photo_patch_check", PHOTO_PATCH_CHECK,
-                                           {"photo_cue": photo_cue, "secondary_object": secondary_object},
+                                           {"photo_cue": photo_cue, "secondary_object": secondary_object,
+                                            **({"measure_object": True} if companion else {})},
                                            [to_float(original_scene), to_float(scene), to_float(scene.crop(patch_bounds))])
                         finding["scene_patch_review"] = required_text(repair, "observation", "사진 부분 수정 검토")
-                        if repair.get("accepted") is not True:
+                        patch_accepted = repair.get("accepted") is True
+                        if companion and patch_accepted:
+                            patch_accepted = companion_has_visible_scale(repair.get("object_box"))
+                            if not patch_accepted:
+                                finding["scene_patch_review"] = ("필수 소품이 편집 영역에 비해 너무 작거나 "
+                                                                 "전체 윤곽을 확인할 수 없습니다")
+                        if not patch_accepted:
+                            if companion and not attempt:
+                                companion_feedback = finding["scene_patch_review"]
+                                continue
                             raise ValueError(f"사진 부분 수정이 자연스럽지 않습니다. {finding['scene_patch_review']}")
                     obstruction = blocking_distraction(check)
                     if reshot_background and check.get("blocking_distraction") is not None and obstruction is None:
@@ -2285,6 +2366,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                     if obstruction is not None:
                         observation, corrected_scene = obstruction
                         finding["blocking_distraction"] = observation
+                        if companion:
+                            raise ValueError(f"촬영한 사진에 상품과 경쟁하는 배경 물체가 남았습니다. {observation}")
                         if attempt:
                             raise ValueError(f"촬영한 사진에 상품과 경쟁하는 배경 물체가 남았습니다. {observation}")
                         answer = answer | {"art_direction": corrected_scene}
@@ -2300,6 +2383,12 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                         photo_cue = finding["observed_scene"]
                     break
                 foreground = None
+                if companion and not attempt and finding["identity_matches"]:
+                    companion_feedback = finding["stray_writing"] or (
+                        finding["observation"] if finding["message_supported"] else finding["message_observation"])
+                    continue
+                if companion and not finding["identity_matches"]:
+                    raise ValueError(f"촬영한 사진의 상품이 원본과 다릅니다. {finding['identity_observation']}")
                 if attempt:
                     if not finding["identity_matches"]:
                         raise ValueError(f"촬영한 사진의 상품이 원본과 다릅니다. {finding['identity_observation']}")

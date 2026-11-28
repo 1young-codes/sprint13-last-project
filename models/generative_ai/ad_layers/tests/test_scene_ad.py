@@ -31,6 +31,37 @@ def test_companion_placement_reserves_visible_space_in_artwork(box, error):
         assert positioned == companion | {"box": [max(9, box[0]), *box[1:]]}
 
 
+def test_companion_insertion_moves_away_from_actual_photographed_product(monkeypatch, tmp_path):
+    scene = Image.new("RGB", (100, 120), "tan")
+    foreground = np.zeros((120, 100), dtype=bool)
+    foreground[35:80, 53:88] = True
+    companion = {"object": "small matchbox", "cue": "The full lid and side are visible", "box": [55, 45, 18, 20]}
+    layout = {"artwork": {"x": 0, "y": 0, "w": 100, "h": 120}, "size": (100, 120)}
+    placements = iter([[55, 45, 18, 20], [10, 43, 18, 20]])
+    monkeypatch.setattr(scene_ad, "rendered_text_bounds", lambda *_: {})
+
+    class Agent:
+        def ask(self, step, images, prompt, *, model):
+            box = next(placements)
+            assert step == "ad_companion_insertion" and len(images) == 2 and images[0].shape == (120, 100, 3)
+            assert not np.array_equal(images[0], images[1])
+            data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
+            assert data["insertion_feedback"] == "소품이 큽니다"
+            if box != companion["box"]:
+                assert "실루엣" in data["layout_error"] and data["previous_box"] == companion["box"]
+            return json.dumps({"box": box, "instruction": "Rest it on the existing surface."})
+
+    bounds, instruction, placed = scene_ad.plan_companion_insertion(
+        Agent(), scene, companion, foreground, layout, tmp_path, "소품이 큽니다", rejected=Image.new("RGB", scene.size))
+    assert bounds == (10, 52, 28, 76) and placed["box"] == [10, 43, 18, 20]
+    assert instruction == "Rest it on the existing surface."
+
+
+@pytest.mark.parametrize(("box", "visible"), [([33, 31, 22, 24], False), ([20, 30, 60, 27], True), (None, False)])
+def test_companion_scale_rejects_visible_but_tiny_insertion(box, visible):
+    assert scene_ad.companion_has_visible_scale(box) is visible
+
+
 @pytest.mark.parametrize("decision", ["same_intent", "required_pairing", "unsupported", "intent_lost", "retry", "repeated_product"])
 def test_draft_copy_revision_requires_visual_confirmation(decision):
     photo = np.zeros((12, 12, 3))
@@ -84,11 +115,13 @@ def test_decimal_photo_region_protects_visible_object():
     assert protected[84, 53] and not protected[77, 55] and not protected[84, 40]
 
 
-def test_scene_patch_addition_excludes_product_from_context():
+@pytest.mark.parametrize("crop_only", [False, True])
+def test_scene_patch_addition_excludes_product_from_context(crop_only):
     scene = Image.new("RGB", (100, 100), "tan")
     scene.paste("red", (0, 0, 30, 40))
     foreground = np.zeros((100, 100), dtype=bool)
-    foreground[:40, :30] = True
+    if not crop_only:
+        foreground[:40, :30] = True
 
     class Model:
         def edit(self, context, prompt, seed, steps, *, size):
@@ -99,7 +132,7 @@ def test_scene_patch_addition_excludes_product_from_context():
 
     repaired = scene_ad.repair_scene_patch(Model(), scene, (0, 40, 50, 80), "Keep the surface continuous.",
                                            {"seed": 1, "steps": 25}, secondary_object="a small lamp",
-                                           foreground=foreground)
+                                           foreground=foreground, crop_only=crop_only)
     assert repaired.crop((0, 0, 100, 40)).tobytes() == scene.crop((0, 0, 100, 40)).tobytes()
     assert repaired.getpixel((25, 60)) == (0, 0, 255)
 
