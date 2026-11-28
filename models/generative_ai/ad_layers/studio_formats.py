@@ -13,8 +13,9 @@ from .creative_brief import TEXT_ROLES, ask_stage, required_text, validate_boxes
 from .format_layout import (format_measurements, format_type_hierarchy, measured_styles, outer_margins, position_options,
                             preview_placement)
 from .layers import compose, load_layout, load_settings, save_layout, to_float
-from .scene_ad import (action_mask, check_text_overlap, check_type_margin, design_layers, find_action_regions,
-                       make_scene_ad, pixel_box, rendered_text_bounds, tighten_text_groups, touches_photo_edge)
+from .scene_ad import (action_mask, check_offer_spacing, check_text_overlap, check_type_margin, design_layers,
+                       find_action_regions, make_scene_ad, pixel_box, rendered_text_bounds, tighten_text_groups,
+                       touches_photo_edge)
 from .staging import check_staged_identity
 from .studio_edits import foreground_mask, line_break_after, repair_staged_detail
 from .text_render import LINE_HEIGHT, minimum_font_size
@@ -538,17 +539,6 @@ def text_detail(poster, bounds):
 
 def offer_detail(poster, ink):
     return text_detail(poster, (ink["product_name"], ink["price"]))
-
-
-def check_offer_spacing(ink, size):
-    first, second = sorted((ink["product_name"], ink["price"]))
-    if min(first[3], second[3]) <= max(first[1], second[1]):
-        return
-    width, height = size
-    gap = (second[0] - first[2]) * width
-    letter_height = max(first[3] - first[1], second[3] - second[1]) * height
-    if gap > 3 * letter_height:
-        raise ValueError("상품명과 가격 사이의 빈 공간이 너무 넓습니다. 제목과 사진은 두고 두 문구를 가까이 배치하세요")
 
 
 def move_copy_inside(design, ink, size):
@@ -1217,7 +1207,7 @@ def rebuild_format(source, output, format_name, photo, fields, idea, ai, models,
     with TemporaryDirectory(dir=output.parent) as temporary:
         folder = Path(temporary) / "candidate"
         layout = make_scene_ad(photo, fields, idea, models | {"ai": ai}, folder, previous=source,
-                               references=references, format_rebuild=(size, str(issue)))
+                               references=references, format_rebuild=(size, str(issue), issue.poster))
         if tuple(layout["size"]) != size or {row["role"]: row["text"] for row in layout["texts"]} != copy:
             raise ValueError("새 구도에서 채택 시안의 규격 또는 문구가 달라졌습니다")
         if layout["design"]["crop"] == "preserve" and touches_photo_edge(foreground_mask(folder, layout)):
@@ -1227,7 +1217,12 @@ def rebuild_format(source, output, format_name, photo, fields, idea, ai, models,
         restored = None
         if revision.get("staged_piece_box") is not None:
             restored = restore_format_detail(folder, layout, ai, models)
-        with Image.open(source / "ad.png") as reference, Image.open(folder / "ad.png") as poster:
+        backdrop = compose(layout | {"texts": []}, folder)
+        design, layout = readable_offer_colors(layout["design"], layout, backdrop, folder)
+        layout["design"] = design
+        poster = compose(layout, folder)
+        poster.save(folder / "ad.png")
+        with Image.open(source / "ad.png") as reference:
             phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
             before = [to_float(issue.poster)] if issue.poster is not None else []
             details = []

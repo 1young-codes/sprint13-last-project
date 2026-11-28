@@ -161,7 +161,8 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
     save_layout(approved, folder)
     photo = Image.new("RGB", (100, 100), "orange")
     calls = []
-    issue = studio_formats.FormatPhotoIssue("세로 축에 사진의 단서가 없습니다", Image.new("RGB", (1080, 1920)))
+    failed_resize = Image.new("RGB", (1080, 1920)) if ready else None
+    issue = studio_formats.FormatPhotoIssue("세로 축에 사진의 단서가 없습니다", failed_resize)
 
     class Model:
         def use_lora(self, *_):
@@ -194,12 +195,19 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
                 assert data["canvas_size"] == [1080, 1920]
                 assert data["copy"]["headline"] == "포근한 겨울 저녁"
                 assert data["revision_feedback"]["format_issue"] == str(issue)
-                assert len(images) == (3 if staged else 2)
+                assert data["has_failed_resize"] is ready
+                assert len(images) == 2 + staged + ready
+                if ready:
+                    assert images[-1].shape[:2] == (1920, 1080)
                 answer = approved["design"] | {"subject_box": [67, 32, 20, 50]}
                 if staged:
                     answer["boxes"] = answer["boxes"] | {"product_name": answer["boxes"]["headline"]}
                 return json.dumps(answer)
             if step == "ad_composition":
+                assert images[0].shape[:2] == (1920, 1080)
+                assert data["has_failed_resize"] is ready
+                if ready:
+                    assert images[-1].shape[:2] == (1920, 1080)
                 if calls.count(step) == 1:
                     if staged:
                         return '{"reason":"가장자리까지 상품을 키웁니다","revision":{"subject_box":[0,0,100,100]}}'
@@ -241,8 +249,8 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
             if step == "studio_repair_detail":
                 return '{"target_box":null}'
             assert step == "studio_format_native_review"
-            assert data["copy"]["price"] == "18,000원" and data["has_attempted_resize"]
-            assert not data["has_staged_group"] and len(images) == 5
+            assert data["copy"]["price"] == "18,000원" and data["has_attempted_resize"] is ready
+            assert not data["has_staged_group"] and len(images) == 4 + ready
             assert images[-2].shape[:2] == (1920, 1080)
             assert images[-1].shape[:2] == (640, 360)
             return json.dumps({"ready": ready, "observation": "세로로 이어지는 빛을 확인했습니다"})
@@ -270,6 +278,7 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
         assert framing["method"] == "native"
         saved = load_layout(output)
         assert saved["format"] == "9:16" and saved["photo_cue"] == approved["photo_cue"]
+        assert {text["color"] for text in saved["texts"] if text["role"] != "headline"} == {"#000000"}
         assert (output / "ad.png").exists()
         assert (output / "staging.png").exists() == staged
     stages = ["ad_format_staging", "ad_staging", "ad_staging_check"] if staged else []
@@ -847,6 +856,29 @@ def test_product_name_and_price_cannot_occupy_opposite_ends_of_an_offer_line():
         studio_formats.check_offer_spacing(ink, (1024, 1024))
     studio_formats.check_offer_spacing(ink | {"price": [48, 18, 60, 21]}, (1024, 1024))
     studio_formats.check_offer_spacing(ink | {"price": [30, 22, 42, 25]}, (1024, 1024))
+
+
+def test_native_composition_checks_the_rendered_gap_before_photography(draft):
+    folder, _ = draft
+    prior = load_layout(folder)
+    copy = {row["role"]: row["text"] for row in prior["texts"]}
+    boxes = prior["design"]["boxes"] | {"product_name": [10, 75, 45, 10], "price": [70, 75, 25, 10]}
+    plan = prior["design"] | {"boxes": boxes, "subject_box": [35, 35, 30, 30]}
+    fonts = ["noto_sans_kr"]
+    layout = scene_ad.design_layers(plan, copy, (100, 100), fonts, folder)
+    product = Image.new("RGBA", (30, 30), "orange")
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            assert step == "ad_composition"
+            data = json.loads(request.split("Input JSON follows:\n", 1)[1])
+            assert "상품명과 가격 사이의 빈 공간" in data["layout_error"]
+            return json.dumps({"reason": "판매 정보를 같은 축에 붙입니다",
+                               "revision": {"boxes": boxes | {"price": [10, 86, 45, 10]}}})
+
+    inputs = {"copy": copy, "fonts": fonts, "revision_feedback": {"format_issue": "하단이 비어 있습니다"}}
+    revised, _, _ = scene_ad.review_composition_plan(Agent(), product, plan, layout, folder, inputs, ())
+    assert revised["boxes"]["price"] == [10, 86, 45, 10]
 
 
 def test_small_format_margin_repair_moves_the_entire_copy_without_changing_type():

@@ -590,6 +590,7 @@ def review_composition_plan(ai, product, design, layout, folder, inputs, images)
     review_input = inputs | {"design": design, "rendered_text_bounds": rendered_text_bounds(layout, folder)}
     task = BLOCKING + "\n" + DESIGN_SCHEMA
     format_issue = inputs.get("revision_feedback", {}).get("format_issue")
+    has_failed_resize = inputs.get("has_failed_resize")
     if format_issue:
         task += ("\nThe draft is for the target canvas_size. Check the visible geometry against format_issue. "
                  "If the same gap or disconnected offer remains, revise the shared geometry, including the "
@@ -597,6 +598,10 @@ def review_composition_plan(ai, product, design, layout, folder, inputs, images)
                  "When crop is preserve, keep a clear edge around the actual silhouette. Increase its span "
                  "along the long axis using composition, not stretching or squeezing every edge. "
                  "When returning revision null, also return ready true only if the actual draft resolves the issue.")
+        if has_failed_resize:
+            task += (" The last image is the failed resize. Compare it to the first image, which shows the new "
+                     "placement before photography. In the reason, name how the product, copy and any defining "
+                     "scene element will occupy the previously unused part of the frame.")
     if "layout_device" in inputs.get("revision_feedback", {}):
         task += ("\nTest how revision_feedback.layout_device appears in the rendered draft. "
                  "If it only exists in the written plan, move or resize the artwork, lettering or graphic "
@@ -606,8 +611,10 @@ def review_composition_plan(ai, product, design, layout, folder, inputs, images)
 
     def check_draft(mask, plan, candidate_layout, candidate_folder):
         check_text_overlap(mask, candidate_layout, candidate_folder)
-        if format_issue and plan["crop"] == "preserve" and touches_photo_edge(mask):
-            raise ValueError("전체를 보여 줄 상품이 사진 가장자리에 닿습니다")
+        if format_issue:
+            if plan["crop"] == "preserve" and touches_photo_edge(mask):
+                raise ValueError("전체를 보여 줄 상품이 사진 가장자리에 닿습니다")
+            check_offer_spacing(rendered_text_bounds(candidate_layout, candidate_folder), candidate_layout["size"])
 
     editable = {"concept", "focus", "background", "accent", "artwork_box", "subject_box", "crop", "source_crop",
                 "edge", "boxes", "styles"}
@@ -655,14 +662,16 @@ def review_composition_plan(ai, product, design, layout, folder, inputs, images)
                     compare_task += (" Return choice neither if both drafts repeat format_issue or only change "
                                      "position without visibly solving the reading path.")
                     compare_inputs["format_issue"] = format_issue
+                    if has_failed_resize:
+                        compare_task += " The last image is the failed resize. Use it to verify what visibly changed."
                 comparison = ask_stage(ai, "ad_composition_compare", compare_task, compare_inputs,
                                        [to_float(first), to_float(rendered), *images[1:]])
                 choice = comparison.get("choice")
                 if choice == "neither" and format_issue:
                     review_input["layout_error"] = required_text(comparison, "reason", "게시 규격 구도 비교")
                     review_input["rejected_design"] = changed
-                    photo_input = [to_float(first), *images, to_float(rendered)]
-                    task += "\nThe final image shows a rejected placement. Address layout_error without repeating it."
+                    photo_input = [to_float(first), to_float(rendered), *images]
+                    task += "\nThe second image shows a rejected placement. Address layout_error without repeating it."
                     continue
                 if choice == "original":
                     kept_reason = required_text(comparison, "reason", "촬영 전 구도 비교")
@@ -849,6 +858,19 @@ def rendered_text_bounds(layout, folder):
     return bounds_by_role
 
 
+def check_offer_spacing(ink, size):
+    if not {"product_name", "price"} <= ink.keys():
+        raise ValueError("상품명과 가격이 모두 화면에 보여야 합니다")
+    first, second = sorted((ink["product_name"], ink["price"]))
+    if min(first[3], second[3]) <= max(first[1], second[1]):
+        return
+    width, height = size
+    gap = (second[0] - first[2]) * width
+    letter_height = max(first[3] - first[1], second[3] - second[1]) * height
+    if gap > 3 * letter_height:
+        raise ValueError("상품명과 가격 사이의 빈 공간이 너무 넓습니다. 제목과 사진은 두고 두 문구를 가까이 배치하세요")
+
+
 def check_type_margin(size, ink):
     width, height = size
     clearance = min(size) / 40
@@ -914,12 +936,16 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
     """완성 사진 위의 글자와 구도를 검사하고 사진을 유지한 채 배치를 고칩니다."""
     if layout.get("photo_cue") and "action_regions" not in layout:
         layout["action_regions"] = find_action_regions(ai, scene, layout["photo_cue"])
+    rebuilt_format = (design_input.get("revision_feedback") or {}).get("format_issue")
 
     def check_layout(candidate, directory):
         check_text_overlap(foreground, candidate, directory)
         tighten_text_groups(foreground, candidate, directory)
-        if candidate.get("action_regions"):
-            check_type_margin(candidate["size"], rendered_text_bounds(candidate, directory))
+        if candidate.get("action_regions") or rebuilt_format:
+            ink = rendered_text_bounds(candidate, directory)
+            check_type_margin(candidate["size"], ink)
+            if rebuilt_format:
+                check_offer_spacing(ink, candidate["size"])
 
     original_error = None
     try:
@@ -1171,7 +1197,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
     canvas = settings["canvas"]
     size = (canvas["width"], canvas["height"])
     if format_rebuild is not None:
-        size, format_issue = format_rebuild
+        size, format_issue, failed_resize = format_rebuild
         copy = {text["role"]: text["text"] for text in prior["texts"]}
     images = [to_float(photo), *map(to_float, references)]
     revision_info = {"requested_scene_change": feedback} if feedback else None
@@ -1319,12 +1345,18 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             design_task += "\nSource framing is approved. Use source_framing and lay out the actual view without changing it."
         if format_rebuild is not None:
             design_input["approved_concept"] = prior["design"]["concept"]
+            design_input["has_failed_resize"] = failed_resize is not None
             design_task += ("\nThe second image is the selected campaign poster. Keep the existing campaign idea, "
                             "visible product assortment, visual motif and typographic voice. Solve format_issue by "
                             "planning the photograph and type together for canvas_size from the beginning. Think in the "
                             "long axis of the new frame. Use camera depth, the direction of the photographic cue or "
                             "relative subject and headline scale. Do not center the old composition between two "
                             "background-only bands or invent new product components. Treat the first image as identity.")
+            if failed_resize is not None:
+                design_task += (" The last image shows the failed resize. Use its visible product, scene detail and "
+                                "copy positions to locate the problem. Reblock the product and defining scene element "
+                                "relative to each other and the copy so the layout uses the new frame from edge to edge. "
+                                "Leave purposeful quiet space around the copy.")
         elif feedback:
             design_task += ("\nThe second image is the previous poster. Plan the requested_scene_change in revision_feedback "
                             "and preserve unaffected parts of that composition.")
@@ -1340,7 +1372,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                                 "through relative scale, overlap or direction; a separate caption above a catalog shot is insufficient.")
         if staged_view is not None:
             design_images = [*design_images, staged_view]
-            design_task += ("\nThe final image is the actual rearranged product. Use its new positions and physical "
+            location = "The image before the failed resize" if design_input.get("has_failed_resize") else "The final image"
+            design_task += (f"\n{location} is the actual rearranged product. Use its new positions and physical "
                             "shape when directing the layout. Gray is transparent.")
             if group is not None:
                 design_task += (" Use the full rearranged silhouette as the shape of subject_box. Give its leading "
@@ -1350,6 +1383,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             design_images = [*design_images, to_float(moved_view)]
             design_task += ("\nThe final image shows the requested camera viewpoint with unreconstructed regions. "
                             "Plan space for the visible subject and type around that view.")
+        if design_input.get("has_failed_resize"):
+            design_images.append(to_float(failed_resize))
         answer = proposal["design"] if proposal else (
             ask_stage(ai, "ad_layout", design_task, design_input, design_images) | frame_fields)
         try:
@@ -1373,8 +1408,9 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
 
         composition_reason = proposal.get("composition_reason") if proposal else None
         if product is not None and not proposal:
+            blocking_images = design_images if format_rebuild is not None else images
             answer, layout, composition_reason = review_composition_plan(
-                ai, product, answer, layout, result, design_input, images)
+                ai, product, answer, layout, result, design_input, blocking_images)
             effective = crop_subject(product, answer)
         detail_shot = product is not None and answer.get("source_crop") is not None
         alternate_framing = bool(scene_issue and detail_shot)
