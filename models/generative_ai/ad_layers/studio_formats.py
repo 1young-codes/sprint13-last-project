@@ -11,7 +11,7 @@ from scipy.ndimage import distance_transform_edt
 from .creative_brief import TEXT_ROLES, ask_stage, required_text, validate_boxes
 from .format_layout import (format_measurements, format_type_hierarchy, measured_styles, outer_margins, position_options,
                             preview_placement, wrapped_placement)
-from .layers import compose, load_layout, load_settings, save_layout, to_float
+from .layers import compose, load_layout, load_settings, paste_clipped, save_layout, to_float
 from .scene_ad import (check_offer_spacing, check_text_overlap, check_type_margin, design_layers,
                        find_photo_regions, headline_breaks, make_scene_ad, photo_region_mask, pixel_box, rendered_text_bounds,
                        review_crowded_offer, review_headline_scale, review_related_offer, tighten_text_groups,
@@ -19,7 +19,7 @@ from .scene_ad import (check_offer_spacing, check_text_overlap, check_type_margi
 from .staging import check_staged_identity
 from .studio_edits import edit_version, foreground_mask, line_break_after, repair_staged_detail
 from .text_render import LINE_HEIGHT, minimum_font_size
-from .type_contrast import color_lightness, ink_background, ink_contrast, readable_text_colors
+from .type_contrast import color_lightness, emphasis_ink, ink_background, ink_contrast, readable_text_colors, shared_photo_ink
 
 
 FORMATS = {"1:1": (1024, 1024), "4:5": (864, 1080), "9:16": (1080, 1920), "16:9": (1280, 720),
@@ -935,6 +935,60 @@ def review_copy_over_photo_edge(ai, design, layout, foreground, folder):
     return unchanged
 
 
+def review_photo_ink(ai, design, layout, folder, poster):
+    lines = [line for text in layout["texts"] for line in text.get("lines", (text,))]
+    if layout.get("graphic") or any(line.get("depth") == "behind_subject" for line in lines):
+        return design, layout, poster, None
+    layers, samples = [], []
+    for line in lines:
+        with Image.open(folder / line["file"]) as bitmap:
+            pixels = np.array(bitmap.convert("RGBA"))
+        base = ~emphasis_ink(line, pixels)
+        alpha = np.where(base, pixels[..., 3], 0)
+        layers.append((line, pixels, base))
+        if (alpha >= 128).any():
+            samples.append((line, alpha))
+    colors = {line["color"].lower() for line, _ in samples}
+    if len(colors) < 2:
+        return design, layout, poster, None
+    backdrop = compose(layout | {"texts": []}, folder)
+    color = shared_photo_ink(backdrop, samples)
+    if color is None:
+        return design, layout, poster, None
+    rgb = ImageColor.getrgb(color)
+    candidate = backdrop.convert("RGBA")
+    changed = {}
+    for line, pixels, base in layers:
+        if (base & (pixels[..., 3] > 0)).any():
+            pixels[base, :3] = rgb
+            changed[line["role"]] = (line["file"], pixels)
+        paste_clipped(candidate, Image.fromarray(pixels), line["x"], line["y"])
+    candidate = candidate.convert("RGB")
+    prompt = """같은 사진, 문구, 글꼴, 크기, 위치에서 색만 비교합니다. 첫 번째는 기존 글자색이고,
+두 번째는 강조색을 보존하고 나머지 글자색을 사진에 맞춰 통일했습니다. 제목과 판매 정보의 위계가
+분명하고, 글자와 사진의 색이 더 자연스럽게 이어지며 작은 글자의 대비도 좋으면 shared를 고르세요.
+기존이 더 잘 읽히거나 색을 나눌 이유가 있으면 original을 고르세요.
+choice(original 또는 shared)와 사진에서 확인한 근거를 한국어 observation으로 JSON에 반환하세요."""
+    previews = [to_float(ImageOps.contain(view, (360, 640), Image.Resampling.LANCZOS))
+                for view in (poster, candidate)]
+    result = ask_stage(ai, "studio_format_ink", prompt, {"colors": sorted(colors), "shared": color}, previews)
+    reason = result.get("observation")
+    if result.get("choice") != "shared" or not isinstance(reason, str) or not reason.strip():
+        return design, layout, poster, None
+
+    def apply_color(role, item):
+        if rows := item.get("lines"):
+            return item | {"color": color, "lines": [apply_color(f"headline_line_{index}", row)
+                                                    for index, row in enumerate(rows, 1)]}
+        return item | {"color": color} if role in changed else item
+
+    for file, pixels in changed.values():
+        Image.fromarray(pixels).save(folder / file)
+    design = design | {"styles": {role: apply_color(role, style) for role, style in design["styles"].items()}}
+    layout = layout | {"texts": [apply_color(text["role"], text) for text in layout["texts"]]}
+    return design, layout, candidate, reason.strip()
+
+
 def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
     layout = load_layout(source)
     size = FORMATS[format_name]
@@ -1221,6 +1275,9 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                 if headline_scale_review or related_offer_review or copy_surface_review:
                     ink = rendered_text_bounds(candidate, stage)
             poster = compose(candidate, stage)
+            ink_review = None
+            if size[1] > size[0] and not contrast_issue:
+                revised, candidate, poster, ink_review = review_photo_ink(ai, revised, candidate, stage, poster)
             phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
             review = ask_stage(ai, "studio_format_reading", FORMAT_READING,
                                {"copy": copy, "focus": design["focus"], "product_bounds": bounds, "rendered_ink": ink,
@@ -1266,6 +1323,8 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                 candidate["headline_scale_review"] = headline_scale_review
             if copy_surface_review:
                 candidate["copy_surface_review"] = copy_surface_review
+            if ink_review:
+                candidate["ink_review"] = ink_review
             if "art_direction_plan" in layout:
                 candidate["art_direction_plan"] = layout["art_direction_plan"]
             if "photo_cue" in layout:

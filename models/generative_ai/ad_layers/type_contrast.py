@@ -21,6 +21,24 @@ def color_lightness(rgb):
     return luminance(srgb_to_linear(np.asarray(rgb) / 255)) + 0.05
 
 
+def shared_photo_ink(backdrop, layers):
+    samples = []
+    for text, alpha in layers:
+        x, y, w, h = (text[key] for key in ("x", "y", "w", "h"))
+        pixels = to_float(backdrop.crop((x, y, x + w, y + h)))[np.asarray(alpha) >= 128]
+        if not pixels.size:
+            return None
+        samples.append(pixels)
+    surface = np.mean([np.median(pixels, axis=0) for pixels in samples], axis=0)
+    tint = (surface - surface.mean()) * (0.22 * 255)
+    backgrounds = [luminance(srgb_to_linear(pixels)) + 0.05 for pixels in samples]
+    for neutral in (246, 16):
+        rgb = tuple(np.rint(np.clip(neutral + tint, 0, 255)).astype(int))
+        if all(ink_contrast(color_lightness(rgb), background) >= 4.5 for background in backgrounds):
+            return "#%02X%02X%02X" % rgb
+    return None
+
+
 def legible_tone(color, background, minimum):
     original = np.asarray(ImageColor.getrgb(color))
     if not background.size or ink_contrast(color_lightness(original), background) >= minimum:
@@ -37,6 +55,18 @@ def recolor_ink(path, alpha, color):
     bitmap = Image.new("RGBA", alpha.size, color)
     bitmap.putalpha(alpha)
     bitmap.save(path)
+
+
+def emphasis_ink(line, pixels):
+    if not (emphasis := line.get("emphasis")):
+        return np.zeros(pixels.shape[:2], dtype=bool)
+    base = line["color"]
+    if emphasis["phrase"] == line["text"] or emphasis["color"].lower() == base.lower():
+        return np.ones(pixels.shape[:2], dtype=bool)
+    rgb = pixels[..., :3].astype(np.int32)
+    base_error = ((rgb - ImageColor.getrgb(base)) ** 2).sum(axis=2)
+    accent_error = ((rgb - ImageColor.getrgb(emphasis["color"])) ** 2).sum(axis=2)
+    return accent_error < base_error
 
 
 def readable_headline_colors(design, layout, backdrop, folder, foreground, unresolved=None, *, prefer_shared_tone=False):
@@ -59,15 +89,8 @@ def readable_headline_colors(design, layout, backdrop, folder, foreground, unres
         minimum = 3 if large else 4.5
         emphasis = line.get("emphasis")
         base = line["color"]
-        marked = np.zeros(ink.shape, dtype=bool)
+        marked = emphasis_ink(line, pixels)
         if emphasis:
-            if emphasis["phrase"] == line["text"] or emphasis["color"].lower() == base.lower():
-                marked[:] = True
-            else:
-                rgb = pixels[..., :3].astype(np.int32)
-                base_error = ((rgb - ImageColor.getrgb(base)) ** 2).sum(axis=2)
-                accent_error = ((rgb - ImageColor.getrgb(emphasis["color"])) ** 2).sum(axis=2)
-                marked = accent_error < base_error
             background = ink_background(backdrop, line, ink & marked)
             if background.size:
                 accent_background.append(background)

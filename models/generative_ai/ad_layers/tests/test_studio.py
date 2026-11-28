@@ -985,6 +985,55 @@ def test_offer_contrast_uses_actual_ink_on_the_new_photo(draft, price_background
         assert image.getchannel("A").tobytes() == before_alpha
 
 
+@pytest.mark.parametrize("review", ["shared", "original", "mixed_light"])
+def test_shared_ink_uses_the_photo_and_keeps_the_exact_glyphs(draft, review):
+    folder, _ = draft
+    layout = load_layout(folder)
+    design = layout["design"]
+    title = layout["texts"][0]
+    title["color"] = "#FFD9B9"
+    title["emphasis"] = {"phrase": "포근한", "color": "#FFA244"}
+    design["styles"]["headline"] = design["styles"]["headline"] | {
+        "color": title["color"], "emphasis": title["emphasis"]}
+    path = folder / title["file"]
+    with Image.open(path) as bitmap:
+        alpha = bitmap.getchannel("A")
+    ink = Image.new("RGBA", alpha.size, title["color"])
+    ink.paste(title["emphasis"]["color"], (0, 0, 1, 3))
+    ink.putalpha(alpha)
+    ink.save(path)
+    photo = Image.new("RGB", (100, 100), "#532F1B")
+    if review == "mixed_light":
+        photo.paste("#FFF8E7", (0, 45, 100, 100))
+    photo.save(folder / "scene.png")
+    poster = compose(layout, folder)
+    calls = []
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            calls.append(step)
+            assert np.any(images[0] != images[1])
+            return json.dumps({"choice": review, "observation": "나무 표면의 따뜻한 색과 이어집니다"})
+
+    revised, candidate, picture, reason = studio_formats.review_photo_ink(Agent(), design, layout, folder, poster)
+
+    assert calls == ([] if review == "mixed_light" else ["studio_format_ink"])
+    assert bool(reason) == (review == "shared")
+    assert picture.tobytes() == compose(candidate, folder).tobytes()
+    assert [text["text"] for text in candidate["texts"]] == [text["text"] for text in layout["texts"]]
+    if reason:
+        color, = {text["color"] for text in candidate["texts"]}
+        red, green, blue = ImageColor.getrgb(color)
+        assert red > green > blue
+        assert {style["color"] for style in revised["styles"].values()} == {color}
+        assert revised["styles"]["headline"]["emphasis"] == title["emphasis"]
+    else:
+        assert (revised, candidate, picture) == (design, layout, poster)
+    with Image.open(path) as bitmap:
+        assert bitmap.getchannel("A").tobytes() == alpha.tobytes()
+        assert bitmap.getpixel((0, 0)) == ink.getpixel((0, 0))
+
+
 def test_title_contrast_changes_the_printed_emphasis_without_changing_the_glyphs(tmp_path):
     first = {"role": "headline_line_1", "text": "내용", "file": "first.png", "color": "#FAEBD8",
              "x": 0, "y": 0, "w": 30, "h": 25, "max_lines": 1}
