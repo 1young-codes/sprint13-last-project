@@ -149,7 +149,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             if step == "ad_photo_cue_check":
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
                 has_corrected_message = repair_message and calls.count(step) == 2
-                assert data["photo_cue"] == (corrected_cue if has_corrected_message else cue)
+                assert data["photo_cue"] == ("유리 가장자리에 호박색 빛이 있습니다" if has_corrected_message else cue)
                 assert images[1].shape == (1024, 512, 3)
                 assert data["has_approved_detail"] is expect_correction and len(images) == (3 if expect_correction else 2)
                 identity = {"identity_matches": not reject_identity,
@@ -261,7 +261,8 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     corrected = scene_ad.make_scene_ad(photo, fields, "", models, tmp_path / "message-corrected", proposal=layout)
     assert calls == ["render", "qwen", "ad_photo_cue_check", "qwen", "ad_photo_cue_check"]
     assert [check["message_supported"] for check in corrected["photo_cue_checks"]] == [False, True]
-    assert corrected["photo_cue"] == corrected_cue and corrected["design"]["art_direction"] == semantic_correction
+    assert corrected["photo_cue"] == "유리 가장자리에 호박색 빛이 있습니다"
+    assert corrected["design"]["art_direction"] == semantic_correction
     assert corrected["texts"] == layout["texts"]
     repair_message = False
     reject_cue = True

@@ -226,7 +226,9 @@ a direction requirement. If false, return corrected_photo_cue and correction as 
 observable action preserving the existing product and facts, plus visible_support (the actual visible contact
 that holds the moving tool or item), action_target (the distinct place that receives the material or shows the
 end of the movement), and reposition as a boolean. Describe support and target in English as visible positions
-or contact in a still frame. Words that merely imply movement do not describe either."""
+or contact in a still frame. Reuse a physically valid grip or support already named in the observation.
+Describe what it supports without inventing a different grip point or handling method. Words that merely
+imply movement do not describe either."""
 
 PHOTO_CUE_CHECK = """Compare the original product (first image) and the rendered photograph without type
 (second image). If has_approved_detail is true, the third image shows the selected source detail against
@@ -1405,6 +1407,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                     return model.edit(reference, instruction, generation["seed"], generation["steps"], size=render_size)
 
             approved_detail = on_gray(effective) if detail_shot and effective is not None else None
+            reshot_action = False
 
             def review_photo(candidate):
                 picture = to_float(candidate)
@@ -1413,8 +1416,10 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 message = ask_stage(ai, "ad_photo_message", PHOTO_MESSAGE,
                                     {"observation": seen, "headline": copy["headline"],
                                      "message": brief.get("message", copy["headline"])})
+                # Check the observable motion from the reshoot without requiring the draft's exact grip or instant.
                 check = ask_stage(ai, "ad_photo_cue_check", PHOTO_CUE_CHECK,
-                                  {"photo_cue": photo_cue, "has_approved_detail": approved_detail is not None,
+                                  {"photo_cue": seen if reshot_action else photo_cue,
+                                   "has_approved_detail": approved_detail is not None,
                                    "crop": answer["crop"], "product_facts": fields},
                                   [images[0], picture, *([to_float(approved_detail)] if approved_detail else [])])
                 observation = required_text(check, "observation", "촬영 결과 검토")
@@ -1452,6 +1457,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                         check, message, finding = review_photo(scene)
                         matches = finding["visible"] and finding["identity_matches"] and finding["message_supported"]
                 if matches and not finding["stray_writing"]:
+                    if reshot_action:
+                        photo_cue = finding["observed_scene"]
                     break
                 foreground = None
                 if attempt:
@@ -1476,6 +1483,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                     target = required_text(message, "action_target", "동작이 닿는 곳")
                     photo_cue = f"{action_cue} Visible support: {support} Visible destination: {target}"
                     answer = answer | {"art_direction": correction}
+                    reshot_action = True
                 if wrong_message or (reposition and staged_view is None and moved_view is None):
                     if reposition and staged_view is None and moved_view is None:
                         reference = photo.convert("RGB")
