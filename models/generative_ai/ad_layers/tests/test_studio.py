@@ -1177,6 +1177,23 @@ def test_finished_photo_can_place_type_along_the_actual_product_contour():
         assert not silhouette[y:y+h, x:x+w].any()
 
 
+def test_format_reuses_the_approved_reading_axis_inside_the_protected_regions_bounds():
+    layout = {"texts": [{"role": role, "align": "left"} for role in ("headline", "product_name", "price")],
+              "design": {"boxes": {"headline": [51, 43, 44, 10]}}}
+    silhouette = np.zeros((100, 100), dtype=bool)
+    silhouette[:22, 40:] = True
+    silhouette[27:92, 9:36] = True
+    measurement = ({"headline": (38, 6), "product_name": (18, 5), "price": (14, 5)},
+                   {"headline": 6, "product_name": 5, "price": 5})
+    options = format_layout.position_options(layout, (100, 100), silhouette, [9, 0, 100, 92], measurement)
+    boxes = options["copy_near_approved"]["boxes"]
+    assert boxes["headline"][:2] == [51, 43]
+    assert boxes["product_name"][0] == boxes["headline"][0]
+    assert boxes["product_name"][1] < 65 and boxes["price"][0] > boxes["product_name"][0]
+    for x, y, w, h in boxes.values():
+        assert not silhouette[y:y + h, x:x + w].any()
+
+
 @pytest.mark.parametrize("move", [False, True])
 def test_requested_format_repair_can_use_custom_layout_when_measured_options_exist(tmp_path, draft, monkeypatch, move):
     folder, _ = draft
@@ -1213,7 +1230,9 @@ def test_requested_format_repair_can_use_custom_layout_when_measured_options_exi
         assert boxes["headline"][:2] == [10, 20]
 
 
-def test_format_tries_a_rendered_measured_placement_after_two_invalid_custom_boxes(tmp_path, draft, monkeypatch):
+@pytest.mark.parametrize("visual_rejection", [False, True])
+def test_format_tries_a_rendered_measured_placement_after_two_rejected_layouts(tmp_path, draft, monkeypatch,
+                                                                              visual_rejection):
     folder, _ = draft
     measured = {"boxes": {"headline": [15, 15, 45, 15], "product_name": [15, 35, 45, 10], "price": [15, 50, 45, 10]},
                 "headline_lines": [], "font_sizes": {"headline": 5, "product_name": 5, "price": 3}}
@@ -1226,19 +1245,25 @@ def test_format_tries_a_rendered_measured_placement_after_two_invalid_custom_box
             stages.append(step)
             data = json.loads(request.split("Input JSON follows:\n", 1)[1])
             if step == "studio_reframe":
-                if len(stages) == 2:
-                    assert "오른쪽 가장자리" in data["layout_error"]
+                if stages.count(step) == 2:
+                    expected = "제목과 상품 사이가 비어 있습니다" if visual_rejection else "오른쪽 가장자리"
+                    assert expected in data["layout_error"]
                 proposed = data["approved_design"]
-                proposed["boxes"]["headline"] = [98, 10, 2, 20]
+                if not visual_rejection:
+                    proposed["boxes"]["headline"] = [98, 10, 2, 20]
                 proposed["accent"] = {"shape": "rectangle", "layer": "overlay", "box": [10, 90, 4, 7], "color": "#FF8888"}
                 return json.dumps(proposed)
             assert step == "studio_format_reading"
+            if visual_rejection and stages.count(step) <= 2:
+                return ('{"finding":"layout","headline_touches_product":false,'
+                        '"observation":"제목과 상품 사이가 비어 있습니다"}')
             assert data["rendered_ink"]["headline"][0] == 15
             return '{"finding":"ready","headline_touches_product":false,"observation":"실제 이미지의 오른쪽 여백을 확인했습니다"}'
 
     output = tmp_path / "reframed"
     studio_formats.adapt_format(folder, output, "thumbnail", Agent(), intent="상품 옆에 글을 배치")
-    assert stages == ["studio_reframe", "studio_reframe", "studio_format_reading"]
+    custom = ["studio_reframe", "studio_format_reading"] if visual_rejection else ["studio_reframe"]
+    assert stages == [*custom, *custom, "studio_format_reading"]
     assert load_layout(output)["text_placement"] == "fit"
 
 

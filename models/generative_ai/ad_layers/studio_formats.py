@@ -70,7 +70,8 @@ sentence naming what is visible and where)."""
 
 REFRAME = """Reframe the approved poster's exact typography for a new aspect ratio. The first image is the
 approved poster, the second is the actual photo in the new frame, and the third shows protected product
-pixels tinted in red. The fourth, if present, is a rejected rendered poster. Keep the photo unchanged. Use
+pixels tinted in red. The next images show measured placements in placement_preview_order. If a rejected
+render is shown, it comes last. Keep the photo unchanged. Use
 visible space outside the tinted shapes to place the exact headline, product name and price. Keep the approved
 campaign's colors and hierarchy. Pick fonts from the supplied list. Use an integer from 2 to 20 for size,
 as a percentage of the new canvas width. Group the product name and price. Keep the price visually
@@ -83,7 +84,8 @@ In a same-size repair, preserve the approved type's reading order and legibility
 centered, start by looking for a shared axis around it. Move the offer to a separate corner only when a visible
 line, action or contrast connects it to the reading path. Keep the offer comfortably readable at phone size.
 placement_options holds exact boxes checked against the product mask using the approved text sizes. If one
-fits the requested composition, choose its key as placement. Look for a side position near the photographed
+fits the requested composition, choose its key as placement. When previews are present, compare how the
+actual words connect to the visible feature before proposing new boxes. Look for a side position near the photographed
 point of interest when the intent calls for text on that side. If a one-line title would push everything into
 a top band, compare a natural two-line title and nearby offer in the side space. Use a custom layout when the
 measured choices would lose that reading path. You may also return colors as a map from a text role
@@ -907,6 +909,20 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
     inputs = {"size": size, "copy": copy, "fonts": list(fonts), "approved_design": design, "product_bounds": bounds}
     if intent:
         inputs["intent"] = intent
+    placement_previews = []
+    if regions and placements:
+        preferred = "copy_near_approved"
+        order = [preferred, *(name for name in placements if name != preferred)] if preferred in placements else placements
+        distinct = {}
+        for name in order:
+            option = placements[name]
+            if option not in distinct.values():
+                distinct[name] = option
+        placements = distinct
+        for name in list(placements)[:3]:
+            preview = preview_placement(framing, layout, source, placements[name])
+            placement_previews.append(to_float(ImageOps.contain(preview, (360, 640), Image.Resampling.LANCZOS)))
+        inputs["placement_preview_order"] = list(placements)[:len(placement_previews)]
     inputs["placement_options"] = placements
     if photo_cue:
         inputs["photo_cue"] = photo_cue
@@ -924,7 +940,6 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
         tried_offers = set()
         copy_position_review = None
         layout_attempts = offer_attempts = 0
-        measured_fallback = False
         measured_choices = iter(placements)
         used_placements = set()
 
@@ -981,8 +996,6 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                                               "사진과 확정 문구는 유지하고 제목까지 함께 재배치하세요.")
             if not offer_repair:
                 if layout_attempts == 2:
-                    if not measured_fallback:
-                        break
                     for name in measured_choices:
                         if name in used_placements:
                             continue
@@ -997,7 +1010,8 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                 else:
                     layout_attempts += 1
                     answer = ask_stage(ai, "studio_reframe", REFRAME,
-                                       inputs | {"preferred_first_lines": first_lines}, images)
+                                       inputs | {"preferred_first_lines": first_lines},
+                                       [*images[:3], *placement_previews, *images[3:]])
                     if placements and not intent and "layout_error" not in inputs and answer.get("placement") is None:
                         answer = {"placement": next(iter(placements))}
                     if isinstance(name := answer.get("placement"), str):
@@ -1007,7 +1021,6 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                     except ValueError as error:
                         inputs["layout_error"] = str(error)
                         inputs["previous_layout"] = answer
-                        measured_fallback = layout_attempts == 2
                         continue
                 framing.save(stage / candidate["artwork"]["file"])
                 framing_mask.save(stage / "foreground.png")

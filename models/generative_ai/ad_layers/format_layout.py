@@ -164,7 +164,8 @@ def position_options(layout, size, foreground, product_bounds, measurement, *, f
     left, top, right, bottom = product_bounds
     center = (left + right) / 2
     upper_half = (top + bottom) // 2
-    anchor = layout["design"]["boxes"]["headline"][0]
+    approved_x, approved_y, approved_width, approved_height = layout["design"]["boxes"]["headline"]
+    anchor = approved_x
     if title["align"] == "center":
         anchor = center - header_w / 2
     elif title["align"] == "right":
@@ -206,16 +207,22 @@ def position_options(layout, size, foreground, product_bounds, measurement, *, f
         add("headline_with_nearby_offer", heading, nearby)
 
     column = (max(header_w, offer_w), header_h + group_gap + offer_h)
+    group_alignment = {"left": 0, "center": 0.5, "right": 1}[title["align"]]
+    approved_near = (
+        approved_x + (approved_width - column[0]) * group_alignment,
+        approved_y + (approved_height - header_h) / 2,
+    )
     for name, x_limits, y_limits, near in (
         ("above", (0, 100), (0, upper_half), (anchor, top - column[1] - group_gap)),
         ("left", (0, left - row_gap), (0, 100), (left - column[0] - group_gap, (top + bottom - column[1]) / 2)),
         ("right", (right + row_gap, 100), (0, 100), (right + group_gap, (top + bottom - column[1]) / 2)),
+        ("near_approved", (0, 100), (0, 100), approved_near),
     ):
         found = free_position(integral, size, column, near, x_limits=x_limits, y_limits=y_limits)
         if found:
             x, y = found
-            horizontal_offset = (column[0] - header_w) // 2 if title["align"] == "center" else 0
-            offer_offset = (column[0] - offer_w) // 2 if title["align"] == "center" else 0
+            horizontal_offset = int((column[0] - header_w) * group_alignment)
+            offer_offset = int((column[0] - offer_w) * group_alignment)
             add(f"copy_{name}", (x + horizontal_offset, y), (x + offer_offset, y + header_h + group_gap))
 
     if finished_photo:
