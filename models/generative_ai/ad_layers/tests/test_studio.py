@@ -1194,6 +1194,33 @@ def test_format_reuses_the_approved_reading_axis_inside_the_protected_regions_bo
         assert not silhouette[y:y + h, x:x + w].any()
 
 
+def test_format_can_fit_a_reviewed_title_break_without_shrinking_the_type(monkeypatch):
+    style = {"font": "noto_sans_kr", "align": "left", "color": "#422D26", "size": 7, "max_lines": 1}
+    copy = {"headline": "따뜻한 빛으로 저녁을 감싸요", "product_name": "향초", "price": "18,000원"}
+    design = {"boxes": {"headline": [62, 40, 35, 12]}, "styles": {role: style.copy() for role in copy}}
+    layout = {"design": design, "texts": [style | {"role": role, "text": value} for role, value in copy.items()]}
+    occupied = np.zeros((100, 100), dtype=bool)
+    occupied[:, :60] = True
+    dimensions = {"headline": (46, 9), "product_name": (9, 6), "price": (13, 6)}
+    sizes = {"headline": 7, "product_name": 5, "price": 4}
+
+    def measure(rows, size):
+        assert size == (100, 100)
+        assert [(row["text"], row["max_font_size"]) for row in rows] == [("따뜻한 빛으로", 7), ("저녁을 감싸요", 7)]
+        return {row["role"]: (23, 9) for row in rows}
+
+    monkeypatch.setattr(format_layout, "measure_texts", measure)
+    split = {"first_line": "따뜻한 빛으로", "second_line": "저녁을 감싸요", "break_after": 2}
+    option = format_layout.wrapped_placement(layout, (100, 100), occupied, [0, 0, 60, 100],
+                                             (dimensions, sizes), split, [61, 40, 36, 10])
+    styles = format_layout.measured_styles(design, option)
+    result = scene_ad.layout_texts({"boxes": option["boxes"], "styles": styles}, copy, (100, 100), ["noto_sans_kr"])
+    assert [(row["text"], row["max_font_size"]) for row in result[0]["lines"]] == [("따뜻한 빛으로", 7), ("저녁을 감싸요", 7)]
+    assert option["boxes"]["headline"][0] == 61
+    assert all(x >= 60 for x, _, _, _ in option["boxes"].values())
+    assert result[0]["text"] == copy["headline"] and "lines" not in design["styles"]["headline"]
+
+
 @pytest.mark.parametrize("move", [False, True])
 def test_requested_format_repair_can_use_custom_layout_when_measured_options_exist(tmp_path, draft, monkeypatch, move):
     folder, _ = draft

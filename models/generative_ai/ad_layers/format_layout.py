@@ -250,6 +250,28 @@ def position_options(layout, size, foreground, product_bounds, measurement, *, f
     return options
 
 
+def wrapped_placement(layout, size, occupied, bounds, measurement, split, near):
+    dimensions, font_sizes = measurement
+    width, height = size
+    headline = next(text for text in layout["texts"] if text["role"] == "headline")
+    rows = [headline | {"role": f"headline_line_{index}", "text": split[key], "max_lines": 1,
+                        "x": 0, "y": 0, "w": width, "h": height,
+                        "max_font_size": round(width * font_sizes["headline"] / 100)}
+            for index, key in enumerate(("first_line", "second_line"), 1)]
+    row_dimensions = measure_texts(rows, size)
+    if max(w for w, _ in row_dimensions.values()) >= dimensions["headline"][0]:
+        return None
+    font_sizes = font_sizes | {row["role"]: font_sizes["headline"] for row in rows}
+    design = layout["design"]
+    if near is not None:
+        design = design | {"boxes": design["boxes"] | {"headline": near}}
+    draft = layout | {"design": design,
+                      "texts": [headline | {"lines": rows} if text is headline else text for text in layout["texts"]]}
+    options = position_options(draft, size, occupied, bounds, (dimensions | row_dimensions, font_sizes))
+    placement = options.get("copy_near_approved")
+    return placement | {"headline_break_after": split["break_after"]} if placement else None
+
+
 def measured_styles(design, plan, colors=None):
     colors = colors if colors is not None else {}
     line_roles = [f"headline_line_{index}" for index, _ in enumerate(plan["headline_lines"], 1)]
@@ -262,6 +284,8 @@ def measured_styles(design, plan, colors=None):
         styles[role]["color"] = colors[role]
     if plan["headline_lines"]:
         headline = styles["headline"]
+        if split := plan.get("headline_break_after"):
+            headline.update(max_lines=2, break_after=split, lines=[{}, {}])
         rows = []
         for line, box, role in zip(headline["lines"], plan["headline_lines"], line_roles, strict=True):
             row = line | {"box": box, "size": plan["font_sizes"][role]}

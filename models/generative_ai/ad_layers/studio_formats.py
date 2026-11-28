@@ -10,10 +10,10 @@ from scipy.ndimage import distance_transform_edt
 
 from .creative_brief import TEXT_ROLES, ask_stage, required_text, validate_boxes
 from .format_layout import (format_measurements, format_type_hierarchy, measured_styles, outer_margins, position_options,
-                            preview_placement)
+                            preview_placement, wrapped_placement)
 from .layers import compose, load_layout, load_settings, save_layout, to_float
 from .scene_ad import (check_offer_spacing, check_text_overlap, check_type_margin, design_layers,
-                       find_photo_regions, make_scene_ad, photo_region_mask, pixel_box, rendered_text_bounds,
+                       find_photo_regions, headline_breaks, make_scene_ad, photo_region_mask, pixel_box, rendered_text_bounds,
                        review_crowded_offer, tighten_text_groups, touches_photo_edge)
 from .staging import check_staged_identity
 from .studio_edits import edit_version, foreground_mask, line_break_after, repair_staged_detail
@@ -87,8 +87,11 @@ placement_options holds exact boxes checked against the product mask using the a
 fits the requested composition, choose its key as placement. When previews are present, compare how the
 actual words connect to the visible feature before proposing new boxes. Look for a side position near the photographed
 point of interest when the intent calls for text on that side. If a one-line title would push everything into
-a top band, compare a natural two-line title and nearby offer in the side space. Use a custom layout when the
-measured choices would lose that reading path. You may also return colors as a map from a text role
+a top band, compare a natural two-line title and nearby offer in the side space. When both line counts are shown,
+check the outside margin, phrasing, title hierarchy and the route from the title to the product detail together.
+If the one-line ending is pressed against the edge and two lines give it room at the same size, prefer the
+two-line layout when the phrase stays natural and the text still leads to the same visible feature.
+Use a custom layout when the measured choices would lose that reading path. You may also return colors as a map from a text role
 to a #RRGGBB when needed for contrast, including headline_line_1 or headline_line_2 for a split heading.
 Keep the measured boxes and font_sizes when selecting an option. If the
 available options do not fit after rendering, return a custom layout using boxes and styles instead.
@@ -217,10 +220,18 @@ and the scale and outer space suit the campaign. Keep current when none is bette
 from position_order) and observation (one Korean sentence describing the visible reason)."""
 
 COPY_BREAK = """검토할 광고 문구를 두 줄에 놓을 때 자연스러운 첫 줄을 고릅니다.
-문구를 그대로 읽고 문장의 절이나 호흡이 끝나는 곳에서 나눕니다. 상품을 설명하는 수량과 단위, 이름처럼
-같이 읽어야 하는 묶음을 유지합니다. 첫 줄의 끝에 낱말을 외따로 남기지 마세요.
+의미가 이어지도록 절이나 어구 사이에서 나눕니다. 완결된 문장 사이에서만 나눌 필요는 없습니다.
+수단을 나타내는 어구와 이어지는 동작처럼, 두 줄을 순서대로 읽으면 매끄러운 경계도 쓸 수 있습니다.
+수량과 단위, 제품 이름, 짧은 수식어와 그 수식을 받는 말처럼 함께 읽는 묶음은 유지합니다.
 문구를 고쳐 쓰지 마세요. 입력에 있는 각 역할을 키로 두고, 원래 문구에서 그대로 떼어낸 첫 줄 또는
 자연스러운 줄바꿈이 없다는 뜻의 null을 값으로 하는 JSON 객체를 반환하세요."""
+
+TITLE_WIDTH = """같은 광고를 휴대폰 크기로 그린 두 시안이 option_order 순서로 나옵니다. 제목 글자 크기와
+문구는 동일합니다. 화면 가장자리와 제목 끝 사이의 여백, 두 줄이 한 문구로 읽히는지,
+그리고 문구에서 사진의 어느 부분으로 시선이 이어지는지 비교하세요. 두 줄 배치가 문구의 뜻과 사진과의
+연결을 유지하면서 가장자리에 더 여유가 있으면 두 줄을 고르세요. 한 줄이 더 매끄럽고 가장자리 여백도
+충분하면 한 줄을 고르세요. 둘 다 문제가 있으면 null을 고르세요. JSON 객체에 placement(키 또는 null)와
+observation(실제로 보이는 차이 한 문장)을 반환하세요."""
 
 
 class FormatPhotoIssue(ValueError):
@@ -910,19 +921,26 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
     if intent:
         inputs["intent"] = intent
     placement_previews = []
-    if regions and placements:
-        preferred = "copy_near_approved"
-        order = [preferred, *(name for name in placements if name != preferred)] if preferred in placements else placements
+    preferred, wrapped = "copy_near_approved", "copy_near_approved_wrapped"
+    heading = layout["design"]["styles"]["headline"]
+    if (regions or photo_cue) and heading["max_lines"] == 1 and len(copy["headline"].split()) > 1:
+        box = placements.get(preferred, {}).get("boxes", {}).get("headline")
+        if box is None or min(box[0], 100 - box[0] - box[2]) < dimensions[1]["headline"]:
+            reply = ask_stage(ai, "studio_copy_break", COPY_BREAK + "\n옆 여백이 좁아 제목의 글자 크기를 살리기 위해 "
+                              "두 줄 후보를 비교합니다. 두 줄을 이어 읽을 수 있는 곳을 우선 찾으세요.",
+                              {"headline": copy["headline"]})
+            split = next((item for item in headline_breaks(copy["headline"]) if item["first_line"] == reply.get("headline")), None)
+            if split:
+                option = wrapped_placement(layout, size, np.asarray(occupied, dtype=bool), bounds, dimensions, split, box)
+                if option:
+                    placements[wrapped] = option
+    if (regions or wrapped in placements) and placements:
+        order = dict.fromkeys((preferred, wrapped, *placements))
         distinct = {}
         for name in order:
-            option = placements[name]
-            if option not in distinct.values():
+            if (option := placements.get(name)) is not None and option not in distinct.values():
                 distinct[name] = option
         placements = distinct
-        for name in list(placements)[:3]:
-            preview = preview_placement(framing, layout, source, placements[name])
-            placement_previews.append(to_float(ImageOps.contain(preview, (360, 640), Image.Resampling.LANCZOS)))
-        inputs["placement_preview_order"] = list(placements)[:len(placement_previews)]
     inputs["placement_options"] = placements
     if photo_cue:
         inputs["photo_cue"] = photo_cue
@@ -943,35 +961,68 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
         measured_choices = iter(placements)
         used_placements = set()
 
-        def render_copy(design):
-            candidate = design_layers(design, copy, size, fonts, stage)
+        def render_copy(design, folder):
+            candidate = design_layers(design, copy, size, fonts, folder)
             candidate["photo_regions"] = regions
-            headline_behind_subject = check_text_overlap(foreground, candidate, stage)
-            tighten_text_groups(foreground, candidate, stage)
-            ink = rendered_text_bounds(candidate, stage)
+            headline_behind_subject = check_text_overlap(foreground, candidate, folder)
+            tighten_text_groups(foreground, candidate, folder)
+            ink = rendered_text_bounds(candidate, folder)
             if not all(role in ink for role in TEXT_ROLES):
                 raise ValueError("제목과 상품명, 가격이 모두 화면에 보여야 합니다")
             check_offer_spacing(ink, size)
             return candidate, ink, headline_behind_subject
 
-        def render_placement(answer):
+        def render_placement(answer, folder=stage):
             proposed = selected_placement(answer, placements, design)
-            styles = format_styles(ai, proposed.get("styles"), layout["texts"], first_lines)
+            approved_lines = first_lines
+            if answer.get("placement") == wrapped:
+                split = placements[wrapped]["headline_break_after"]
+                approved_lines = first_lines | {"headline": " ".join(copy["headline"].split()[:split])}
+            styles = format_styles(ai, proposed.get("styles"), layout["texts"], approved_lines)
             styles = format_type_hierarchy(styles, design["focus"])
             plan = design | {"artwork_box": [0, 0, 100, 100], "boxes": proposed.get("boxes"),
                              "styles": styles, "accent": proposed.get("accent")}
             plan.pop("subject_box", None)
-            rendered, actual_ink, behind = render_copy(plan)
+            rendered, actual_ink, behind = render_copy(plan, folder)
             try:
                 check_type_margin(size, actual_ink)
             except ValueError:
                 shifted = move_copy_inside(plan, actual_ink, size) if intent else None
                 if shifted is None:
                     raise
-                rendered, actual_ink, behind = render_copy(shifted)
+                rendered, actual_ink, behind = render_copy(shifted, folder)
                 check_type_margin(size, actual_ink)
                 plan = shifted
             return plan, rendered, actual_ink, behind
+
+        width_choice = None
+        if regions or wrapped in placements:
+            preview_order = []
+            with TemporaryDirectory(dir=stage) as temporary:
+                folder = Path(temporary)
+                for name in list(placements)[:3]:
+                    if wrapped in placements:
+                        try:
+                            plan, candidate, _, _ = render_placement({"placement": name}, folder)
+                        except ValueError:
+                            continue
+                        framing.save(folder / candidate["artwork"]["file"])
+                        framing_mask.save(folder / "foreground.png")
+                        _, candidate, _ = readable_text_colors(plan, candidate, folder, foreground)
+                        preview = compose(candidate, folder)
+                    else:
+                        preview = preview_placement(framing, layout, source, placements[name])
+                    preview_order.append(name)
+                    placement_previews.append(to_float(ImageOps.contain(preview, (360, 640), Image.Resampling.LANCZOS)))
+            inputs["placement_preview_order"] = preview_order
+            if preferred in preview_order and wrapped in preview_order:
+                order = [preferred, wrapped]
+                comparison = ask_stage(ai, "studio_format_title_width", TITLE_WIDTH,
+                                       {"option_order": order, "copy": copy, "photo_cue": photo_cue},
+                                       [placement_previews[preview_order.index(name)] for name in order])
+                choice = comparison.get("placement")
+                if choice in order:
+                    width_choice = {"placement": choice}
 
         for attempt in range(4):
             joint_repair = False
@@ -1009,9 +1060,11 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                         break
                 else:
                     layout_attempts += 1
-                    answer = ask_stage(ai, "studio_reframe", REFRAME,
-                                       inputs | {"preferred_first_lines": first_lines},
-                                       [*images[:3], *placement_previews, *images[3:]])
+                    answer = width_choice if layout_attempts == 1 else None
+                    if answer is None:
+                        answer = ask_stage(ai, "studio_reframe", REFRAME,
+                                           inputs | {"preferred_first_lines": first_lines},
+                                           [*images[:3], *placement_previews, *images[3:]])
                     if placements and not intent and "layout_error" not in inputs and answer.get("placement") is None:
                         answer = {"placement": next(iter(placements))}
                     if isinstance(name := answer.get("placement"), str):
