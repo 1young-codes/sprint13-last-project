@@ -10,6 +10,27 @@ from models.generative_ai.ad_layers.text_render import page_html
 from models.generative_ai.photo_retouch import product_mask
 
 
+@pytest.mark.parametrize(("box", "error"), [
+    ([10, 43, 18, 20], None),
+    ([0, 43, 18, 20], None),
+    ([10, 43, 2, 20], "가장자리"),
+    ([55, 45, 18, 20], "실루엣"),
+    ([11, 10, 18, 20], "글자"),
+])
+def test_companion_placement_reserves_visible_space_in_artwork(box, error):
+    artwork = {"x": 10, "y": 12, "w": 100, "h": 120}
+    subject = Image.new("RGBA", (100, 120))
+    subject.paste("white", (53, 46, 85, 93))
+    lettering = {"headline": [9, 10, 24, 25], "price": [9, 75, 24, 90]}
+    companion = {"object": "small matchbox", "cue": "The full lid and side are visible", "box": box}
+    if error:
+        with pytest.raises(ValueError, match=error):
+            scene_ad.planned_companion({"companion": companion}, artwork, subject, (130, 160), lettering)
+    else:
+        positioned = scene_ad.planned_companion({"companion": companion}, artwork, subject, (130, 160), lettering)
+        assert positioned == companion | {"box": [max(9, box[0]), *box[1:]]}
+
+
 @pytest.mark.parametrize("decision", ["same_intent", "required_pairing", "unsupported", "intent_lost", "retry", "repeated_product"])
 def test_draft_copy_revision_requires_visual_confirmation(decision):
     photo = np.zeros((12, 12, 3))

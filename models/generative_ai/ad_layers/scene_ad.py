@@ -242,12 +242,22 @@ If the product name is broader than the photograph, do not fill in other items, 
 When there is a product demonstration, describe exactly what supports each object and the physical relationship
 of the moving parts. Use surroundings and props only where they serve this particular image or the owner's
 request. Follow the agreed crop. State only what the generated photograph should show. Include no ad text,
-graphics, coordinates or layout markup. Return JSON with 'scene' and 'photo_cue'. Write photo_cue as one
+graphics, coordinates or layout markup in scene. Return JSON with 'scene', 'photo_cue' and 'companion'. Write photo_cue as one
 short English sentence naming the visible relationship or effect that must be true for the scene to convey the
 message. For a demonstration, name the relative position and direction of the moving parts, not just their
 presence. Choose a moment that makes the intended action distinguishable from its reverse or an unrelated
 gesture. Show the actual grip or support in frame and use a visible starting point and a separate destination,
-contact or outcome for that distinction. The cue must be directly observable without reading the headline."""
+contact or outcome for that distinction. The cue must be directly observable without reading the headline.
+Use companion only for a distinct secondary object that an owner requirement in idea or product_facts, or
+a headline with headline_locked=true, requires to communicate a pairing or situation. Return null for a
+draft-only idea, decorative objects, mood alone, or parts involved in a
+product demonstration. Otherwise give companion with object (short name), cue (which recognizable detail must be
+visible), and box [left, top, width, height] in whole percentages of the photograph, relative to the artwork only.
+Keep that box fully inside the frame with margin, separate from the product and away from the type. The object
+must have room for its complete silhouette and enough detail to identify it in the full view. Adapt the camera
+height slightly if a necessary opening or surface would be hidden. Keep optional foreground details subordinate.
+In scene describe the companion as required, away from every frame edge. Do not describe it at or near an edge,
+even if the box is off-center. Avoid language that would crop it or obscure its identity."""
 
 PHOTO_OBSERVATION = """Describe this single photograph as a viewer seeing it without any caption.
 If someone handles an object, distinguish what holds or supports it, what visibly moves or is poised to move,
@@ -354,7 +364,11 @@ props that establish the setting or make the advertised use readable. Never list
 supporting hands or tools needed for the action, cast shadows, or the supporting surface. Use an empty array when
 there is no dispensable distraction. Each item has observation (Korean) and box in the same coordinates as
 stray_writing. Describe the specific object and why it draws attention.
-Verify photo_cue from the actual pixels in the second image when supplied. If it is null, set visible to true
+Verify photo_cue from the actual pixels in the second image when supplied. If required_companion is supplied,
+also check its complete silhouette, its recognizable detail, and visible clearance to every frame edge. Set
+visible to false if it is absent, clipped, hidden by the main product, crowds the frame edge, or has more visual
+weight than the product. For a required companion, enforce specific placement only when it is part of owner_idea
+or product_facts. Ignore proposed positions in art_direction when judging the actual framing. If photo_cue is null, set visible to true
 and describe the visible arrangement without requiring a specific effect. For a gesture or motion, locate
 the two relevant points and check their relative positions and direction. For light or material, locate the
 specified surface and check the actual highlight, shadow, or transmission there. Visible parts alone do not
@@ -364,7 +378,7 @@ identity_observation and observation (one concrete Korean sentence for each find
 (one precise English photographic instruction if either finding is false or stray_writing is present,
 otherwise null). In those cases,
 also return reposition (boolean, true when the correction must change the relative position or orientation
-of product parts). Correct the failed findings while keeping anything that already works. Describe a physically
+of product parts, false when moving a secondary object alone). Correct the failed findings while keeping anything that already works. Describe a physically
 complete arrangement when repositioning. Preserve the intended product scale and quiet area for lettering."""
 
 PHOTO_CLEANUP_COMPARE = """Compare the same photograph before and after a local cleanup. Use distractions to
@@ -731,6 +745,34 @@ def reconcile_draft_headline(ai, fields, idea, brief, original, picture, finding
             return None
         inputs.update(previous_revision=text, visual_issue=observation.strip())
     return None
+
+
+def planned_companion(direction, artwork, subject, canvas_size, lettering):
+    plan = direction.get("companion")
+    if plan is None:
+        return None
+    if not isinstance(plan, dict):
+        raise ValueError("촬영 소품의 배치가 올바르지 않습니다")
+    item = {key: required_text(plan, key, "함께 보이는 소품") for key in ("object", "cue")}
+    box = validate_boxes({"companion": plan.get("box")}, ("companion",))["companion"]
+    size = (artwork["w"], artwork["h"])
+    _, _, width, height = pixel_box(box, size)
+    gap = round(min(size) * 0.04)
+    clearance = max(gap, min(width, height) // 2)
+    inset_x, inset_y = (ceil(100 * clearance / side) for side in size)
+    x, y, w, h = box
+    if min(width, height) < 2 * gap or w + 2 * inset_x > 100 or h + 2 * inset_y > 100:
+        raise ValueError("촬영 소품을 알아볼 수 있도록 가장자리에서 띄울 공간이 필요합니다")
+    box = [max(inset_x, min(x, 100 - w - inset_x)), max(inset_y, min(y, 100 - h - inset_y)), w, h]
+    left, top, width, height = pixel_box(box, size)
+    if subject is not None and subject.getchannel("A").crop((left, top, left + width, top + height)).getbbox():
+        raise ValueError("촬영 소품과 상품의 실루엣이 겹칩니다")
+    x, y = left + artwork["x"], top + artwork["y"]
+    for text_left, text_top, text_right, text_bottom in lettering.values():
+        if (max(x * 100, text_left * canvas_size[0]) < min((x + width) * 100, text_right * canvas_size[0])
+                and max(y * 100, text_top * canvas_size[1]) < min((y + height) * 100, text_bottom * canvas_size[1])):
+            raise ValueError("촬영 소품의 위치가 실제 글자와 겹칩니다")
+    return item | {"box": box}
 
 
 def choose_source_framing(ai, product, inputs, images):
@@ -1948,8 +1990,10 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             art_plan = art_plan | {"shot_scale": "detail"}
             design_input["art_direction_plan"]["shot_scale"] = "detail"
         artwork = layout["artwork"]
+        companion = None
         if not proposal:
-            direction_input = {"message": brief["message"], "headline": copy["headline"], "idea": idea, "design": answer}
+            direction_input = {"message": brief["message"], "headline": copy["headline"], "idea": idea, "design": answer,
+                               "product_facts": fields, "headline_locked": "headline" in fields or prior is not None}
             angle, scale = ANGLES[art_plan["angle"]], SHOT_SCALES[art_plan["shot_scale"]]
             lighting = art_plan["lighting"]
             direction_input.update(art_direction_plan=art_plan, angle_guide=angle, framing_guide=scale,
@@ -1979,8 +2023,12 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             if (result / "composition.png").is_file():
                 with Image.open(result / "composition.png") as proof:
                     direction_images.append(to_float(proof))
+            elif (result / artwork["file"]).is_file():
+                direction_images.append(to_float(compose(layout, result)))
+            if len(direction_images) == 2:
                 direction_task += ("\nThe second image is the approved placement before photography. Use the subject "
                                    "position and open regions from it. Its lettering and flat colors are placeholders.")
+                direction_input["rendered_text_bounds"] = rendered_text_bounds(layout, result)
             if feedback:
                 if alternate_framing:
                     direction_task += ("\nUse the requested photographic effect with the approved close framing. "
@@ -2009,9 +2057,29 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 direction_task += ("\nLay out a real scene for the hypothesis and the approved headline position. "
                                    "Describe the path, gesture or feature that points toward the planned design. "
                                    "Keep layout_device to guide photography only: include no graphic or text in the photo.")
-            direction = ask_stage(ai, "ad_scene_direction", direction_task, direction_input, direction_images)
+            for direction_attempt in range(2):
+                direction = ask_stage(ai, "ad_scene_direction", direction_task, direction_input, direction_images)
+                if direction.get("companion") is None:
+                    if direction_attempt:
+                        raise ValueError("필수 소품의 수정된 촬영 위치를 확인하지 못했습니다")
+                    break
+                framed = (frame_subject(effective, (artwork["w"], artwork["h"]), answer["subject_box"],
+                                        answer.get("source_crop")) if effective is not None and answer.get("subject_box") else None)
+                try:
+                    lettering = rendered_text_bounds(layout, result)
+                    companion = planned_companion(direction, artwork, framed, size, lettering)
+                    break
+                except ValueError as error:
+                    if direction_attempt:
+                        raise
+                    direction_input.update(previous_companion=direction.get("companion"), layout_error=str(error),
+                                           rendered_text_bounds=lettering)
+                    direction_task += "\nKeep the required companion and correct its box using the latest layout_error."
             answer = answer | {"art_direction": required_text(direction, "scene", "촬영 연출")}
             photo_cue = (direction_input.get("approved_photo_cue") or required_text(direction, "photo_cue", "촬영 연출"))
+            if companion:
+                photo_cue = (f"Show the complete {companion['object']} with clear space around its outline, "
+                             f"separate from the product. Required visible detail: {companion['cue']}")
 
         picture_size = (artwork["w"], artwork["h"])
         subject_box = answer.get("subject_box")
@@ -2021,7 +2089,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                       "Keep all poster copy out of the photograph. " if feedback and not alternate_framing else "")
         guide = (f"{ANGLES[art_plan['angle']]} {SHOT_SCALES[art_plan['shot_scale']]} "
                  if art_plan else "")
-        if art_plan and not alternate_framing:
+        if art_plan and not alternate_framing and companion is None:
             guide += f"{art_plan['photo_device']} "
         prompt = ("Make a new commissioned photograph with a newly built setting and lighting. "
                   f"{correction}{placement}{guide}Replace the surroundings with the requested setting. "
@@ -2056,6 +2124,12 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                       f"{picture_size[1]} frame with the planned composition. {prompt}")
         if photo_cue:
             prompt += f" The finished photo must visibly show: {photo_cue}"
+        if companion:
+            left, top, width, height = companion["box"]
+            prompt += (f" Set a single {companion['object']} inside the rectangle from {left}% to {left + width}% "
+                       f"across and {top}% to {top + height}% down from the top-left of the camera frame. "
+                       "Show the entire item at the planned small scale with visible background around its silhouette. "
+                       "Use a light depth blur only if its distinguishing detail can still be seen. This is a scene prop.")
         if preview:
             if (result / artwork["file"]).is_file():
                 with Image.open(result / artwork["file"]) as planned:
@@ -2116,6 +2190,9 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                                 "has_approved_detail": approved_detail is not None,
                                 "crop": answer["crop"], "product_facts": fields, "message": brief.get("message"),
                                 "art_direction": answer["art_direction"]}
+                if companion:
+                    photo_inputs.update(required_companion={key: companion[key] for key in ("object", "cue")},
+                                        owner_idea=idea)
                 proof = [images[0], picture, *([to_float(approved_detail)] if approved_detail else []),
                          *photo_review_details(candidate)]
                 check = ask_stage(ai, "ad_photo_cue_check", PHOTO_CUE_CHECK, photo_inputs, proof)
@@ -2305,6 +2382,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             layout["art_direction_plan"] = art_plan
         if photo_cue:
             layout["photo_cue"] = photo_cue
+        if companion:
+            layout["photo_companion"] = companion
         if photo_checks:
             layout["photo_cue_checks"] = photo_checks
         if source_framing:
