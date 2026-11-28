@@ -10,6 +10,47 @@ from models.generative_ai.ad_layers.text_render import page_html
 from models.generative_ai.photo_retouch import product_mask
 
 
+@pytest.mark.parametrize("decision", ["same_intent", "required_pairing", "unsupported", "intent_lost", "retry", "repeated_product"])
+def test_draft_copy_revision_requires_visual_confirmation(decision):
+    photo = np.zeros((12, 12, 3))
+    candidate = np.ones((12, 12, 3))
+    idea = "조명으로 유리의 질감을 강조"
+    brief = {"headline": "창가의 한 방울", "message": "일상적인 사용", "scene": "Window light with a drop."}
+    draft = {"headline": "빛을 머금은 유리", "message": "유리에 빛이 비칩니다", "evidence": "병의 유리 테두리에 반사가 보입니다"}
+    finding = {"observed_scene": "유리 테두리가 반짝입니다", "message_observation": "방울이 보이지 않습니다"}
+    stages = []
+
+    class Agent:
+        def ask(self, stage, images, prompt, *, model):
+            stages.append(stage)
+            data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
+            if stage == "ad_draft_photo_copy":
+                assert data["owner_idea"] == idea and data["draft"] == {key: brief[key] for key in ("headline", "message")}
+                assert images[0] is photo and images[1] is candidate
+                if decision == "repeated_product":
+                    if len(stages) == 1:
+                        return json.dumps({"revision": draft | {"headline": "빛을 머금은 향수"}})
+                    assert "전체 상품명" in data["visual_issue"]
+                    return json.dumps({"revision": draft | {"first_line": "빛을 머금은"}})
+                if len(stages) > 1:
+                    assert data["visual_issue"] == "반사가 보입니다" and data["previous_revision"] == draft
+                return json.dumps({"revision": None if decision == "required_pairing" else draft | {"first_line": "빛을 머금은"}})
+            assert stage == "ad_draft_photo_copy_check" and images[0] is candidate
+            assert data["headline"] == draft["headline"]
+            assert data["owner_idea"] == idea
+            supported = decision != "unsupported" and (decision != "retry" or len(stages) > 2)
+            return json.dumps({"message_supported": supported,
+                               "intent_preserved": decision != "intent_lost", "message_observation": "반사가 보입니다"})
+
+    response = scene_ad.reconcile_draft_headline(Agent(), {"product_name": "향수"}, idea, brief, photo, candidate, finding)
+    pair = ["ad_draft_photo_copy", "ad_draft_photo_copy_check"]
+    expected = {"required_pairing": pair[:1], "repeated_product": pair[:1] + pair,
+                "retry": pair * 2, "unsupported": pair * 2}
+    assert stages == expected.get(decision, pair)
+    assert response == ((draft | {"scene": finding["observed_scene"]}, "반사가 보입니다", 2)
+                        if decision in ("same_intent", "retry", "repeated_product") else None)
+
+
 def test_decimal_photo_region_protects_visible_object():
     class Agent:
         def ask(self, step, images, prompt, *, model):

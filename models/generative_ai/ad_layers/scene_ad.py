@@ -11,7 +11,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 from .art_direction import ANGLES, LIGHTING, SHOT_SCALES, THEMES, plan_art_direction
-from .creative_brief import LAYOUT_ROLES, TEXT_ROLES, ask_stage, plan_copy, required_text, validate_boxes
+from .creative_brief import LAYOUT_ROLES, MAX_HEADLINE_LENGTH, TEXT_ROLES, ask_stage, plan_copy, required_text, validate_boxes
 from .layers import compose, cutout_product, load_layout, load_settings, paste_region, save_layout, to_float
 from .staging import on_gray, padded_box, source_parts, stage_group, stage_subject
 from .text_render import minimum_font_size, render_texts
@@ -299,6 +299,30 @@ If secondary_object is provided, there must be visible space between its entire 
 Reject an object that is clipped or crowded against an edge even if the object can be identified. The corrected
 element should stay subordinate to the main product. Return accepted (boolean) and observation
 (a concrete Korean sentence about the result)."""
+
+DRAFT_PHOTO_COPY = f"""Reconsider a first, unapproved campaign draft after seeing the actual photograph.
+Image one is the source product and image two is the photograph to keep. Change the headline only if the
+missing scene element was a creative choice in the draft and a distinct visible appeal can express the owner's
+idea. An explicit pairing, use, occasion, offer or other required part of the owner's idea or product facts must
+survive. Read requirements only from owner_idea and product_facts. The draft is an earlier creative suggestion.
+Return {{"revision":null}} when the owner's intent would be lost. Otherwise return revision with headline
+(natural Korean, at most {MAX_HEADLINE_LENGTH} characters including spaces), message (one Korean sentence), and
+evidence (the specific visible product detail or context that supports the message). Avoid filler, product-name
+repetition, unsupported claims, and ambiguous edge fragments. Choose the clearest distinctive product detail
+that the viewer can actually see. Use the setting or mood as support. Avoid generic wording that would fit a
+different item in the same scene. Write a line someone would put on a poster, not a literal catalog caption
+explaining what is visible. Aim for 7 to 13 characters when natural. Where two lines would help, add first_line
+as the exact initial words of headline up to a natural pause. Keep words that belong together on one line.
+Use first_line null when there is no natural two-line break. Exclude missing scene elements from the revised
+message as well as the headline. If visual_issue is supplied, address it without lowering the owner's intent."""
+
+DRAFT_PHOTO_COPY_CHECK = """Independently judge the proposed headline and message using this photograph.
+Check the concrete feature and the situation it depicts. Do not infer a missing feature from a shadow or an
+indistinct fragment. The setting and light can suggest time or mood without proving it. Check that the proposed
+copy serves the owner's idea and retains any explicitly required pairing, use, occasion, offer or product fact.
+Only require facts relevant to the proposed change; offer, price and product name are already printed separately.
+Return only JSON with exactly three keys: message_supported (boolean), intent_preserved (boolean), and
+message_observation (one Korean sentence explaining the visual fit). Return both booleans even if one is false."""
 
 PHOTO_CUE_CHECK = """Compare the original product (first image) and the rendered photograph without type
 (second image). If has_approved_detail is true, the third image shows the selected source detail against
@@ -673,6 +697,40 @@ def blocking_distraction(check):
     except ValueError:
         return None
     return observation, scene
+
+
+def reconcile_draft_headline(ai, fields, idea, brief, original, picture, finding):
+    context = {"product_facts": fields, "owner_idea": idea}
+    draft = {key: brief[key] for key in ("headline", "message")}
+    inputs = context | {"draft": draft, "observed_scene": finding["observed_scene"],
+                        "mismatch": finding["message_observation"]}
+    for _ in range(2):
+        revision = ask_stage(ai, "ad_draft_photo_copy", DRAFT_PHOTO_COPY, inputs, [original, picture]).get("revision")
+        if not isinstance(revision, dict):
+            return None
+        try:
+            text = {key: required_text(revision, key, "사진에 맞춘 문구") for key in ("headline", "message", "evidence")}
+        except ValueError:
+            return None
+        text["headline"] = " ".join(text["headline"].split())
+        if len(text["headline"]) > MAX_HEADLINE_LENGTH or text["headline"] == brief["headline"]:
+            return None
+        if fields["product_name"] in text["headline"]:
+            inputs.update(previous_revision=text, visual_issue="상품명이 별도 줄에 있으므로 제목에서 전체 상품명을 반복하지 마세요.")
+            continue
+        check = ask_stage(ai, "ad_draft_photo_copy_check", DRAFT_PHOTO_COPY_CHECK, text | context, [picture])
+        observation = check.get("message_observation")
+        if check.get("intent_preserved") is not True or not isinstance(observation, str) or not observation.strip():
+            return None
+        supported = check.get("message_supported")
+        if supported is True:
+            line_break = next((line["break_after"] for line in headline_breaks(text["headline"])
+                               if line["first_line"] == revision.get("first_line")), None)
+            return brief | text | {"scene": finding["observed_scene"]}, observation.strip(), line_break
+        if supported is not False:
+            return None
+        inputs.update(previous_revision=text, visual_issue=observation.strip())
+    return None
 
 
 def choose_source_framing(ai, product, inputs, images):
@@ -2095,6 +2153,38 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                     scene = repair_scene_patch(model, original_scene, patch_bounds, prompt, generation,
                                                secondary_object=secondary_object, foreground=protected)
                 check, message, finding = review_photo(scene)
+                if (not attempt and kept is None and "headline" not in fields and finding["visible"]
+                        and finding["identity_matches"] and not finding["message_supported"]
+                        and not finding["stray_writing"] and not blocking_distraction(check)
+                        and message.get("repair_kind") == "scene"):
+                    reframed = reconcile_draft_headline(ai, fields, idea, brief, images[0], to_float(scene), finding)
+                    if reframed is not None:
+                        revised_brief, observation, line_break = reframed
+                        revised_copy = copy | {"headline": revised_brief["headline"]}
+                        style = answer["styles"]["headline"].copy()
+                        for key in ("lines", "break_after", "emphasis"):
+                            style.pop(key, None)
+                        if line_break is not None and style["max_lines"] == 2:
+                            style["break_after"] = line_break
+                        revised_answer = answer | {"styles": answer["styles"] | {"headline": style}}
+                        with TemporaryDirectory(dir=result) as draft_folder:
+                            staged = Path(draft_folder)
+                            try:
+                                revised_texts = layout_texts(revised_answer, revised_copy, size, settings["fonts"])
+                                title = next(layer for layer in revised_texts if layer["role"] == "headline")
+                                render_texts([title], size, staged)
+                            except ValueError:
+                                pass
+                            else:
+                                for layer in staged.iterdir():
+                                    layer.replace(result / layer.name)
+                                finding["draft_copy_revision"] = {"previous_headline": copy["headline"],
+                                                                  "mismatch": finding["message_observation"]}
+                                finding.update(message_supported=True, message_observation=observation)
+                                brief, copy, answer = revised_brief, revised_copy, revised_answer
+                                layout["texts"] = [title if layer["role"] == "headline" else layer
+                                                   for layer in layout["texts"]]
+                                design_input.update(brief=brief, copy=copy, headline_breaks=headline_breaks(copy["headline"]))
                 matches = finding["visible"] and finding["identity_matches"] and finding["message_supported"]
                 if matches and finding["stray_writing"]:
                     mark = check["stray_writing"]
