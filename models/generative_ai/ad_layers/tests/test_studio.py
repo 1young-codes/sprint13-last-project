@@ -1320,6 +1320,39 @@ def test_composition_review_can_fix_a_valid_layout(draft):
     assert (folder / "scene.png").read_bytes() == original_photo
 
 
+@pytest.mark.parametrize("choice", ["original", "continuous"])
+def test_offer_scene_compares_a_photo_behind_the_existing_offer(draft, choice):
+    folder, _ = draft
+    loaded = load_layout(folder)
+    copy = {layer["role"]: layer["text"] for layer in loaded["texts"]}
+    design = loaded["design"] | {
+        "artwork_box": [0, 0, 100, 62], "subject_box": [55, 10, 35, 80], "edge": "blend",
+        "accent": {"shape": "rectangle", "layer": "background", "box": [4, 73, 2, 15], "color": "#990011"},
+        "boxes": loaded["design"]["boxes"] | {"product_name": [10, 73, 45, 7], "price": [10, 84, 45, 7]},
+    }
+    inputs = {"copy": copy, "fonts": ["noto_sans_kr"], "brief": {"message": "빛이 같은 나무 표면을 지나갑니다"}}
+    layout = scene_ad.design_layers(design, copy, (100, 100), inputs["fonts"], folder)
+    product = Image.new("RGBA", (35, 50), "#ffaa22")
+    scene_ad.composition_preview(product, design, layout, folder)
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            assert step == "ad_offer_scene" and len(images) == 2
+            assert not np.array_equal(images[0], images[1])
+            params = json.loads(request.split("Input JSON follows:\n", 1)[1])
+            assert params["original_photo_bounds"] == [0, 0, 100, 62]
+            return json.dumps({"choice": choice, "reason": "나무 표면을 상품 정보 뒤까지 이어갑니다."})
+
+    selected = scene_ad.review_offer_scene(Agent(), product, design, layout, folder, inputs, ())
+    if choice == "original":
+        assert selected is None and not (folder / "composition.png").exists()
+        return
+    revised, updated, _ = selected
+    assert revised["subject_box"] == [55, 6, 35, 50] and revised["boxes"] == design["boxes"]
+    assert revised["accent"]["layer"] == "overlay" and updated["artwork"]["h"] == 100
+    assert (folder / "composition.png").is_file()
+
+
 def test_unsolicited_layout_revision_compares_a_new_outer_band(draft):
     folder, _ = draft
     loaded = load_layout(folder)

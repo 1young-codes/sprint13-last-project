@@ -10,6 +10,18 @@ from models.generative_ai.ad_layers.text_render import page_html
 from models.generative_ai.photo_retouch import product_mask
 
 
+def test_continuous_photo_exposes_the_scene_beneath_a_full_offer_panel():
+    design = {"edge": "blend", "crop": "preserve", "artwork_box": [0, 0, 65, 100],
+              "subject_box": [10, 15, 80, 70], "accent": {"box": [65, 20, 35, 60], "shape": "rectangle"}}
+    ink = {"product_name": [70, 30, 90, 40], "price": [70, 50, 85, 60]}
+
+    alternative = scene_ad.continuous_offer_scene(design, ink)
+
+    assert alternative["subject_box"] == [6, 15, 52, 70] and alternative["accent"] is None
+    assert scene_ad.continuous_offer_scene(design | {"edge": "framed"}, ink) is None
+    assert scene_ad.continuous_offer_scene(design | {"crop": "intentional"}, ink) is None
+
+
 @pytest.mark.parametrize("phrase,needs_revision", [("옆에서 번지는 빛", True), ("차분한 아침", False), (None, False)])
 def test_headline_priority_compares_the_campaign_message_to_rendered_lines(phrase, needs_revision):
     lines = [{"text": "옆에서 번지는 빛", "role": "headline_line_1", "max_font_size": 80},

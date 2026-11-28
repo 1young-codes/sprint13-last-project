@@ -99,6 +99,16 @@ Compare which element gets the first glance and whether any graphic distracts fr
 Keep the original when the revision would merely trade one generic arrangement for another.
 Return JSON with choice (original or revision) and a concrete Korean reason."""
 
+OFFER_SCENE_COMPARE = """Compare two placement proofs before photography. The outlined edge in the first
+proof marks where the photograph would end and the flat design background would begin. The second proof
+lets one photograph continue beneath the selling information, with the same product scale and type positions.
+The outline and flat colors are only planning guides. Use the pictured product and campaign message to decide
+which arrangement is stronger. Choose continuous if a quiet part of the same real surface, light or setting
+can carry the offer and connect it to the product. Keep original when separate visual sections support the
+message better or the continued photograph would have no plausible space for legible type.
+Return choice (original or continuous) and reason (Korean, naming the purpose of the boundary or the specific
+surface and lighting that can continue beneath the information)."""
+
 SOURCE_FRAMING = """Propose one close framing to compare with the whole available product before layout.
 The first image is the isolated product in its tight bounds. The second is the original photo; any later images
 are references. Another reviewer will choose between the two views after seeing the rendered crop. If the message
@@ -596,6 +606,58 @@ def composition_preview(product, design, layout, folder):
 
 def touches_photo_edge(mask):
     return mask[[0, -1], :].any() or mask[:, [0, -1]].any()
+
+
+def continuous_offer_scene(design, ink):
+    if (design["edge"] != "blend" or design["crop"] != "preserve"
+            or not {"product_name", "price"} <= ink.keys()):
+        return None
+    x, y, width, height = design["artwork_box"]
+    offer = [ink["product_name"], ink["price"]]
+    separated = (max(box[2] for box in offer) <= x or min(box[0] for box in offer) >= x + width
+                 or max(box[3] for box in offer) <= y or min(box[1] for box in offer) >= y + height)
+    if not separated:
+        return None
+    sx, sy, sw, sh = design.get("subject_box", [8, 8, 84, 84])
+    left, right = (round(x + width * edge / 100) for edge in (sx, sx + sw))
+    top, bottom = (round(y + height * edge / 100) for edge in (sy, sy + sh))
+    accent = design.get("accent")
+    if accent and accent.get("layer", "background") == "background":
+        ax, ay, aw, ah = accent["box"]
+        covers_offer = all(ax <= l and ay <= t and r <= ax + aw and b <= ay + ah for l, t, r, b in offer)
+        accent = None if covers_offer else accent | {"layer": "overlay"}
+    return design | {"artwork_box": [0, 0, 100, 100], "edge": "framed",
+                     "subject_box": [left, top, right - left, bottom - top], "accent": accent}
+
+
+def review_offer_scene(ai, product, design, layout, folder, inputs, images):
+    alternative = continuous_offer_scene(design, rendered_text_bounds(layout, folder))
+    if alternative is None:
+        return None
+    original = compose(layout, folder)
+    size = tuple(layout["size"])
+    art = layout["artwork"]
+    ImageDraw.Draw(original).rectangle((art["x"], art["y"], art["x"] + art["w"] - 1, art["y"] + art["h"] - 1),
+                                     outline="#a4a4a4", width=max(1, min(size) // 256))
+    with TemporaryDirectory(dir=folder) as temporary:
+        candidate = Path(temporary)
+        try:
+            updated = design_layers(alternative, inputs["copy"], size, inputs["fonts"], candidate)
+            rendered, foreground = composition_preview(product, alternative, updated, candidate)
+            check_text_overlap(foreground, updated, candidate)
+        except ValueError:
+            return None
+        review = ask_stage(ai, "ad_offer_scene", OFFER_SCENE_COMPARE,
+                           {"copy": inputs["copy"], "brief": inputs["brief"],
+                            "original_photo_bounds": design["artwork_box"]},
+                           [to_float(original), to_float(rendered), *images])
+        reason = review.get("reason")
+        if review.get("choice") != "continuous" or not isinstance(reason, str) or not reason.strip():
+            return None
+        rendered.save(candidate / "composition.png")
+        for path in candidate.iterdir():
+            path.replace(folder / path.name)
+    return alternative, updated, reason
 
 
 def measured_format_composition(ai, design, layout, folder, foreground, first, inputs):
@@ -1590,10 +1652,14 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             effective = crop_subject(product, answer)
 
         composition_reason = proposal.get("composition_reason") if proposal else None
+        offer_scene = None
         if product is not None and not proposal:
             blocking_images = design_images if format_rebuild is not None else images
             answer, layout, composition_reason = review_composition_plan(
                 ai, product, answer, layout, result, design_input, blocking_images)
+            offer_scene = review_offer_scene(ai, product, answer, layout, result, design_input, blocking_images)
+            if offer_scene is not None:
+                answer, layout, composition_reason = offer_scene
             effective = crop_subject(product, answer)
         detail_shot = product is not None and answer.get("source_crop") is not None
         alternate_framing = bool(scene_issue and detail_shot)
@@ -1614,6 +1680,10 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             if revision_info:
                 direction_input.update(revision_info)
             direction_task = PHOTO_DIRECTION + "\nKeep the selected angle, framing, and photo_device in the scene."
+            if offer_scene is not None:
+                direction_task += ("\nThe photograph continues under the name and price. Extend the same real scene "
+                                   "through that area with readable, restrained texture and consistent light. Use the "
+                                   "approved_composition rationale and keep the product at the placement shown.")
             if format_rebuild is not None:
                 direction_input["target_photo_aspect"] = [artwork["w"], artwork["h"]]
                 direction_input["approved_effect_hint"] = prior.get("revision", {}).get("visible_result")
