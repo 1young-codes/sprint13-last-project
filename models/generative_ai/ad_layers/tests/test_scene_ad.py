@@ -137,6 +137,34 @@ def test_companion_size_uses_the_visible_anchor_width():
         scene_ad.plan_companion_scale(Agent(), scene, np.fliplr(foreground), companion, {})
 
 
+@pytest.mark.parametrize("finding, target, expected", [
+    ("natural", None, None), ("wrong_surface", None, None),
+    ("too_small", [42, 20], [42, 20]), ("too_large", [24, 12], [24, 12]),
+    ("too_small", [74, 40], [45, 24]),
+])
+def test_companion_geometry_revises_scale_from_the_rendered_photo(finding, target, expected):
+    scene = Image.new("RGB", (100, 100), "tan")
+    scene.paste("red", (20, 35, 45, 60))
+    scene.paste("blue", (45, 65, 82, 80))
+    foreground = np.zeros((100, 100), dtype=bool)
+    foreground[35:60, 20:45] = True
+    scale = {"size": [32, 16], "anchor_box": [20, 35, 25, 25], "reference": "ceramic jar"}
+    companion = {"object": "open book", "cue": "Both pages"}
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            assert step == "ad_companion_geometry"
+            assert [image.shape for image in images] == [(100, 100, 3), (25, 50, 3)]
+            assert "32" not in request
+            return json.dumps({"finding": finding, "observation": "앞쪽 탁자에 놓인 소품을 비교했습니다.",
+                               "reference": "ceramic jar", "anchor_box": scale["anchor_box"], "target_size": target})
+
+    accepted, _, revision = scene_ad.review_companion_geometry(
+        Agent(), scene, foreground, (40, 60, 90, 85), companion, {}, scale)
+    assert accepted == (finding == "natural")
+    assert revision == (scale | {"size": expected} if expected else scale)
+
+
 def test_companion_reframe_reserves_space_without_shrinking_only_the_companion(tmp_path, monkeypatch):
     scene = Image.new("RGB", (1024, 1024), "#A38B71")
     foreground = np.zeros((1024, 1024), dtype=bool)

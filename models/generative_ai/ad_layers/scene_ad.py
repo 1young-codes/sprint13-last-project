@@ -286,6 +286,23 @@ foreshortening. Honor any size instructions from the owner, without inventing ph
 shrink the object to fill a leftover corner. Return reference, the name or a short description of the visible
 anchor without repeating a second numeric size or ratio."""
 
+COMPANION_GEOMETRY = """Judge the product and required secondary object in this finished photograph as physical
+objects. The photo is the first image. The second shows the local edit area only to help identify the companion.
+Make the scale judgment from the full photo. Assume ordinary real-life sizes unless the owner specified a type
+or scale. Being secondary in the composition does not make a normally sized object physically smaller.
+Estimate how their widths would compare at the same distance. Then inspect their actual contact points, support,
+relative depth and camera angle. A foreground object on the same surface should look at least as wide as it
+would at equal depth, unless its visible orientation foreshortens it. Do not explain away a miniature by treating
+it as farther from the camera when its contact point is actually in the foreground. Include the entire outline
+in your judgment. A recognizable object can still have the wrong physical scale.
+Return finding (natural, too_small, too_large, or wrong_surface) and observation (a concrete Korean sentence
+comparing the objects and their depth). When the scale is wrong, also return reference (the intact product or
+part used for comparison), anchor_box [left, top, width, height] in whole percentages of the full image, and
+target_size [width, height] in whole percentages of the full image. Give the apparent dimensions of a natural
+replacement at that depth and angle, with enough change to fix the observed problem. Target the whole object
+without its shadow. Ignore available crop space when estimating the replacement. For a missing or floating
+companion return wrong_surface."""
+
 COMPANION_INSERTION = """Plan one local addition to this actual photograph. Preserve the product, lighting,
 camera and existing surfaces. Find a genuinely empty area on a suitable support surface for the required object.
 The proposed box is a suggestion. Adjust it if the photograph has a different usable surface. Keep away from
@@ -1015,6 +1032,39 @@ def plan_companion_scale(ai, scene, foreground, companion, pairing_intent):
         raise ValueError("상품과 비교한 소품의 크기를 확인하지 못했습니다")
     return {"size": dimensions, "reference": required_text(answer, "reference", "소품 크기의 비교 기준"),
             "anchor_box": anchor}
+
+
+def review_companion_geometry(ai, scene, foreground, bounds, companion, pairing_intent, scale):
+    review = ask_stage(ai, "ad_companion_geometry", COMPANION_GEOMETRY,
+                       {"companion": {key: companion[key] for key in ("object", "cue")},
+                        "pairing_intent": pairing_intent}, [to_float(scene), to_float(scene.crop(bounds))])
+    observation = required_text(review, "observation", "소품의 실제 크기 검토")
+    finding = review.get("finding")
+    if finding == "natural":
+        return True, observation, scale
+    if finding == "wrong_surface":
+        return False, observation, scale
+    if finding not in ("too_small", "too_large"):
+        raise ValueError("소품의 실제 크기 판정을 확인하지 못했습니다")
+
+    anchor = validate_boxes({"anchor": review.get("anchor_box")}, ("anchor",))["anchor"]
+    x, y, w, h = pixel_box(anchor, scene.size)
+    if not foreground[y:y + h, x:x + w].any():
+        raise ValueError("소품의 크기를 다시 맞출 기준 상품이 실제 사진 영역과 일치하지 않습니다")
+    size = review.get("target_size")
+    if (not isinstance(size, list) or len(size) != 2
+            or any(type(value) is not int or not 1 <= value < 100 for value in size)):
+        raise ValueError("사진에서 소품을 다시 그릴 크기를 확인하지 못했습니다")
+    before = scale["size"][0] * scale["size"][1]
+    after = size[0] * size[1]
+    if (finding == "too_small" and after <= before) or (finding == "too_large" and after >= before):
+        raise ValueError(f"소품의 관찰 결과와 다시 요청한 크기가 일치하지 않습니다. {observation}")
+    # A local retouch should take one measured step before the next full-photo review.
+    change = max(size) / max(scale["size"])
+    step = min(1.4, max(1 / 1.4, change)) / change
+    size = [max(1, round(span * step)) for span in size]
+    return False, observation, {"size": size, "anchor_box": anchor,
+                                "reference": required_text(review, "reference", "소품 크기의 비교 기준")}
 
 
 class CompanionPlacementError(ValueError):
@@ -2974,22 +3024,18 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             foreground = None
             companion_feedback = None
             if companion:
-                generated = photograph(prompt)
-                for framing_attempt in range(2):
-                    base_scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
-                    protected = find_foreground(base_scene, models["mask"], threshold)
-                    if framing_attempt:
-                        companion_scale = scale_companion_for_reframe(companion_scale, original_foreground, protected)
-                    else:
-                        original_foreground = protected
-                        companion_scale = plan_companion_scale(ai, base_scene, protected, companion, pairing_intent)
-                    target_size = pixel_box((0, 0, *companion_scale["size"]), base_scene.size)[2:]
+                base_scene = ImageOps.fit(photograph(prompt).convert("RGB"), picture_size, Image.Resampling.LANCZOS)
+                protected = find_foreground(base_scene, models["mask"], threshold)
+                companion_scale = plan_companion_scale(ai, base_scene, protected, companion, pairing_intent)
+            for attempt in range(2):
+                if companion:
+                    rejected = scene if companion_feedback and scene is not None else None
                     try:
                         patch_bounds, instruction, companion = plan_companion_insertion(
                             ai, base_scene, companion, protected, layout, result, companion_feedback,
-                            pairing_intent=pairing_intent, scale=companion_scale)
+                            rejected=rejected, pairing_intent=pairing_intent, scale=companion_scale)
                     except CompanionPlacementError as error:
-                        if framing_attempt:
+                        if reframed_for_companion:
                             raise
                         subject, reserve = companion_reframe(base_scene, protected, companion, companion_scale, layout, result)
                         companion = companion | {"box": reserve}
@@ -3005,17 +3051,16 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                                   f"No {companion['object']}, extra object, writing or overlay. Use this original description "
                                   f"for lighting, materials and mood only: {answer['art_direction']}")
                         generated = model.edit(guide, prompt, generation["seed"], generation["steps"], size=render_size)
-                    else:
-                        break
-            for attempt in range(2):
-                if companion:
-                    if attempt:
+                        base_scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
+                        new_foreground = find_foreground(base_scene, models["mask"], threshold)
+                        companion_scale = scale_companion_for_reframe(companion_scale, protected, new_foreground)
+                        protected = new_foreground
                         patch_bounds, instruction, companion = plan_companion_insertion(
                             ai, base_scene, companion, protected, layout, result, companion_feedback,
-                            rejected=scene if companion_feedback and scene is not None else None,
                             pairing_intent=pairing_intent, scale=companion_scale)
                     original_scene = base_scene
                     secondary_object = companion["object"]
+                    target_size = pixel_box((0, 0, *companion_scale["size"]), base_scene.size)[2:]
                     try:
                         scene = repair_scene_patch(model, original_scene, patch_bounds, instruction, generation,
                                                    secondary_object=secondary_object, foreground=protected,
@@ -3027,6 +3072,13 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                             raise
                         scene, companion_feedback = None, str(error)
                         continue
+                    natural, geometry, companion_scale = review_companion_geometry(
+                        ai, scene, protected, patch_bounds, companion, pairing_intent, companion_scale)
+                    if not natural:
+                        if attempt:
+                            raise ValueError(f"소품 크기나 놓인 면이 여전히 자연스럽지 않습니다. {geometry}")
+                        companion_feedback = geometry
+                        continue
                 elif patch_bounds is None:
                     generated = photograph(prompt)
                     scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
@@ -3035,6 +3087,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                     scene = repair_scene_patch(model, original_scene, patch_bounds, prompt, generation,
                                                secondary_object=secondary_object, foreground=protected)
                 check, message, finding = review_photo(scene)
+                if companion:
+                    finding["companion_geometry"] = geometry
                 if (not attempt and kept is None and "headline" not in fields and finding["visible"]
                         and finding["identity_matches"] and not finding["message_supported"]
                         and not finding["stray_writing"] and not blocking_distraction(check)
