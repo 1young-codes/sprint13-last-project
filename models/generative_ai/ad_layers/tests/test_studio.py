@@ -1072,6 +1072,44 @@ def test_mixed_background_triggers_a_rendered_layout_comparison(draft, move_titl
         assert saved.tobytes() == scene.tobytes()
 
 
+@pytest.mark.parametrize("rim", [False, True])
+def test_copy_surface_review_moves_the_whole_stack_only_off_a_visible_edge(tmp_path, rim):
+    size = (300, 300)
+    copy = {"headline": "초봄의 향", "product_name": "향초", "price": "18,000원"}
+    style = {"font": "noto_sans_kr", "size": 8, "color": "#18130E", "align": "left", "max_lines": 1}
+    design = {"styles": {role: style.copy() for role in copy},
+              "boxes": {"headline": [55, 26, 34, 13], "product_name": [55, 45, 27, 9], "price": [55, 57, 25, 9]}}
+    texts = scene_ad.layout_texts(design, copy, size, [style["font"]])
+    for layer, ink in zip(texts, ((2, 7, 59, 25), (2, 3, 61, 18), (2, 3, 57, 18)), strict=True):
+        image = Image.new("RGBA", (layer["w"], layer["h"]))
+        image.paste(style["color"], ink)
+        image.save(tmp_path / layer["file"])
+    photo = Image.new("RGB", size, "#EDE3D8")
+    if rim:
+        photo.paste("#A58D78", (0, 125, 300, 300))
+    for file in ("background.png", "scene.png"):
+        photo.save(tmp_path / file)
+    foreground = np.zeros(size, dtype=bool)
+    foreground[120:190, 34:93] = True
+    layout = {"size": list(size), "background": {"file": "background.png"}, "texts": texts,
+              "artwork": {"file": "scene.png", "x": 0, "y": 0, "w": 300, "h": 300}}
+    original = {file.name: file.read_bytes() for file in tmp_path.iterdir()}
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            assert rim and step == "ad_copy_photo_edge"
+            order = json.loads(request.split("Input JSON follows:\n", 1)[1])["position_order"]
+            assert order[0] == "current" and "above" in order and len(images) == len(order)
+            return json.dumps({"position": "above", "observation": "제목 아래 반사 경계를 피해 한 번에 읽힙니다."})
+
+    revised, candidate, reason = studio_formats.review_copy_over_photo_edge(Agent(), design, layout, foreground, tmp_path)
+    assert bool(reason) == rim and revised["styles"] == design["styles"]
+    offsets = {(moved["x"] - text["x"], moved["y"] - text["y"])
+               for moved, text in zip(candidate["texts"], texts, strict=True)}
+    assert len(offsets) == 1 and ((0, 0) in offsets) == (not rim)
+    assert {file.name: file.read_bytes() for file in tmp_path.iterdir()} == original
+
+
 def test_copy_position_comparison_keeps_the_shared_center_axis(draft):
     folder, _ = draft
     layout = load_layout(folder)

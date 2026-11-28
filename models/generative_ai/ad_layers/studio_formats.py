@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageColor, ImageFilter, ImageOps
 from scipy.ndimage import distance_transform_edt
 
 from .creative_brief import TEXT_ROLES, ask_stage, required_text, validate_boxes
@@ -19,7 +19,7 @@ from .scene_ad import (check_offer_spacing, check_text_overlap, check_type_margi
 from .staging import check_staged_identity
 from .studio_edits import edit_version, foreground_mask, line_break_after, repair_staged_detail
 from .text_render import LINE_HEIGHT, minimum_font_size
-from .type_contrast import readable_text_colors
+from .type_contrast import color_lightness, ink_background, ink_contrast, readable_text_colors
 
 
 FORMATS = {"1:1": (1024, 1024), "4:5": (864, 1080), "9:16": (1080, 1920), "16:9": (1280, 720),
@@ -619,6 +619,30 @@ def stacked_copy_direction(design, ink, foreground):
     return None
 
 
+def reposition_copy(design, layout, offset):
+    revised = translate_copy(design, *offset)
+    if revised is None:
+        return None
+    size = layout["size"]
+
+    def reposition(layer, before, box):
+        old_x, old_y, _, _ = pixel_box(before, size)
+        x, y, _, _ = pixel_box(box, size)
+        return layer | {"x": layer["x"] + x - old_x, "y": layer["y"] + y - old_y}
+
+    texts = []
+    for text in layout["texts"]:
+        role = text["role"]
+        moved = reposition(text, design["boxes"][role], revised["boxes"][role])
+        if "lines" in text:
+            rows = revised["styles"][role]["lines"]
+            prior_rows = design["styles"][role]["lines"]
+            moved["lines"] = [reposition(line, before["box"], row["box"])
+                              for line, before, row in zip(text["lines"], prior_rows, rows, strict=True)]
+        texts.append(moved)
+    return revised, layout | {"texts": texts}
+
+
 def copy_position_options(design, layout, ink, foreground, stage):
     if design.get("accent") or any(text.get("depth") == "behind_subject" or
                                    any(line.get("depth") == "behind_subject" for line in text.get("lines", ()))
@@ -636,26 +660,11 @@ def copy_position_options(design, layout, ink, foreground, stage):
         margin = ceil(100 * short_edge / (40 * side))
         rooms.append((max(0, first - margin), max(0, 100 - margin - last)))
 
-    def reposition(layer, before, box):
-        old_x, old_y, _, _ = pixel_box(before, size)
-        x, y, _, _ = pixel_box(box, size)
-        return layer | {"x": layer["x"] + x - old_x, "y": layer["y"] + y - old_y}
-
     def translated_candidate(offset):
-        revised = translate_copy(design, *offset)
-        if revised is None:
+        moved = reposition_copy(design, layout, offset)
+        if moved is None:
             return None
-        texts = []
-        for text in layout["texts"]:
-            role = text["role"]
-            moved = reposition(text, design["boxes"][role], revised["boxes"][role])
-            if "lines" in text:
-                rows = revised["styles"][role]["lines"]
-                prior_rows = design["styles"][role]["lines"]
-                moved["lines"] = [reposition(line, before["box"], row["box"])
-                                  for line, before, row in zip(text["lines"], prior_rows, rows, strict=True)]
-            texts.append(moved)
-        candidate = layout | {"texts": texts}
+        revised, candidate = moved
         try:
             check_text_overlap(keepout, candidate, stage)
             revised_ink = rendered_text_bounds(candidate, stage)
@@ -815,6 +824,110 @@ def compare_copy_positions(ai, options, original, foreground, stage, inputs):
     if isinstance(position, str) and position in choices and choices[position] is not original:
         return choices[position], required_text(choice, "observation", "문구 위치 비교")
     return original, None
+
+
+PHOTO_SURFACE_COPY = """The posters follow position_order. Each card shows the whole poster and a closer view
+of its lettering. The photograph and type are identical. Only the full group of words was moved.
+Look for a photographic rim, reflection, or shadow that runs through the letters or splits the title from
+the selling information. Prefer a move that clears it while keeping the type visibly connected to the
+main subject or the exact photographic action. Look at the actual direction of the action and the space
+from the object to the words. Keep current if a quieter patch makes the type float away from the subject
+or creates a worse conflict elsewhere. Return position from position_order and an observation in Korean
+that names the visible edge and how the position changes the reading path."""
+
+
+def review_copy_over_photo_edge(ai, design, layout, foreground, folder):
+    unchanged = design, layout, None
+    layers = [line for text in layout["texts"] for line in text.get("lines", (text,))]
+    if (design.get("accent") or layout.get("graphic")
+            or any(layer.get("depth") == "behind_subject" or layer.get("emphasis") for layer in layers)):
+        return unchanged
+    ink = rendered_text_bounds(layout, folder, pixels=True)
+    if not all(role in ink for role in TEXT_ROLES):
+        return unchanged
+    title, name, price = (ink[role] for role in TEXT_ROLES)
+    letter_height = name[3] - name[1]
+    left = max(title[0], name[0], price[0])
+    right = min(title[2], name[2], price[2])
+    if not (right - left >= letter_height and 0 <= name[1] - title[3] <= 2.5 * letter_height
+            and 0 <= price[1] - name[3] <= 1.5 * letter_height):
+        return unchanged
+
+    width, height = size = tuple(layout["size"])
+    short = min(size)
+    backdrop = compose(layout | {"texts": []}, folder)
+    lightness = np.asarray(backdrop.convert("L").filter(ImageFilter.GaussianBlur(short / 256)), dtype=float) / 255
+    gy, gx = np.gradient(lightness)
+    edges = np.hypot(gx, gy) * short
+
+    def edge_strength(patch):
+        pixels = patch.ravel()
+        # A narrow rim can divide the text even when most of the background is smooth.
+        tail = max(1, pixels.size // 20)
+        return np.partition(pixels, -tail)[-tail:].mean()
+
+    def edge_scores(dx, dy):
+        x0, x1 = left + dx, right + dx
+        y0, y1 = title[1] + dy, price[3] + dy
+        if 0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height:
+            gap = edges[title[3] + dy:name[1] + dy, x0:x1]
+            return edge_strength(edges[y0:y1, x0:x1]), edge_strength(gap) if gap.size else 0
+        return float("inf"), float("inf")
+
+    score, separation = edge_scores(0, 0)
+    if max(score, separation) < 7:
+        return unchanged
+    positions = {"above": [], "below": [], "side": []}
+    for x in (-18, -12, -6, 0, 6, 12, 18):
+        for y in (-24, -18, -12, -6, 0, 6, 12, 18, 24):
+            if not (x or y):
+                continue
+            dx, dy = round(x * short / width), round(y * short / height)
+            signal, gap = edge_scores(round(dx * width / 100), round(dy * height / 100))
+            if signal < max(7, score * 0.8) and gap < max(7, separation * 0.55):
+                group = "above" if dy < 0 else "below" if dy > 0 else "side"
+                positions[group].append((signal + 0.7 * gap + 0.12 * np.hypot(x, y), dx, dy))
+    if not any(positions.values()):
+        return unchanged
+
+    keepout = distance_transform_edt(~foreground) < short / 80
+    glyphs = {}
+    for layer in layers:
+        with Image.open(folder / layer["file"]) as image:
+            glyphs[layer["role"]] = np.asarray(image.getchannel("A")) >= 128
+    choices = {"current": (design, layout, rendered_text_bounds(layout, folder))}
+    for key, rows in positions.items():
+        for _, dx, dy in sorted(rows):
+            moved = reposition_copy(design, layout, (dx, dy))
+            if moved is None:
+                continue
+            plan, candidate = moved
+            try:
+                check_text_overlap(keepout, candidate, folder)
+                bounds = rendered_text_bounds(candidate, folder)
+                check_type_margin(size, bounds)
+            except ValueError:
+                continue
+            words = [line for text in candidate["texts"] for line in text.get("lines", (text,))]
+            if any(ink_contrast(color_lightness(ImageColor.getrgb(line["color"])), background) < 4.5
+                   for line in words if (background := ink_background(backdrop, line, glyphs[line["role"]])).size):
+                continue
+            choices[key] = plan, candidate, bounds
+            break
+    if len(choices) == 1:
+        return unchanged
+
+    previews = []
+    for _, candidate, bounds in choices.values():
+        poster = compose(candidate, folder)
+        previews.append(to_float(paired_preview(poster, text_detail(poster, [bounds[role] for role in TEXT_ROLES]))))
+    result = ask_stage(ai, "ad_copy_photo_edge", PHOTO_SURFACE_COPY,
+                       {"position_order": list(choices), "photo_cue": layout.get("photo_cue")}, previews)
+    choice, reason = result.get("position"), result.get("observation")
+    if isinstance(choice, str) and choice != "current" and choice in choices and isinstance(reason, str) and reason.strip():
+        plan, candidate, _ = choices[choice]
+        return plan, candidate, reason
+    return unchanged
 
 
 def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
@@ -1095,11 +1208,15 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                     revised, candidate, contrast_issue = readable_text_colors(revised, candidate, stage, foreground)
             related_offer_review = None
             headline_scale_review = None
+            copy_surface_review = None
             if not contrast_issue:
                 revised, candidate, headline_scale_review = review_headline_scale(
                     ai, revised, candidate, foreground, stage, fonts)
                 revised, candidate, related_offer_review = review_related_offer(ai, revised, candidate, foreground, stage)
-                if headline_scale_review or related_offer_review:
+                if not intent:
+                    revised, candidate, copy_surface_review = review_copy_over_photo_edge(
+                        ai, revised, candidate, foreground, stage)
+                if headline_scale_review or related_offer_review or copy_surface_review:
                     ink = rendered_text_bounds(candidate, stage)
             poster = compose(candidate, stage)
             phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
@@ -1145,6 +1262,8 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                 candidate["related_offer_review"] = related_offer_review
             if headline_scale_review:
                 candidate["headline_scale_review"] = headline_scale_review
+            if copy_surface_review:
+                candidate["copy_surface_review"] = copy_surface_review
             if "art_direction_plan" in layout:
                 candidate["art_direction_plan"] = layout["art_direction_plan"]
             if "photo_cue" in layout:

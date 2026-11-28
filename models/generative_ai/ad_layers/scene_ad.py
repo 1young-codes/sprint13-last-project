@@ -3012,6 +3012,12 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             answer, layout, related_offer_reason = review_related_offer(ai, answer, layout, foreground, result)
             if related_offer_reason:
                 layout["related_offer_review"] = related_offer_reason
+            if art_plan and not proposal:
+                from .studio_formats import review_copy_over_photo_edge
+
+                answer, layout, edge_reason = review_copy_over_photo_edge(ai, answer, layout, foreground, result)
+                if edge_reason:
+                    layout["copy_surface_review"] = edge_reason
             final_review_reason = offer_reason or final_review_reason
         layout.update(fields=fields, brief=brief, design=answer, scene_prompt=prompt, preview=preview,
                       final_review_reason=final_review_reason)
