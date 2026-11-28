@@ -623,7 +623,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
         assert size == (1024, 1024)
         for text in texts:
             ink = Image.new("RGBA", (text["w"], text["h"]))
-            ink.paste("white", (0, 0, 8, 8))
+            ink.paste("white", (0, 0, 8, 46 if text["role"] == "headline" else 32))
             ink.save(folder / text["file"])
 
     monkeypatch.setattr(product_mask, "product_mask", mask)
@@ -1090,6 +1090,18 @@ def test_offer_reflow_keeps_the_position_and_pixels_of_the_finished_title(tmp_pa
     assert revised["texts"][0] == title
     assert revised["texts"][2]["y"] == 81
     assert {file: (tmp_path / file).read_bytes() for file in title_pixels} == title_pixels
+
+
+def test_photo_type_check_uses_visible_size_and_counts_competing_color_treatments():
+    design = {"focus": "product", "styles": {"headline": {"max_lines": 2,
+                                                          "emphasis": {"color": "#DE97A2"}}},
+              "accent": {"color": "#C44235"}}
+    ink = {"headline": [8, 10, 58, 20], "headline_line_1": [8, 10, 35, 11],
+           "headline_line_2": [8, 13, 58, 20], "product_name": [8, 77, 26, 80], "price": [8, 85, 40, 94]}
+    issues = scene_ad.photo_type_issues(design, ink, (1024, 1024))
+    assert [issue.split(" ", 1)[0] for issue in issues] == ["제목의", "가격의", "제목의"]
+    ink.update(headline_line_1=[8, 10, 35, 13], price=[8, 85, 40, 89])
+    assert scene_ad.photo_type_issues(design | {"accent": None}, ink, (1024, 1024)) == []
 
 
 def test_balanced_composition_keeps_line_edits_and_moderates_motion_toward_center():

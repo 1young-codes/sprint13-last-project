@@ -1557,6 +1557,33 @@ def check_type_margin(size, ink):
                              f"글자 묶음을 안쪽으로 {shift}픽셀 이상 옮겨 주세요")
 
 
+def competing_type_accents(design):
+    emphasis = design["styles"]["headline"].get("emphasis")
+    graphic = design.get("accent")
+    return bool(emphasis and graphic and graphic.get("layer") != "behind_subject"
+                and graphic["color"].lower() != emphasis["color"].lower())
+
+
+def photo_type_issues(design, ink, size):
+    issues = []
+    height_share = size[1] / min(size)
+    lines = [box for role, box in ink.items() if role.startswith("headline_line_")]
+    title = lines or ([ink["headline"]] if "headline" in ink else [])
+    if title:
+        heights = [(box[3] - box[1]) * height_share for box in title]
+        ceiling = 14 if lines or design["styles"]["headline"]["max_lines"] == 1 else 20
+        if min(heights) < 3 or not 4 <= max(heights) <= ceiling:
+            issues.append("제목의 실제 글자 크기가 화면에 비해 너무 작거나 큽니다.")
+    for role, label in (("product_name", "상품명"), ("price", "가격")):
+        if role in ink:
+            height = (ink[role][3] - ink[role][1]) * height_share
+            if not 2.5 <= height <= (11 if design.get("focus") == role else 7):
+                issues.append(f"{label}의 실제 글자 크기가 화면에 비해 너무 작거나 큽니다.")
+    if competing_type_accents(design):
+        issues.append("제목의 강조색과 별도 색면이 서로 다른 시각적 강조를 만들어 사진에서 시선을 분산시킵니다.")
+    return issues
+
+
 def align_nearby_offer(plan, ink, size):
     roles = ("product_name", "price")
     if plan.get("accent") or not {"headline", *roles} <= ink.keys():
@@ -1621,7 +1648,7 @@ def balanced_text_positions(original, revision, size, before, after):
 
 
 def review_finished(ai, answer, layout, scene, foreground, folder, design_input, references, *,
-                    assess_composition=False, keep_wrap=False):
+                    assess_composition=False, keep_wrap=False, assess_visual_type=False):
     """완성 사진 위의 글자와 구도를 검사하고 사진을 유지한 채 배치를 고칩니다."""
     from .format_layout import outer_margins
 
@@ -1645,7 +1672,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
         original_error = str(error)
     else:
         answer, layout, contrast_issue = readable_text_colors(answer, layout, folder, foreground)
-    if original_error is None and contrast_issue is None and not assess_composition:
+    if original_error is None and contrast_issue is None and not (assess_composition or assess_visual_type):
         return answer, layout, None
     first = compose(layout, folder)
     artwork = layout["artwork"]
@@ -1671,6 +1698,20 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
         layout_references = [to_float(guide), *references]
     else:
         layout_references = references
+    type_issues = photo_type_issues(answer, inputs["rendered_text_bounds"], size) if assess_visual_type else []
+    use_shared_palette = assess_visual_type and competing_type_accents(answer)
+    if assess_visual_type:
+        task += ("\nSet the typography as one composition on this actual photograph. Choose one shared alignment "
+                 "or a visible line through a product feature. Put supporting information along that reading path, "
+                 "with the name and exact price clearly grouped. Use one or two type sizes with a deliberate "
+                 "hierarchy and keep both lines of the headline together. Use the same neutral for title and "
+                 "support where contrast permits, informed by the photo's highlights or shadows. "
+                 "Use at most one restrained accent treatment with a visible reason in "
+                 "the product or message. Remove a detached stripe, badge, or shape that has no role in the reading path. "
+                 "Judge what holds together at phone-feed size as well as on the full canvas.")
+    if type_issues:
+        inputs.setdefault("composition_issue", " ".join(type_issues))
+        inputs["type_issues"] = type_issues
     requested_alternative = "composition_issue" in inputs
     priority = None
     if assess_composition and not requested_alternative:
@@ -1702,6 +1743,16 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                  "Return an actual alternative with at least one changed field. Both rendered posters will be compared later.")
 
     def render_revision(plan, folder):
+        if use_shared_palette:
+            styles = {role: style.copy() for role, style in plan["styles"].items()}
+            title = styles["headline"]
+            title.pop("emphasis", None)
+            color = title["color"]
+            if title.get("lines"):
+                title["lines"] = [line | {"color": color} for line in title["lines"]]
+            for role in ("product_name", "price"):
+                styles[role]["color"] = color
+            plan = plan | {"styles": styles, "accent": None}
         updated = design_layers(plan, design_input["copy"], size, design_input["fonts"], folder)
         updated.update({key: layout[key] for key in ("action_regions", "photo_regions") if key in layout})
         revised_scene = (scene if plan["edge"] == answer["edge"] else
@@ -1709,13 +1760,20 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
         revised_scene.save(folder / artwork["file"])
         Image.fromarray(foreground).save(folder / "foreground.png")
         check_layout(updated, folder)
-        plan, updated, remaining = readable_text_colors(plan, updated, folder, foreground)
+        plan, updated, remaining = readable_text_colors(plan, updated, folder, foreground,
+                                                        prefer_shared_tone=assess_visual_type)
         if remaining:
             raise ValueError(remaining)
+        if assess_visual_type:
+            issues = photo_type_issues(plan, rendered_text_bounds(updated, folder), size)
+            if issues:
+                raise ValueError(" ".join(issues))
         return plan, updated
 
     typography_only = not requested_alternative and (contrast_issue or priority)
     editable = ("boxes", "styles") if typography_only else ("boxes", "styles", "accent", "edge")
+    if type_issues:
+        editable = ("boxes", "styles", "accent")
     transferred = transfer_headline_scale(answer, layout, priority["phrase"]) if priority else None
     for attempt in range(2):
         if attempt == 0 and transferred is not None:
@@ -1778,7 +1836,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                 inputs = inputs | {"rejected_design" if needs_alternative else "design": revised,
                                    "layout_error": str(error)}
                 continue
-            if regions and original_error is not None:
+            if (regions and original_error is not None) or type_issues:
                 aligned = align_nearby_offer(revised, rendered_text_bounds(updated, candidate), size)
                 if aligned is not None:
                     aligned_dir = Path(staging) / "aligned"
@@ -1792,7 +1850,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
             revision_ink = rendered_text_bounds(updated, candidate)
             revision_outer_space = outer_margins(placement, revision_ink.values())
             expanded = expanded_outer_margins(inputs["original_outer_space"], revision_outer_space)
-            if original_error is None and (needs_alternative or expanded):
+            if original_error is None and (needs_alternative or expanded or assess_visual_type):
                 if priority and weaker_headline_focus(updated, revision_ink, priority["phrase"]):
                     inputs = inputs | {"rejected_design": revised,
                                        "layout_error": "수정한 제목에서도 광고의 핵심 표현이 더 작게 보입니다."}
@@ -1862,6 +1920,7 @@ def review_crowded_offer(ai, design, layout, foreground, folder, fonts):
         return design, layout, None
     size = tuple(layout["size"])
     width, height = size
+    type_issues = set(photo_type_issues(design, ink, size))
     _, top, _, bottom = ink["price"]
     short_side = min(size)
     if (bottom - top) * height > 3 * short_side or (100 - bottom) * height > 4 * short_side:
@@ -1902,6 +1961,8 @@ def review_crowded_offer(ai, design, layout, foreground, folder, fonts):
                 updated_ink = rendered_text_bounds(revised, directory)
                 check_type_margin(size, updated_ink)
                 check_offer_spacing(updated_ink, size)
+                if set(photo_type_issues(plan, updated_ink, size)) - type_issues:
+                    continue
                 price = updated_ink["price"]
                 if price[3] - price[1] <= bottom - top:
                     continue
@@ -2651,7 +2712,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 layout["photo_cue"] = photo_cue
             answer, layout, final_review_reason = review_finished(ai, answer, layout, scene, foreground, result,
                                                                   design_input, images[1:],
-                                                                  assess_composition=bool(art_plan and not proposal))
+                                                                  assess_composition=bool(art_plan and not proposal),
+                                                                  assess_visual_type=bool(art_plan and not proposal))
             answer, layout, offer_reason = review_crowded_offer(
                 ai, answer, layout, foreground, result, settings["fonts"])
             final_review_reason = offer_reason or final_review_reason

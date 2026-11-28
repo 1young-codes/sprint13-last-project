@@ -39,7 +39,7 @@ def recolor_ink(path, alpha, color):
     bitmap.save(path)
 
 
-def readable_headline_colors(design, layout, backdrop, folder, foreground, unresolved=None):
+def readable_headline_colors(design, layout, backdrop, folder, foreground, unresolved=None, *, prefer_shared_tone=False):
     title = next(text for text in layout["texts"] if text["role"] == "headline")
     style = design["styles"]["headline"]
     original = title.get("lines", [title])
@@ -77,8 +77,12 @@ def readable_headline_colors(design, layout, backdrop, folder, foreground, unres
             unresolved.append(f"제목 ‘{line['text']}’")
         samples.append((line, pixels, marked, color or base))
 
-    accent_color = (legible_tone(accent["color"], np.concatenate(accent_background), accent_minimum)
-                    if accent and accent_background else None)
+    accent_color = None
+    if accent and accent_background:
+        background = np.concatenate(accent_background)
+        accent_color = legible_tone(accent["color"], background, accent_minimum)
+        if prefer_shared_tone and accent_color != accent["color"]:
+            accent_color = legible_tone(style["color"], background, accent_minimum)
     if accent and accent_background and accent_color is None and unresolved is not None:
         unresolved.append(f"강조 문구 ‘{accent['phrase']}’")
     lines = []
@@ -160,7 +164,7 @@ def readable_offer_colors(design, layout, backdrop, folder, unresolved=None):
     return design | {"styles": styles}, layout | {"texts": texts}
 
 
-def readable_text_colors(design, layout, folder, foreground):
+def readable_text_colors(design, layout, folder, foreground, *, prefer_shared_tone=False):
     backdrop = compose(layout | {"texts": []}, folder)
     artwork = layout["artwork"]
     if foreground.shape != (backdrop.height, backdrop.width) or artwork["x"] or artwork["y"]:
@@ -168,7 +172,8 @@ def readable_text_colors(design, layout, folder, foreground):
         mask.paste(Image.fromarray(foreground), (artwork["x"], artwork["y"]))
         foreground = np.asarray(mask)
     unresolved = []
-    design, layout = readable_headline_colors(design, layout, backdrop, folder, foreground, unresolved)
+    design, layout = readable_headline_colors(design, layout, backdrop, folder, foreground, unresolved,
+                                              prefer_shared_tone=prefer_shared_tone)
     design, layout = readable_offer_colors(design, layout, backdrop, folder, unresolved)
     issue = None
     if unresolved:

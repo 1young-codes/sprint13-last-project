@@ -154,6 +154,17 @@ def test_observe_search_edit_and_select_the_best_version(tmp_path, draft, monkey
 def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
         tmp_path, draft, monkeypatch, staged, ready, same_piece):
     folder, fields = draft
+
+    def render_native(texts, size, output):
+        for text in texts:
+            for row in text.get("lines", (text,)):
+                layer = Image.new("RGBA", (row["w"], row["h"]))
+                height = round(min(size) * (0.05 if text["role"] == "headline" else 0.04))
+                width = round(size[0] * 0.13)
+                layer.paste(row["color"], (0, 0, min(row["w"], width), min(row["h"], height)))
+                layer.save(output / row["file"])
+
+    monkeypatch.setattr(scene_ad, "render_texts", render_native)
     approved = load_layout(folder)
     approved["photo_cue"] = "The vessel reflects a strip of lamp light."
     approved["brief"] = {"headline": "다듬기 전 제목", "message": "포근한 겨울 저녁을 보여 줍니다"}
@@ -267,7 +278,8 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
 
     from models.generative_ai.photo_retouch import product_mask as segmentation
     monkeypatch.setattr(segmentation, "product_mask", product_mask)
-    monkeypatch.setattr(format_layout, "measure_texts", lambda probes, _: {row["role"]: (100, 35) for row in probes})
+    monkeypatch.setattr(format_layout, "measure_texts", lambda probes, _: {
+        row["role"]: (100, 70 if row["role"].startswith("headline") else 35) for row in probes})
     output = tmp_path / "native"
     if not ready or not same_piece:
         reason = "새 구도를 확정하지" if same_piece else "강조한 상품이 원본과 다릅니다"
@@ -994,7 +1006,8 @@ def test_title_contrast_changes_the_printed_emphasis_without_changing_the_glyphs
         assert tuple(bytes.fromhex(color[1:])) == bitmap.getpixel((10, 10))[:3]
 
 
-def test_title_contrast_keeps_two_colors_inside_one_line(tmp_path):
+@pytest.mark.parametrize("prefer_shared_tone", [False, True])
+def test_title_contrast_uses_the_shared_tone_when_requested(tmp_path, prefer_shared_tone):
     title = {"role": "headline", "text": "기본 강조", "file": "title.png", "x": 0, "y": 0,
              "w": 60, "h": 30, "max_lines": 1, "color": "#FAEBD8",
              "emphasis": {"phrase": "강조", "color": "#932A38"}}
@@ -1005,9 +1018,11 @@ def test_title_contrast_keeps_two_colors_inside_one_line(tmp_path):
     bitmap.save(tmp_path / "title.png")
     backdrop = Image.new("RGB", (60, 30), "#402719")
     revised, layout = type_contrast.readable_headline_colors(
-        design, {"texts": [title]}, backdrop, tmp_path, np.zeros((30, 60), dtype=bool))
+        design, {"texts": [title]}, backdrop, tmp_path, np.zeros((30, 60), dtype=bool),
+        prefer_shared_tone=prefer_shared_tone)
     color = revised["styles"]["headline"]["emphasis"]["color"]
-    assert color not in (title["emphasis"]["color"], title["color"])
+    assert color != title["emphasis"]["color"]
+    assert (color == title["color"]) is prefer_shared_tone
     assert layout["texts"][0]["color"] == title["color"]
     assert layout["texts"][0]["emphasis"]["color"] == color
     with Image.open(tmp_path / "title.png") as image:
