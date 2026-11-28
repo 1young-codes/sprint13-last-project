@@ -233,7 +233,8 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
                 assert not data and len(images) == 1
                 return '{"observation":"용기 옆에 램프가 보입니다"}'
             if step == "ad_photo_message":
-                assert not images and data["observation"] == "용기 옆에 램프가 보입니다"
+                assert len(images) == 1 and images[0].shape == (1920, 1080, 3)
+                assert data["observation"] == "용기 옆에 램프가 보입니다"
                 return '{"message_supported":true,"message_observation":"램프가 놓인 장면입니다"}'
             if step == "ad_photo_cue_check":
                 assert len(images) == 6 and data["photo_cue"] == "The vessel reflects a strip of lamp light."

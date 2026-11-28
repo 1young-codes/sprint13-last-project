@@ -254,25 +254,32 @@ If someone handles an object, distinguish what holds or supports it, what visibl
 and what surface or object appears to receive it. Name the destination the picture actually suggests. A still
 frame does not prove what happened before or after. For an unsupported tool, say it appears suspended rather
 than inferring a hand outside the frame. If no action is depicted, report the most salient details
-such as texture, shape, setting, or light. Return one JSON object with the exact key "observation" and no
+such as texture, shape, setting, light, and recognizable secondary objects. If an edge fragment is hard to
+identify, describe what part is visible without guessing what the whole object is. Return one JSON object with
+the exact key "observation" and no
 other keys. Its value is a concrete Korean sentence about the visible subject and direction where relevant."""
 
-PHOTO_MESSAGE = """Compare the exact Korean headline and message to an independent observer's description.
-Check physical direction only when the claim describes an action such as removing, applying or transferring
-something. A mood, occasion, material, or static detail has no direction requirement here. For a directional
-claim, state what should move and where it should go. Compare with where the observation says it visually
-leads. When the claim is about taking material from a source or putting it to use, motion aimed into that
-source is incompatible. The correct tool or product by itself does not show the action. If both readings
-would mean different actions, count an ambiguous direction as insufficient for the directional claim.
-An unsupported pose also fails when the claim depicts someone using the tool.
-Return message_supported (boolean) and message_observation (one Korean sentence). Use true for claims without
-a direction requirement. If false, return corrected_photo_cue and correction as English instructions for an
-observable action preserving the existing product and facts, plus visible_support (the actual visible contact
-that holds the moving tool or item), action_target (the distinct place that receives the material or shows the
-end of the movement), and reposition as a boolean. Describe support and target in English as visible positions
-or contact in a still frame. Reuse a physically valid grip or support already named in the observation.
-Describe what it supports without inventing a different grip point or handling method. Words that merely
-imply movement do not describe either."""
+PHOTO_MESSAGE = """Compare the exact Korean headline and message to the photograph without lettering and the
+independent observation. Identify the one concrete thing the picture must communicate for this campaign.
+For an action, check the visible support, what should move, and where it is visibly directed. Motion back into
+the source does not show taking material out or putting it to use. An ambiguous direction or unsupported pose
+does not show a specific advertised action just because the right tool is present.
+For a visible scene, check the specific setting, pairing, color, texture or material effect the campaign draws
+attention to. If the observer did not mention a secondary element, look for it in the actual image. Visible
+forms must be recognizable in the full frame. A cut-off, indistinct shape does not establish a featured
+pairing. A featured pairing needs a distinguishing visual cue for both things even without the headline.
+Identify the actual visible features you used. Do not assume the identity of a blurry edge fragment from
+the wording. Require only elements that carry the message.
+A suggested time, mood, scent or subjective feeling need not be literally visible. Recognizable photographic
+signals may convey the occasion or atmosphere without asserting a fact the camera cannot prove.
+Return message_supported (boolean) and message_observation (one Korean sentence). If false, return repair_kind
+(action or scene), corrected_photo_cue (one visible requirement), correction (a complete corrected scene), and
+reposition (boolean). Both instructions are in English. For a scene correction, preserve the actual product
+position, lighting and camera view where possible. Describe which specific visible element would convey the
+message while keeping it secondary to the product. For action corrections also give visible_support (the
+actual visible contact that holds the moving item), and action_target (the distinct receiver or the visible
+end of the action). Describe both as visible positions or contact in a still frame. Reuse any physically
+valid grip already visible without inventing a different handling method."""
 
 PHOTO_CUE_CHECK = """Compare the original product (first image) and the rendered photograph without type
 (second image). If has_approved_detail is true, the third image shows the selected source detail against
@@ -1985,7 +1992,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                     seen = required_text(observed, "observation", "사진 장면 관찰")
                     message = ask_stage(ai, "ad_photo_message", PHOTO_MESSAGE,
                                         {"observation": seen, "headline": copy["headline"],
-                                         "message": brief.get("message", copy["headline"])})
+                                         "message": brief.get("message", copy["headline"])}, [picture])
                     message_observation = required_text(message, "message_observation", "사진과 광고 문구 비교")
                 # Check the observable motion from the reshoot without requiring the draft's exact grip or instant.
                 photo_inputs = {"photo_cue": seen if reshot_action else photo_cue,
@@ -2072,12 +2079,16 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 if wrong_message:
                     if not finding["identity_matches"]:
                         correction += " " + required_text(check, "correction", "상품 원형 보존")
-                    action_cue = required_text(message, "corrected_photo_cue", "광고 문구에 맞춘 촬영 수정")
-                    support = required_text(message, "visible_support", "움직이는 부분을 잡는 곳")
-                    target = required_text(message, "action_target", "동작이 닿는 곳")
-                    photo_cue = f"{action_cue} Visible support: {support} Visible destination: {target}"
+                    photo_cue = required_text(message, "corrected_photo_cue", "광고 문구에 맞춘 촬영 수정")
+                    repair_kind = message.get("repair_kind", "action")
+                    if repair_kind == "action":
+                        support = required_text(message, "visible_support", "움직이는 부분을 잡는 곳")
+                        target = required_text(message, "action_target", "동작이 닿는 곳")
+                        photo_cue = f"{photo_cue} Visible support: {support} Visible destination: {target}"
+                        reshot_action = True
+                    elif repair_kind != "scene":
+                        raise ValueError("광고 문구에 맞춘 장면 수정 방식을 확인하지 못했습니다")
                     answer = answer | {"art_direction": correction}
-                    reshot_action = True
                 if wrong_message or (reposition and staged_view is None and moved_view is None):
                     if reposition and staged_view is None and moved_view is None:
                         reference = photo.convert("RGB")

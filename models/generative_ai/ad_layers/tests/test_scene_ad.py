@@ -138,6 +138,9 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     repair_writing = False
     legacy_photo = False
     repair_message = False
+    repair_scene_message = False
+    scene_cue = "A small lamp sits fully in frame beside the bottle."
+    scene_correction = "Keep the bottle in place by the morning window with a visible lamp beside it."
     action_cue = "Soft sunlight falls across an in-use product beside a morning window."
     support, target = "Fingers grasp the product cap in frame.", "The tool reaches a clean surface apart from the bottle."
     corrected_cue = f"{action_cue} Visible support: {support} Visible destination: {target}"
@@ -162,6 +165,11 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
 
         def edit(self, reference, prompt, seed, steps, *, size):
             assert size == (512, 1024)
+            if repair_scene_message and "ad_photo_cue_check" in calls:
+                assert reference.size == size and reference.getpixel((0, 0)) == (128, 128, 128)
+                assert scene_correction in prompt and scene_cue in prompt and "Visible destination" not in prompt
+                calls.append("qwen")
+                return Image.new("RGB", size, "blue")
             if bad_background_shots and "ad_photo_cue_check" in calls:
                 assert prompt.startswith("Priority reshoot correction.")
                 assert cleaner_scene in prompt and "Use only the named scene elements" in prompt
@@ -207,13 +215,18 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 return '{"observation":"유리 가장자리에 호박색 빛이 있습니다"}'
             if step == "ad_photo_message":
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
-                assert not images and data == {"headline": "부드러운 아침", "message": "아침에 쓰는 세럼",
-                                               "observation": "유리 가장자리에 호박색 빛이 있습니다"}
+                assert len(images) == 1 and images[0].shape == (1024, 512, 3)
+                assert data == {"headline": "부드러운 아침", "message": "아침에 쓰는 세럼",
+                                "observation": "유리 가장자리에 호박색 빛이 있습니다"}
                 if repair_message and "ad_photo_cue_check" not in calls:
                     return json.dumps({"message_supported": False, "message_observation": "아침 장면이 보이지 않습니다",
                                        "correction": semantic_correction, "corrected_photo_cue": action_cue,
                                        "visible_support": support, "action_target": target,
                                        "reposition": True})
+                if repair_scene_message and "ad_photo_cue_check" not in calls:
+                    return json.dumps({"message_supported": False, "message_observation": "램프가 보이지 않습니다.",
+                                       "correction": scene_correction, "corrected_photo_cue": scene_cue,
+                                       "repair_kind": "scene", "reposition": False})
                 return '{"message_supported":true,"message_observation":"사진에 아침빛이 보입니다"}'
             calls.append(step)
             if step == "ad_plan":
@@ -273,6 +286,8 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
                 has_corrected_message = repair_message and calls.count(step) == 2
                 expected_cue = "유리 가장자리에 호박색 빛이 있습니다" if has_corrected_message else cue
+                if repair_scene_message and calls.count(step) == 2:
+                    expected_cue = scene_cue
                 assert data["photo_cue"] == (None if legacy_photo else expected_cue)
                 assert images[1].shape == (1024, 512, 3)
                 assert data["has_approved_detail"] is expect_correction and len(images) == (7 if expect_correction else 6)
@@ -410,6 +425,13 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     assert corrected["design"]["art_direction"] == semantic_correction
     assert corrected["texts"] == layout["texts"]
     repair_message = False
+    repair_scene_message = True
+    calls.clear()
+    corrected_scene = scene_ad.make_scene_ad(photo, fields, "", models, tmp_path / "scene-corrected", proposal=layout)
+    assert calls == ["render", "qwen", "ad_photo_cue_check", "qwen", "ad_photo_cue_check", "ad_photo_regions"]
+    assert [check["message_supported"] for check in corrected_scene["photo_cue_checks"]] == [False, True]
+    assert corrected_scene["photo_cue"] == scene_cue and corrected_scene["texts"] == layout["texts"]
+    repair_scene_message = False
     reject_cue = True
     calls.clear()
     unapproved = tmp_path / "unapproved"
