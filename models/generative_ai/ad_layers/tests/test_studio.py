@@ -236,7 +236,7 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
                 assert not images and data["observation"] == "용기 옆에 램프가 보입니다"
                 return '{"message_supported":true,"message_observation":"램프가 놓인 장면입니다"}'
             if step == "ad_photo_cue_check":
-                assert len(images) == 2 and data["photo_cue"] == "The vessel reflects a strip of lamp light."
+                assert len(images) == 6 and data["photo_cue"] == "The vessel reflects a strip of lamp light."
                 return ('{"identity_matches":true,"identity_observation":"같은 용기입니다",'
                         '"visible":true,"observation":"용기에 조명이 반사됩니다",'
                         '"stray_writing":null,"correction":null}')

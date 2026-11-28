@@ -23,6 +23,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     reject_cue = False
     reject_identity = False
     repair_writing = False
+    legacy_photo = False
     repair_message = False
     action_cue = "Soft sunlight falls across an in-use product beside a morning window."
     support, target = "Fingers grasp the product cap in frame.", "The tool reaches a clean surface apart from the bottle."
@@ -75,7 +76,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 assert prompt.startswith(f"Priority reshoot correction, replacing any conflicting placement instruction: {cue_correction}")
             if reject_identity and "ad_photo_cue_check" in calls:
                 assert "Restore the original amber glass bottle." in prompt
-            assert cue in prompt
+            assert (cue in prompt) is not legacy_photo
             calls.append("qwen")
             return Image.new("RGB", size, (160, 40, 255) if is_revision else (0, 0, 255))
 
@@ -149,12 +150,18 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             if step == "ad_photo_cue_check":
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
                 has_corrected_message = repair_message and calls.count(step) == 2
-                assert data["photo_cue"] == ("유리 가장자리에 호박색 빛이 있습니다" if has_corrected_message else cue)
+                expected_cue = "유리 가장자리에 호박색 빛이 있습니다" if has_corrected_message else cue
+                assert data["photo_cue"] == (None if legacy_photo else expected_cue)
                 assert images[1].shape == (1024, 512, 3)
-                assert data["has_approved_detail"] is expect_correction and len(images) == (3 if expect_correction else 2)
+                assert data["has_approved_detail"] is expect_correction and len(images) == (7 if expect_correction else 6)
+                assert [image.shape for image in images[-4:]] == [(640, 320, 3)] * 4
                 identity = {"identity_matches": not reject_identity,
                             "identity_observation": "병이 검정색입니다" if reject_identity else "같은 앰버색 병입니다",
                             "stray_writing": None}
+                if legacy_photo and calls.count(step) == 1:
+                    return '{"identity_matches":true,"visible":true,"identity_observation":"같은 병입니다","observation":"병이 보입니다"}'
+                if legacy_photo:
+                    assert "The previous answer omitted stray_writing." in prompt
                 if repair_writing and calls.count(step) == 1:
                     return json.dumps(identity | {"visible": True, "observation": "빛이 보입니다",
                                                   "stray_writing": {"box": [70, 10, 5, 2], "observation": "배경에 글자가 있습니다"},
@@ -259,6 +266,13 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                                       references=[reference], proposal=layout)
     assert calls == ["render", "qwen", "ad_photo_cue_check", "ad_photo_regions"]
     assert accepted["design"] == layout["design"] and accepted["final_review_reason"] is None
+    calls.clear()
+    legacy_photo = True
+    legacy = {key: value for key, value in layout.items() if key != "photo_cue"}
+    checked = scene_ad.make_scene_ad(photo, fields, "", models, tmp_path / "legacy-checked", proposal=legacy)
+    assert calls == ["render", "qwen", "ad_photo_cue_check", "ad_photo_cue_check", "ad_photo_regions"]
+    assert checked["photo_cue_checks"][0]["stray_writing"] is None
+    legacy_photo = False
     repair_message = True
     calls.clear()
     corrected = scene_ad.make_scene_ad(photo, fields, "", models, tmp_path / "message-corrected", proposal=layout)
@@ -374,6 +388,17 @@ def test_type_can_extend_over_photo_but_not_over_product(tmp_path):
     ink.save(tmp_path / "text.png")
     with pytest.raises(ValueError, match="실제 제품을 가립니다"):
         scene_ad.check_text_overlap(foreground, layout, tmp_path)
+
+
+def test_photo_review_close_views_cover_outer_edges_and_overlap_at_the_center():
+    scene = Image.new("RGB", (59, 83))
+    positions = [(0, 0), (58, 0), (0, 82), (58, 82)]
+    for i, corner in enumerate(positions):
+        scene.putpixel(corner, (0, 40 + i, 255))
+    scene.putpixel((29, 41), (255, 250, 90))
+    for i, (tile, (x, y)) in enumerate(zip(scene_ad.photo_review_details(scene), positions, strict=True)):
+        assert tile[-1 if y else 0, -1 if x else 0, 1] == pytest.approx((40 + i) / 255)
+        assert np.any(tile[:, :, 0] == 1)
 
 
 @pytest.mark.parametrize("region_key", ["action_regions", "photo_regions"])

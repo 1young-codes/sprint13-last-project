@@ -232,17 +232,20 @@ imply movement do not describe either."""
 
 PHOTO_CUE_CHECK = """Compare the original product (first image) and the rendered photograph without type
 (second image). If has_approved_detail is true, the third image shows the selected source detail against
-gray. Independently check product identity in the second image. Compare the actual shape, proportions,
+gray. The last four images are close views of the second image in order: top left, top right, bottom left
+and bottom right. Independently check product identity in the second image. Compare the actual shape, proportions,
 materials, visible layers, genuine packaging marks and product variants. With the whole product requested,
 check that all sold pieces or visible variants are still represented, without duplicates or substitutions.
 Use the approved detail when provided to decide what can be outside the frame. Allow the expected effects of
 lighting, angle and an agreed close crop. Allow ordinary scene props that do not look like other sold products.
 Report a concrete visible difference before marking identity_matches false.
-Inspect the whole rendered photo for newly invented letters, numbers, logos or watermarks, including on
-blurred props near the edges. Preserve authentic markings on the original product. Return stray_writing
-as null if absent, or an object with observation (Korean) and box [left, top, width, height] in whole
-percentages of the rendered photograph covering the visible invented writing only.
-Verify photo_cue from the actual pixels in the second image. For a gesture or motion, locate
+Inspect all four close views for newly invented letters, numbers, logos or watermarks, including partial
+or blurred marks on props touching the edges. Compare the original image before reporting a mark; preserve
+lettering already visible in it. Always return stray_writing, with null if absent or an object with observation
+(Korean) and box [left, top, width, height] in whole percentages of the full rendered photograph (image two).
+Cover only the visible mark and keep its box within that image.
+Verify photo_cue from the actual pixels in the second image when supplied. If it is null, set visible to true
+and describe the visible arrangement without requiring a specific effect. For a gesture or motion, locate
 the two relevant points and check their relative positions and direction. For light or material, locate the
 specified surface and check the actual highlight, shadow, or transmission there. Visible parts alone do not
 prove a relationship. If a planned action would physically miss its destination or appears suspended without
@@ -455,6 +458,13 @@ def crop_subject(product, design):
     if not detail.getchannel("A").getbbox():
         raise ValueError("확대할 부분에 원본 상품이 없습니다")
     return detail
+
+
+def photo_review_details(scene):
+    width, height = scene.size
+    crop_width, crop_height = ceil(5 * width / 8), ceil(5 * height / 8)
+    return [to_float(scene.crop((x, y, x + crop_width, y + crop_height)))
+            for y in (0, height - crop_height) for x in (0, width - crop_width)]
 
 
 def remove_photo_writing(scene, foreground, mark):
@@ -1584,17 +1594,25 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
 
             def review_photo(candidate):
                 picture = to_float(candidate)
-                observed = ask_stage(ai, "ad_photo_observation", PHOTO_OBSERVATION, {}, [picture])
-                seen = required_text(observed, "observation", "사진 장면 관찰")
-                message = ask_stage(ai, "ad_photo_message", PHOTO_MESSAGE,
-                                    {"observation": seen, "headline": copy["headline"],
-                                     "message": brief.get("message", copy["headline"])})
+                seen, message_observation = None, None
+                message = {"message_supported": True}
+                if photo_cue:
+                    observed = ask_stage(ai, "ad_photo_observation", PHOTO_OBSERVATION, {}, [picture])
+                    seen = required_text(observed, "observation", "사진 장면 관찰")
+                    message = ask_stage(ai, "ad_photo_message", PHOTO_MESSAGE,
+                                        {"observation": seen, "headline": copy["headline"],
+                                         "message": brief.get("message", copy["headline"])})
+                    message_observation = required_text(message, "message_observation", "사진과 광고 문구 비교")
                 # Check the observable motion from the reshoot without requiring the draft's exact grip or instant.
-                check = ask_stage(ai, "ad_photo_cue_check", PHOTO_CUE_CHECK,
-                                  {"photo_cue": seen if reshot_action else photo_cue,
-                                   "has_approved_detail": approved_detail is not None,
-                                   "crop": answer["crop"], "product_facts": fields},
-                                  [images[0], picture, *([to_float(approved_detail)] if approved_detail else [])])
+                photo_inputs = {"photo_cue": seen if reshot_action else photo_cue,
+                                "has_approved_detail": approved_detail is not None,
+                                "crop": answer["crop"], "product_facts": fields}
+                proof = [images[0], picture, *([to_float(approved_detail)] if approved_detail else []),
+                         *photo_review_details(candidate)]
+                check = ask_stage(ai, "ad_photo_cue_check", PHOTO_CUE_CHECK, photo_inputs, proof)
+                if "stray_writing" not in check:
+                    check = ask_stage(ai, "ad_photo_cue_check", PHOTO_CUE_CHECK +
+                                      "\nThe previous answer omitted stray_writing. Return it explicitly.", photo_inputs, proof)
                 observation = required_text(check, "observation", "촬영 결과 검토")
                 identity = check.get("identity_matches")
                 identity_observation = required_text(check, "identity_observation", "촬영 결과 검토")
@@ -1602,7 +1620,6 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 supported = message.get("message_supported")
                 if any(type(value) is not bool for value in (visible, identity, supported)):
                     raise ValueError("촬영한 사진에서 연출을 확인하지 못했습니다")
-                message_observation = required_text(message, "message_observation", "사진과 광고 문구 비교")
                 mark = check.get("stray_writing")
                 if "stray_writing" not in check or (mark is not None and not isinstance(mark, dict)):
                     raise ValueError("촬영한 사진에 새로 생긴 글자가 있는지 확인하지 못했습니다")
@@ -1617,8 +1634,6 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             for attempt in range(2):
                 generated = photograph(prompt)
                 scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
-                if not photo_cue:
-                    break
                 check, message, finding = review_photo(scene)
                 matches = finding["visible"] and finding["identity_matches"] and finding["message_supported"]
                 if matches and finding["stray_writing"]:
@@ -1662,9 +1677,10 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                         reference = photo.convert("RGB")
                     camera = (f"{ANGLES[art_plan['angle']]} {SHOT_SCALES[art_plan['shot_scale']]} "
                               f"{LIGHTING.get(art_plan['lighting'], art_plan['lighting'])} " if art_plan else "")
+                    photographic_goal = f" The photograph must show: {photo_cue}" if photo_cue else ""
                     prompt = ("Make one finished commercial photograph. The reference identifies the original item, "
                               "its proportions, materials, labels, and visible parts. Change the arrangement to the "
-                              f"one described here: {correction} The photograph must show: {photo_cue} "
+                              f"one described here: {correction}{photographic_goal} "
                               f"{camera} Keep a quiet area for the later lettering. Use a background that can sit "
                               f"against {answer['background']}. Preserve product identity. Add no text or graphics.")
                 else:
