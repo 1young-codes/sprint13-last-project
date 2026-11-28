@@ -9,8 +9,8 @@ from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 from .creative_brief import TEXT_ROLES, ask_stage, required_text, validate_boxes
 from .layers import compose, load_layout, load_settings, save_layout, to_float
-from .scene_ad import (check_text_overlap, check_type_margin, find_action_regions, layout_texts, pixel_box,
-                       rendered_text_bounds, review_finished, tighten_text_groups)
+from .scene_ad import (check_text_overlap, check_type_margin, find_photo_regions, layout_texts, pixel_box,
+                       protected_photo_regions, rendered_text_bounds, review_finished, tighten_text_groups)
 from .staging import padded_box, staged_evidence
 from .text_render import render_texts
 
@@ -180,9 +180,9 @@ def edit_version(source, output, action, arguments, generation, *, ai=None, refe
         shutil.copytree(source, stage, dirs_exist_ok=True)
         layout = load_layout(stage)
         if action == "edit_text":
-            if ai is not None and layout.get("photo_cue") and "action_regions" not in layout:
+            if ai is not None and "photo_regions" not in layout:
                 with Image.open(stage / layout["artwork"]["file"]) as photo:
-                    layout["action_regions"] = find_action_regions(ai, photo, layout["photo_cue"])
+                    layout["photo_regions"] = find_photo_regions(ai, photo, layout.get("photo_cue"))
             change_text(stage, layout, arguments.get("changes"))
         elif action == "edit_composition" and ai is not None:
             change_composition(stage, layout, arguments, ai, references)
@@ -196,7 +196,7 @@ def edit_version(source, output, action, arguments, generation, *, ai=None, refe
         check_text_overlap(foreground, layout, stage)
         if action == "edit_text":
             tighten_text_groups(foreground, layout, stage, arguments["changes"])
-            if layout.get("action_regions"):
+            if protected_photo_regions(layout):
                 check_type_margin(layout["size"], rendered_text_bounds(layout, stage))
         if action != "edit_composition":
             (stage / "before-typesetting.png").unlink(missing_ok=True)

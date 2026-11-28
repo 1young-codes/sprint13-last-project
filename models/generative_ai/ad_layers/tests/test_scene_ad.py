@@ -170,7 +170,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                                                   "correction": cue_correction, "reposition": reject_cue})
                 return json.dumps(identity | {"visible": True, "observation": "유리 가장자리에 빛이 보입니다",
                                               "correction": None})
-            if step == "ad_action_regions":
+            if step == "ad_photo_regions":
                 assert len(images) == 1 and "photo_cue" in prompt
                 return '{"regions":[]}'
             if step == "ad_composition":
@@ -235,7 +235,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     layout = scene_ad.make_scene_ad(photo, fields, "", models, folder, references=[reference])
     assert calls == ["ad_plan", "ad_direction", "ad_headline", "ad_art_direction", "ad_source_framing", "ad_layout",
                      "ad_layout", "render", "ad_composition", "render", "ad_composition_compare", "ad_scene_direction", "qwen",
-                     "ad_photo_cue_check", "qwen", "ad_photo_cue_check", "ad_action_regions", "ad_final_layout", "render"]
+                     "ad_photo_cue_check", "qwen", "ad_photo_cue_check", "ad_photo_regions", "ad_final_layout", "render"]
     assert layout["photo_cue"] == cue and [check["visible"] for check in layout["photo_cue_checks"]] == [False, True]
     exercise_cue_retry = False
     assert layout["design"]["accent"] is None
@@ -257,12 +257,12 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     calls.clear()
     accepted = scene_ad.make_scene_ad(photo, fields, "", models, tmp_path / "accepted",
                                       references=[reference], proposal=layout)
-    assert calls == ["render", "qwen", "ad_photo_cue_check", "ad_action_regions"]
+    assert calls == ["render", "qwen", "ad_photo_cue_check", "ad_photo_regions"]
     assert accepted["design"] == layout["design"] and accepted["final_review_reason"] is None
     repair_message = True
     calls.clear()
     corrected = scene_ad.make_scene_ad(photo, fields, "", models, tmp_path / "message-corrected", proposal=layout)
-    assert calls == ["render", "qwen", "ad_photo_cue_check", "qwen", "ad_photo_cue_check", "ad_action_regions"]
+    assert calls == ["render", "qwen", "ad_photo_cue_check", "qwen", "ad_photo_cue_check", "ad_photo_regions"]
     assert [check["message_supported"] for check in corrected["photo_cue_checks"]] == [False, True]
     assert corrected["photo_cue"] == "유리 가장자리에 호박색 빛이 있습니다"
     assert corrected["design"]["art_direction"] == semantic_correction
@@ -295,7 +295,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
 
     monkeypatch.setattr(scene_ad, "remove_photo_writing", remove_writing)
     cleaned = scene_ad.make_scene_ad(photo, fields, "", models, tmp_path / "cleaned", proposal=layout)
-    assert calls == ["render", "qwen", "ad_photo_cue_check", "ad_photo_cue_check", "ad_action_regions"]
+    assert calls == ["render", "qwen", "ad_photo_cue_check", "ad_photo_cue_check", "ad_photo_regions"]
     assert [check["stray_writing"] for check in cleaned["photo_cue_checks"]] == ["배경에 글자가 있습니다", None]
     repair_writing = False
     calls.clear()
@@ -308,7 +308,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                                       previous=folder, rejected=rejected)
     assert calls == ["ad_cycle_critique", "ad_art_direction", "ad_source_framing", "ad_layout", "ad_layout", "render", "ad_composition",
                      "render", "ad_composition_compare", "ad_scene_direction", "qwen", "ad_photo_cue_check",
-                     "ad_action_regions", "ad_final_layout", "render"]
+                     "ad_photo_regions", "ad_final_layout", "render"]
     assert revision["revision"]["weakness"] == "평평한 조명"
     assert revision["design"]["art_direction"] == "Narrow studio beam"
     assert revision["brief"]["headline"] == layout["brief"]["headline"]
@@ -376,7 +376,8 @@ def test_type_can_extend_over_photo_but_not_over_product(tmp_path):
         scene_ad.check_text_overlap(foreground, layout, tmp_path)
 
 
-def test_text_keeps_the_visible_receiver_clear_even_outside_product_mask(tmp_path):
+@pytest.mark.parametrize("region_key", ["action_regions", "photo_regions"])
+def test_text_keeps_supporting_forms_clear_even_outside_product_mask(tmp_path, region_key):
     foreground = np.zeros((40, 40), dtype=bool)
     foreground[5:12, 4:10] = True
     artwork = {"x": 10, "y": 10}
@@ -385,7 +386,7 @@ def test_text_keeps_the_visible_receiver_clear_even_outside_product_mask(tmp_pat
     layout = {"size": [60, 60], "artwork": artwork, "texts": [layer]}
     Image.new("RGBA", (9, 6), "white").save(tmp_path / "price.png")
     assert not scene_ad.check_text_overlap(foreground, layout, tmp_path)
-    layout["action_regions"] = regions
+    layout[region_key] = regions
     with pytest.raises(ValueError, match="사용 장면"):
         scene_ad.check_text_overlap(foreground, layout, tmp_path)
     layer["y"] = 30

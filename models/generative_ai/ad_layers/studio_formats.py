@@ -13,8 +13,8 @@ from .creative_brief import TEXT_ROLES, ask_stage, required_text, validate_boxes
 from .format_layout import (format_measurements, format_type_hierarchy, measured_styles, outer_margins, position_options,
                             preview_placement)
 from .layers import compose, load_layout, load_settings, save_layout, to_float
-from .scene_ad import (action_mask, check_offer_spacing, check_text_overlap, check_type_margin, design_layers,
-                       find_action_regions, make_scene_ad, pixel_box, rendered_text_bounds, tighten_text_groups,
+from .scene_ad import (check_offer_spacing, check_text_overlap, check_type_margin, design_layers,
+                       find_photo_regions, make_scene_ad, photo_region_mask, pixel_box, rendered_text_bounds, tighten_text_groups,
                        touches_photo_edge)
 from .staging import check_staged_identity
 from .studio_edits import edit_version, foreground_mask, line_break_after, repair_staged_detail
@@ -955,7 +955,7 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
         bounds = [round(100 * edge / length) for edge, length in zip(mask.getbbox(), size * 2, strict=True)]
         occupied = np.asarray(mask) > 128
         if regions:
-            occupied |= action_mask(regions, size)
+            occupied |= photo_region_mask(regions, size)
         return bounds, position_options(layout, size, occupied, bounds, dimensions)
 
     def choose_position(previews, masks):
@@ -1014,9 +1014,10 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
     framing, framing_mask = frame_photo(photo, mask, size, expand, choose_position, check_margin,
                                         keep_clearance=keep_clearance, protected_box=protected_box)
     foreground = np.asarray(framing_mask) > 128
-    regions = find_action_regions(ai, framing, photo_cue) if photo_cue and layout.get("action_regions") != [] else []
+    regions = (find_photo_regions(ai, framing, photo_cue)
+               if layout.get("photo_regions") != [] or layout.get("action_regions") else [])
     tint = Image.blend(framing, Image.new("RGB", size, "#d84458"), 0.6)
-    occupied = Image.fromarray(foreground | action_mask(regions, size)) if regions else framing_mask
+    occupied = Image.fromarray(foreground | photo_region_mask(regions, size)) if regions else framing_mask
     protected = Image.composite(tint, framing, occupied)
     images = [reference, to_float(framing), to_float(protected)]
     fonts = load_settings()["fonts"]
@@ -1047,8 +1048,7 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
 
         def render_copy(design):
             candidate = design_layers(design, copy, size, fonts, stage)
-            if photo_cue:
-                candidate["action_regions"] = regions
+            candidate["photo_regions"] = regions
             headline_behind_subject = check_text_overlap(foreground, candidate, stage)
             tighten_text_groups(foreground, candidate, stage)
             ink = rendered_text_bounds(candidate, stage)

@@ -714,19 +714,20 @@ def find_foreground(scene, mask_model, threshold):
     return foreground
 
 
-ACTION_REGIONS = """Locate the visible parts that make the described action understandable in this exact
-photograph. Protect the actual contour of hands or other supports, of the receiver, and of any visible material
-between them. Include the fingers or other portions that visibly belong to these parts, even when they reach an
-edge. Follow the outline of each part separately, excluding clear background between them. Do not protect the
-general setting, shadows, incidental props, or an implied motion path that has no visible material. If the cue
-only describes a static arrangement, lighting, or texture, or the physical interaction is absent from the photo,
-return {"regions": []}. Ordinary contact with a table or pedestal does not count as an interaction. Return JSON
+PHOTO_REGIONS = """Locate the visible forms in this exact photograph that have to stay clear of typography
+in addition to the product itself. For a physical action, follow the contours of hands, the receiver and the
+material between them that make the action readable. Include the visible fingers or other parts even at the edge.
+For a display where a distinct container holds the product, trace the container's visible outer shape, including
+the lip or rim. The container and what it holds should read as one photographic form. Include this even in a
+still life, but leave out a separate cup, decorative prop, table, pedestal, cast shadow or backdrop. Follow each
+part's actual visible outline, leaving out the background between parts and any implied motion path. Return JSON
 with regions as an array of objects {part, points}. Use a short Korean name for part and at least 3 [x, y] vertices,
-each in whole percentages from the left and top of the photograph."""
+each in whole percentages from the left and top of the photograph. Return {"regions": []} when there are no
+qualifying forms outside the product itself."""
 
 
-def find_action_regions(ai, photo, cue):
-    answer = ask_stage(ai, "ad_action_regions", ACTION_REGIONS, {"photo_cue": cue}, [to_float(photo)])
+def find_photo_regions(ai, photo, cue):
+    answer = ask_stage(ai, "ad_photo_regions", PHOTO_REGIONS, {"photo_cue": cue}, [to_float(photo)])
     regions = answer.get("regions")
     if not isinstance(regions, list) or len(regions) > 8:
         raise ValueError("글자가 가리면 안 되는 촬영 영역을 확인하지 못했습니다")
@@ -738,12 +739,16 @@ def find_action_regions(ai, photo, cue):
                                 for point in points))
         if not valid_points or not sum(x * v - y * u for (x, y), (u, v) in
                                       zip(points, points[1:] + points[:1], strict=True)):
-            raise ValueError("동작 영역의 사진 좌표가 올바르지 않습니다")
+            raise ValueError("보호 영역의 사진 좌표가 올바르지 않습니다")
         required_text(region, "part", "촬영 영역")
     return regions
 
 
-def action_mask(regions, size):
+def protected_photo_regions(layout):
+    return (*layout.get("action_regions", ()), *layout.get("photo_regions", ()))
+
+
+def photo_region_mask(regions, size):
     mask = Image.new("L", size)
     if regions:
         draw = ImageDraw.Draw(mask)
@@ -761,9 +766,9 @@ def check_text_overlap(foreground, layout, folder):
     height, width = foreground.shape
     mask[y:y + height, x:x + width] = foreground
     protected = None
-    if regions := layout.get("action_regions"):
+    if regions := protected_photo_regions(layout):
         protected = np.zeros_like(mask)
-        protected[y:y + height, x:x + width] = action_mask(regions, (width, height))
+        protected[y:y + height, x:x + width] = photo_region_mask(regions, (width, height))
     layers = [(f"{line['role']} 글자", line) for text in layout["texts"] for line in text.get("lines", (text,))]
     if graphic := layout.get("graphic"):
         layers.append(("색면", graphic))
@@ -773,7 +778,7 @@ def check_text_overlap(foreground, layout, folder):
         x, y = layer_info["x"], layer_info["y"]
         area = np.s_[y:y + layer_info["h"], x:x + layer_info["w"]]
         if protected is not None and (protected[area] & ink).any():
-            raise ValueError(f"{name} 레이어가 사용 장면의 손이나 받는 영역을 가립니다")
+            raise ValueError(f"{name} 레이어가 보호할 사용 장면이나 용기 윤곽을 가립니다")
         covered = mask[area] & ink
         if layer_info.get("depth") == "behind_subject":
             if layer_info is graphic:
@@ -949,14 +954,14 @@ def balanced_text_positions(original, revision, size, before, after):
 def review_finished(ai, answer, layout, scene, foreground, folder, design_input, references, *,
                     assess_composition=False, keep_wrap=False):
     """완성 사진 위의 글자와 구도를 검사하고 사진을 유지한 채 배치를 고칩니다."""
-    if layout.get("photo_cue") and "action_regions" not in layout:
-        layout["action_regions"] = find_action_regions(ai, scene, layout["photo_cue"])
+    if "photo_regions" not in layout:
+        layout["photo_regions"] = find_photo_regions(ai, scene, layout.get("photo_cue"))
     rebuilt_format = (design_input.get("revision_feedback") or {}).get("format_issue")
 
     def check_layout(candidate, directory):
         check_text_overlap(foreground, candidate, directory)
         tighten_text_groups(foreground, candidate, directory)
-        if candidate.get("action_regions") or rebuilt_format:
+        if protected_photo_regions(candidate) or rebuilt_format:
             ink = rendered_text_bounds(candidate, directory)
             check_type_margin(candidate["size"], ink)
             if rebuilt_format:
@@ -980,15 +985,15 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                              "headline_breaks": headline_breaks(design_input["copy"]["headline"]),
                              "layout_error": original_error, "rendered_text_bounds": rendered_text_bounds(layout, folder)}
     task = FINAL_REVIEW
-    if regions := layout.get("action_regions"):
-        inputs["action_regions"] = regions
-        task += ("\nThe partly tinted photograph after the plain photograph marks the portions of the action that "
-                 "must stay clear. Keep the actual letter strokes and any graphic off the tinted area. The product "
+    if regions := protected_photo_regions(layout):
+        inputs["photo_regions"] = regions
+        task += ("\nThe partly tinted photograph after the plain photograph marks the visible action and container "
+                 "forms that must stay clear. Keep letter strokes and graphics off the tinted area. The product "
                  "name and price should share a nearby alignment in calm space. Leave at least 2.5% of the "
                  "short canvas side around actual ink. When one side is too narrow, use open space on the other "
                  "side before squeezing the offer against the edge. Avoid changing unrelated text.")
         tinted = Image.blend(scene.convert("RGB"), Image.new("RGB", scene.size, "#ff5c7a"), 0.65)
-        guide = Image.composite(tinted, scene.convert("RGB"), Image.fromarray(action_mask(regions, scene.size)))
+        guide = Image.composite(tinted, scene.convert("RGB"), Image.fromarray(photo_region_mask(regions, scene.size)))
         layout_references = [to_float(guide), *references]
     else:
         layout_references = references
@@ -1006,8 +1011,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
 
     def render_revision(plan, folder):
         updated = design_layers(plan, design_input["copy"], size, design_input["fonts"], folder)
-        if "action_regions" in layout:
-            updated["action_regions"] = layout["action_regions"]
+        updated.update({key: layout[key] for key in ("action_regions", "photo_regions") if key in layout})
         revised_scene = (scene if plan["edge"] == answer["edge"] else
                          set_photo_edge(scene, foreground, artwork, size, plan["edge"]))
         revised_scene.save(folder / artwork["file"])
