@@ -189,9 +189,9 @@ the reading path or hierarchy clearer.
 When balanced_outer_space is present, image three keeps the first revision's type treatment with more modest
 placement changes. Compare all three actual posters before choosing. Any reference images come afterward.
 Start by looking at the full canvas in each poster. Use original_outer_space and revision_outer_space to inspect
-the areas outside both the words and product, especially the ends of the long axis. Moving text toward the
-product can reduce internal gaps while creating two bigger empty bands at the edges. Keep the current
-poster if the revision creates a large purposeless band, even when neighboring elements are closer.
+the areas outside both the words and product. expanded_outer_space names the edges where the revision leaves
+substantially more space. Moving text toward the product can reduce internal gaps while creating an empty band
+on even one side. Prefer the existing layout or the moderate revision if the larger band serves no purpose.
 An enlarged margin can work if it visibly supports the photographed action, guides the eye or gives an
 important element emphasis. Explain that visible purpose when choosing a revision with more outer space.
 Use product_bounds alongside both ink maps. When the headline moves from above the product to below it or
@@ -1032,12 +1032,22 @@ def align_nearby_offer(plan, ink, size):
     return plan | {"boxes": boxes}
 
 
+def expanded_outer_margins(before, after):
+    # The threshold triggers a visual comparison. The margin can still be useful.
+    return {edge: space - before[edge] for edge, space in after.items() if space - before[edge] >= 5}
+
+
 def balanced_text_positions(original, revision, size, before, after):
     axis, ends = (1, ("top", "bottom")) if size[1] >= size[0] else (0, ("left", "right"))
-    if any(after[edge] <= before[edge] for edge in ends):
+    expanded = expanded_outer_margins(before, after)
+    if expanded:
+        edge_axes = {"left": 0, "right": 0, "top": 1, "bottom": 1}
+        edge = max(expanded, key=lambda side: expanded[side] * size[edge_axes[side]])
+        axis = edge_axes[edge]
+    elif any(after[edge] <= before[edge] for edge in ends):
         return None
-    offsets = {role: round((original["boxes"][role][axis] - box[axis]) / 2)
-               for role, box in revision["boxes"].items()}
+    movement = {role: original["boxes"][role][axis] - box[axis] for role, box in revision["boxes"].items()}
+    offsets = {role: round(amount / 2) for role, amount in movement.items()}
 
     def shift(box, amount):
         moved = box.copy()
@@ -1049,13 +1059,21 @@ def balanced_text_positions(original, revision, size, before, after):
     if "lines" in headline:
         styles["headline"] = headline | {
             "lines": [line | {"box": shift(line["box"], offsets["headline"])} for line in headline["lines"]]}
-    return revision | {"styles": styles,
-                       "boxes": {role: shift(box, offsets[role]) for role, box in revision["boxes"].items()}}
+    balanced = revision | {"styles": styles,
+                           "boxes": {role: shift(box, offsets[role]) for role, box in revision["boxes"].items()}}
+    accent, original_accent = revision.get("accent"), original.get("accent")
+    if accent and original_accent and accent["shape"] == original_accent["shape"]:
+        amount = original_accent["box"][axis] - accent["box"][axis]
+        if amount and amount == movement.get("product_name") == movement.get("price"):
+            balanced["accent"] = accent | {"box": shift(accent["box"], round(amount / 2))}
+    return balanced
 
 
 def review_finished(ai, answer, layout, scene, foreground, folder, design_input, references, *,
                     assess_composition=False, keep_wrap=False):
     """완성 사진 위의 글자와 구도를 검사하고 사진을 유지한 채 배치를 고칩니다."""
+    from .format_layout import outer_margins
+
     if "photo_regions" not in layout:
         layout["photo_regions"] = find_photo_regions(ai, scene, layout.get("photo_cue"))
     rebuilt_format = (design_input.get("revision_feedback") or {}).get("format_issue")
@@ -1088,6 +1106,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
     inputs = design_input | {"design": answer, "product_bounds_left_top_right_bottom": placement,
                              "headline_breaks": headline_breaks(design_input["copy"]["headline"]),
                              "layout_error": original_error, "rendered_text_bounds": rendered_text_bounds(layout, folder)}
+    inputs["original_outer_space"] = outer_margins(placement, inputs["rendered_text_bounds"].values())
     task = FINAL_REVIEW
     if regions := protected_photo_regions(layout):
         inputs["photo_regions"] = regions
@@ -1124,9 +1143,6 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                  "together when both are used as one group.")
     needs_alternative = "composition_issue" in inputs
     if needs_alternative:
-        from .format_layout import outer_margins
-
-        inputs["original_outer_space"] = outer_margins(placement, inputs["rendered_text_bounds"].values())
         task += ("\nAddress composition_issue on the actual poster. Design the reading path as a whole: place the "
                  "headline by the photographic feature, then align and group the name and price so they do not "
                  "form an unrelated block. Blend an arbitrary seam that divides the reading path. If a panel "
@@ -1204,6 +1220,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
         with TemporaryDirectory(dir=folder) as staging:
             candidate = Path(staging) / "revision"
             candidate.mkdir()
+            proposed = revised
             try:
                 revised, updated = render_revision(revised, candidate)
             except ValueError as error:
@@ -1221,27 +1238,32 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                         pass
                     else:
                         revised, updated, candidate = aligned, aligned_layout, aligned_dir
-            if needs_alternative and original_error is None:
-                revision_ink = rendered_text_bounds(updated, candidate)
+            revision_ink = rendered_text_bounds(updated, candidate)
+            revision_outer_space = outer_margins(placement, revision_ink.values())
+            expanded = expanded_outer_margins(inputs["original_outer_space"], revision_outer_space)
+            if original_error is None and (needs_alternative or expanded):
                 if priority and weaker_headline_focus(updated, revision_ink, priority["phrase"]):
                     inputs = inputs | {"rejected_design": revised,
                                        "layout_error": "수정한 제목에서도 광고의 핵심 표현이 더 작게 보입니다."}
                     continue
                 evidence = {
-                    "composition_issue": inputs["composition_issue"], "copy": inputs["copy"],
+                    "composition_issue": (inputs.get("composition_issue") or review.get("reason")
+                                          or "글자의 새 배치와 전체 여백을 비교합니다."),
+                    "copy": inputs["copy"],
                     "product_bounds": placement,
                     "original_ink": inputs["rendered_text_bounds"],
                     "revision_ink": revision_ink,
                     "original_outer_space": inputs["original_outer_space"],
-                    "revision_outer_space": outer_margins(placement, revision_ink.values()),
+                    "revision_outer_space": revision_outer_space,
+                    "expanded_outer_space": expanded,
                 }
                 if priority:
                     evidence["headline_priority"] = priority
                 versions = {"revision": (revised, updated, candidate)}
                 pictures = [to_float(first), to_float(compose(updated, candidate))]
-                balanced = balanced_text_positions(answer, revised, size, evidence["original_outer_space"],
+                balanced = balanced_text_positions(answer, proposed, size, evidence["original_outer_space"],
                                                    evidence["revision_outer_space"])
-                if balanced is not None and balanced != revised:
+                if balanced is not None and balanced != proposed:
                     alternate = Path(staging) / "balanced"
                     alternate.mkdir()
                     try:
@@ -1260,7 +1282,8 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                 reason = required_text(comparison, "reason", "완성 배치 비교")
                 choice = comparison.get("choice")
                 if choice == "original":
-                    inputs = inputs | {"rejected_design": revised, "layout_error": reason}
+                    inputs = inputs | {"rejected_design": revised, "layout_error": reason,
+                                       "expanded_outer_space": expanded}
                     continue
                 if not isinstance(choice, str) or choice not in versions:
                     raise ValueError("어느 배치가 더 나은지 확인하지 못했습니다")

@@ -1035,7 +1035,8 @@ def test_mixed_background_triggers_a_rendered_layout_comparison(draft, move_titl
                 assert "‘포근한 겨울 저녁’" in inputs["contrast_issue"]
                 return json.dumps({"revision": {"boxes": original["boxes"] | {"headline": [10, 15, 45, 20]},
                                                 "edge": "blend"} if move_title else None})
-            assert step == "ad_final_composition_compare" and len(images) == 2
+            assert step == "ad_final_composition_compare" and len(images) == 3
+            assert inputs["expanded_outer_space"] == {"top": 5}
             assert not np.array_equal(images[0], images[1])
             return '{"choice":"revision","reason":"글자가 일정한 어두운 바탕 위로 올라왔습니다"}'
 
@@ -1317,6 +1318,37 @@ def test_composition_review_can_fix_a_valid_layout(draft):
     assert why == "판매 정보를 묶었습니다" and revised["boxes"]["price"] == [10, 45, 45, 7]
     assert revised["styles"] == design["styles"]
     assert (folder / "scene.png").read_bytes() == original_photo
+
+
+def test_unsolicited_layout_revision_compares_a_new_outer_band(draft):
+    folder, _ = draft
+    loaded = load_layout(folder)
+    copy = {layer["role"]: layer["text"] for layer in loaded["texts"]}
+    design = loaded["design"] | {
+        "boxes": loaded["design"]["boxes"] | {"product_name": [10, 65, 45, 7], "price": [10, 83, 45, 7]}}
+    layout = scene_ad.design_layers(design, copy, (100, 100), ["noto_sans_kr"], folder) | {"photo_regions": []}
+    foreground = np.zeros((100, 100), dtype=bool)
+    foreground[30:67, 65:92] = True
+    with Image.open(folder / "scene.png") as photo:
+        scene = photo.copy()
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            data = json.loads(request.split("Input JSON follows:\n", 1)[1])
+            if step == "ad_final_layout":
+                boxes = design["boxes"] | {"product_name": [10, 49, 45, 7], "price": [10, 67, 45, 7]}
+                return json.dumps({"reason": "판매 정보를 가까이 붙입니다", "revision": {"boxes": boxes}})
+            assert step == "ad_final_composition_compare" and len(images) == 3
+            assert set(data["expanded_outer_space"]) == {"bottom"}
+            assert (data["original_outer_space"]["bottom"] < data["balanced_outer_space"]["bottom"]
+                    < data["revision_outer_space"]["bottom"])
+            assert not np.array_equal(images[1], images[2])
+            return '{"choice":"balanced","reason":"아래 여백을 조절했습니다"}'
+
+    answer, _, reason = scene_ad.review_finished(
+        Agent(), design, layout, scene, foreground, folder, {"copy": copy, "fonts": ["noto_sans_kr"]}, (),
+        assess_composition=True)
+    assert answer["boxes"]["price"][1] == 75 and reason == "아래 여백을 조절했습니다"
 
 
 def test_import_rejects_a_draft_with_modified_price(tmp_path, draft):

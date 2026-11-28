@@ -695,7 +695,19 @@ def test_balanced_composition_keeps_line_edits_and_moderates_motion_toward_cente
     assert blended["boxes"] == {"headline": [8, 15, 80, 16], "price": [8, 78, 20, 5]}
     assert blended["styles"]["headline"]["lines"] == [{"box": [8, 15, 80, 6], "size": 8},
                                                        {"box": [8, 23, 80, 8], "size": 11}]
-    assert scene_ad.balanced_text_positions(original, revised, (100, 180), before, after | {"bottom": 12}) is None
+    barely_changed = {"top": 12, "bottom": 12}
+    assert scene_ad.balanced_text_positions(original, revised, (100, 180), before, barely_changed) is None
+
+
+def test_balanced_composition_moves_offer_accent_when_only_bottom_margin_grows():
+    original = {"boxes": {"headline": [7, 6, 45, 16], "product_name": [11, 78, 56, 6], "price": [11, 86, 30, 7]},
+                "accent": {"shape": "rectangle", "box": [7, 78, 1, 14]}}
+    revised = {"boxes": original["boxes"] | {"product_name": [11, 58, 56, 6], "price": [11, 66, 30, 7]},
+               "accent": {"shape": "rectangle", "box": [7, 58, 1, 15]}, "styles": {"headline": {}}}
+    before, after = {"top": 8, "bottom": 9}, {"top": 8, "bottom": 29}
+    balanced = scene_ad.balanced_text_positions(original, revised, (1024, 1024), before, after)
+    assert balanced["boxes"] == original["boxes"] | {"product_name": [11, 68, 56, 6], "price": [11, 76, 30, 7]}
+    assert balanced["accent"]["box"] == [7, 68, 1, 15]
 
 
 def test_blended_photo_edges_keep_product_pixels_opaque():
