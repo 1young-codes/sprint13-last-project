@@ -4,7 +4,7 @@ import numpy as np
 from PIL import Image
 import pytest
 
-from models.generative_ai.ad_layers import scene_ad
+from models.generative_ai.ad_layers import format_layout, scene_ad
 from models.generative_ai.ad_layers.layers import compose
 from models.generative_ai.ad_layers.text_render import page_html
 from models.generative_ai.photo_retouch import product_mask
@@ -963,6 +963,58 @@ def test_split_title_closes_the_visible_gap_without_covering_the_product(tmp_pat
         assert after[anchor] == before[anchor]
         scene_ad.tighten_text_groups(foreground, layout, tmp_path, {"headline": {}})
         assert scene_ad.rendered_text_bounds(layout, tmp_path) == after
+
+
+def test_offer_reflow_keeps_the_position_and_pixels_of_the_finished_title(tmp_path, monkeypatch):
+    size = (100, 100)
+    fonts = ["noto_sans_kr"]
+    copy = {"headline": "따뜻한 오후 차 한 잔", "product_name": "차", "price": "4,000원"}
+    style = {"font": fonts[0], "align": "left", "color": "#FFFFFF", "size": 6, "max_lines": 1}
+    design = {"boxes": {"headline": [8, 8, 80, 26], "product_name": [8, 89, 10, 8], "price": [21, 93, 20, 7]},
+              "styles": {role: style.copy() for role in copy}}
+    design["styles"]["headline"].update(max_lines=2, break_after=2,
+                                        lines=[{"box": [8, 8, 80, 8]}, {"box": [8, 23, 80, 10]}])
+    texts = scene_ad.layout_texts(design, copy, size, fonts)
+    title, name, price = texts
+    title["lines"][0]["y"] += 8
+    for line in title["lines"]:
+        png = Image.new("RGBA", (line["w"], line["h"]))
+        png.paste("#d7a46a", (0, 1, 25, 6))
+        png.save(tmp_path / line["file"])
+    for text in (name, price):
+        png = Image.new("RGBA", (text["w"], text["h"]))
+        png.paste("white", (0, 3, 7, 5))
+        png.save(tmp_path / text["file"])
+    for filename in ("background.png", "scene.png"):
+        Image.new("RGB", size, "#221f1b").save(tmp_path / filename)
+    foreground = np.zeros(size, dtype=bool)
+    foreground[37:74, 24:80] = True
+    Image.fromarray(foreground).save(tmp_path / "foreground.png")
+    layout = {"size": list(size), "background": {"file": "background.png"},
+              "artwork": {"file": "scene.png", "x": 0, "y": 0, "w": 100, "h": 100}, "texts": texts}
+    title_pixels = {line["file"]: (tmp_path / line["file"]).read_bytes() for line in title["lines"]}
+    plan = design | {"boxes": design["boxes"] | {"product_name": [8, 81, 10, 8], "price": [20, 81, 20, 8]}}
+    monkeypatch.setattr(format_layout, "offer_reflow_options", lambda *_: {"below": plan})
+
+    def render_offer(offer, _size, path):
+        assert {layer["role"] for layer in offer} == {"product_name", "price"}
+        for layer in offer:
+            png = Image.new("RGBA", (layer["w"], layer["h"]))
+            png.paste("white", (0, 0, 7, 5))
+            png.save(path / layer["file"])
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            assert step == "ad_crowded_offer_compare"
+            np.testing.assert_array_equal(images[0][:34], images[1][:34])
+            return '{"choice":"below","reason":"판매 정보를 함께 읽기 쉽습니다."}'
+
+    monkeypatch.setattr(scene_ad, "render_texts", render_offer)
+    result, revised, reason = scene_ad.review_crowded_offer(Agent(), design, layout, foreground, tmp_path, fonts)
+    assert result == plan and reason
+    assert revised["texts"][0] == title
+    assert revised["texts"][2]["y"] == 81
+    assert {file: (tmp_path / file).read_bytes() for file in title_pixels} == title_pixels
 
 
 def test_balanced_composition_keeps_line_edits_and_moderates_motion_toward_center():

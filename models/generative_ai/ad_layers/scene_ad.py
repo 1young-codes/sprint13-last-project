@@ -5,6 +5,7 @@ import json
 import re
 from math import ceil, floor, sqrt
 from pathlib import Path
+from shutil import copyfile
 from tempfile import TemporaryDirectory
 
 import numpy as np
@@ -15,7 +16,7 @@ from .creative_brief import LAYOUT_ROLES, MAX_HEADLINE_LENGTH, TEXT_ROLES, ask_s
 from .layers import compose, cutout_product, load_layout, load_settings, paste_region, save_layout, to_float
 from .staging import on_gray, padded_box, source_parts, stage_group, stage_subject
 from .text_render import minimum_font_size, render_texts
-from .type_contrast import readable_text_colors
+from .type_contrast import readable_offer_colors, readable_text_colors
 from .viewpoint import available_viewpoints, camera_view, place_camera_view
 
 
@@ -1779,17 +1780,24 @@ def review_crowded_offer(ai, design, layout, foreground, folder, fonts):
         return design, layout, None
 
     copy = {text["role"]: text["text"] for text in layout["texts"]}
+    offer = {role: copy[role] for role in ("product_name", "price")}
+    title = next(text for text in layout["texts"] if text["role"] == "headline")
+    shared_files = [layout["background"]["file"], artwork["file"], "foreground.png",
+                    *(line["file"] for line in title.get("lines", (title,)))]
     first = compose(layout, folder)
-    with Image.open(folder / artwork["file"]) as image, TemporaryDirectory(dir=folder) as temporary:
+    backdrop = compose(layout | {"texts": []}, folder)
+    with TemporaryDirectory(dir=folder) as temporary:
         images, candidates = [to_float(first)], {}
         for name, plan in options.items():
             directory = Path(temporary) / name
             directory.mkdir()
             try:
-                revised = design_layers(plan, copy, size, fonts, directory)
-                revised.update({key: layout[key] for key in ("action_regions", "photo_regions") if key in layout})
-                image.save(directory / artwork["file"])
-                Image.fromarray(foreground).save(directory / "foreground.png")
+                for filename in shared_files:
+                    copyfile(folder / filename, directory / filename)
+                updated = layout_texts(plan, offer, size, fonts)
+                render_texts(updated, size, directory)
+                revised = layout | {"texts": [title, *updated]}
+                tighten_text_groups(foreground, revised, directory, offer)
                 check_text_overlap(foreground, revised, directory)
                 updated_ink = rendered_text_bounds(revised, directory)
                 check_type_margin(size, updated_ink)
@@ -1797,8 +1805,9 @@ def review_crowded_offer(ai, design, layout, foreground, folder, fonts):
                 price = updated_ink["price"]
                 if price[3] - price[1] <= bottom - top:
                     continue
-                plan, revised, contrast_issue = readable_text_colors(plan, revised, directory, foreground)
-                if contrast_issue:
+                unresolved = []
+                plan, revised = readable_offer_colors(plan, revised, backdrop, directory, unresolved)
+                if unresolved:
                     continue
             except ValueError:
                 continue
@@ -1813,10 +1822,11 @@ def review_crowded_offer(ai, design, layout, foreground, folder, fonts):
             return design, layout, None
         design, revised, directory = candidates[choice]
         first.save(folder / "before-offer-reflow.png")
-        for path in directory.iterdir():
-            if path.name not in (artwork["file"], "foreground.png"):
-                path.replace(folder / path.name)
-        return design, layout | revised, reason
+        for text in revised["texts"]:
+            if text["role"] in offer:
+                filename = text["file"]
+                (directory / filename).replace(folder / filename)
+        return design, revised, reason
 
 
 def blend_edges(scene, foreground=None, *, position=(0, 0), canvas_size=None):
