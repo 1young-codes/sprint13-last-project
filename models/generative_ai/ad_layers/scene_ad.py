@@ -280,8 +280,14 @@ For a scene correction, preserve the actual product
 position, lighting and camera view where possible. Describe which specific visible element would convey the
 message while keeping it secondary to the product. Return repair_box [left, top, width, height] as integer
 percentages of the full photo for a local scene correction. It must cover the old shape, the whole new shape,
-both shadows and enough surrounding material to blend. Exclude the product and its shadow. Return null if the
-requested change affects the whole scene. For action corrections also give visible_support (the
+both shadows and enough surrounding material to blend. Exclude the product and its shadow. For a distinct
+secondary object meant to read as a whole, return its description in secondary_object. Allow room for it away
+from the frame edges, including if the old shape was clipped there. Leave secondary_object null for a light,
+surface, or intentionally clipped detail. Return repair_box null if the requested change affects the whole scene.
+For a local secondary object give patch_instruction, an English direction for this small area alone. Describe
+its material, scale, angle, and contact with the existing surface. Omit descriptions of products or room features
+that are outside the area, to avoid accidentally drawing them inside it.
+For action corrections also give visible_support (the
 actual visible contact that holds the moving item), and action_target (the distinct receiver or the visible
 end of the action). Describe both as visible positions or contact in a still frame. Reuse any physically
 valid grip already visible without inventing a different handling method."""
@@ -289,7 +295,9 @@ valid grip already visible without inventing a different handling method."""
 PHOTO_PATCH_CHECK = """Review this local photo correction at normal size. Image one is the original photo,
 image two is the repaired photo, image three is the edited area up close. Verify the visible correction and
 look for discontinuous materials, sharp patch edges, implausible light or shadow, and remnants at the frame edge.
-The corrected element should stay subordinate to the main product. Return accepted (boolean) and observation
+If secondary_object is provided, there must be visible space between its entire silhouette and the photo edges.
+Reject an object that is clipped or crowded against an edge even if the object can be identified. The corrected
+element should stay subordinate to the main product. Return accepted (boolean) and observation
 (a concrete Korean sentence about the result)."""
 
 PHOTO_CUE_CHECK = """Compare the original product (first image) and the rendered photograph without type
@@ -571,15 +579,34 @@ def remove_photo_writing(scene, foreground, mark):
     return Image.fromarray(np.rint(255 * cleaned).astype(np.uint8)) if removed else None
 
 
-def repair_scene_patch(model, scene, bounds, instruction, generation):
+def repair_scene_patch(model, scene, bounds, instruction, generation, *, secondary_object=None, foreground=None):
     x, y, right, bottom = bounds
     left, top, end_x, end_y = padded_box(bounds, min(right - x, bottom - y) // 2, scene.size)
+    if secondary_object and foreground is not None and foreground[top:end_y, left:end_x].any():
+        left, top, end_x, end_y = bounds
     window = scene.crop((left, top, end_x, end_y))
     context = ImageOps.contain(window, (576, 576), Image.Resampling.LANCZOS)
     patch_box = (x - left, y - top, right - left, bottom - top)
-    region = tuple(round(100 * edge / length) for edge, length in zip(patch_box, window.size * 2, strict=True))
+    def percentages(box):
+        return tuple(round(100 * edge / length) for edge, length in zip(box, window.size * 2, strict=True))
+
+    region = percentages(patch_box)
+    placement = ""
+    if secondary_object:
+        frame_gap = round(min(scene.size) * 0.04)
+        feather = min(right - x, bottom - y) // 12
+        inner = (max(x + feather, frame_gap), max(y + feather, frame_gap),
+                 min(right - feather, scene.width - frame_gap), min(bottom - feather, scene.height - frame_gap))
+        x0, y0, x1, y1 = inner
+        if x0 >= x1 or y0 >= y1:
+            raise ValueError("소품을 가장자리에서 띄워 배치할 공간이 부족합니다")
+        object_area = percentages((x0 - left, y0 - top, x1 - left, y1 - top))
+        placement = (f"Fit the complete silhouette inside {object_area} percent of this view. "
+                     f"Intended object: {secondary_object}\n"
+                     "Reduce its scale or move it inward as needed. Keep the existing surface continuous around "
+                     "the object. Add no other items, repeated products, new surface edges or borders. ")
     prompt = (f"Make a local commercial-photo retouch within {region} in percent (left, top, right, bottom). "
-              f"{instruction} Keep the surrounding material, camera view, depth of field and light continuous. "
+              f"{instruction} {placement}Keep the surrounding material, camera view, depth of field and light continuous. "
               "Keep the entire replacement and its shadow inside the edit area. Add no lettering or graphics.")
     candidate = model.edit(context, prompt, generation["seed"], generation["steps"], size=context.size)
     patch = candidate.convert("RGB").resize(window.size, Image.Resampling.LANCZOS).crop(patch_box)
@@ -957,10 +984,12 @@ in addition to the product itself. For a physical action, follow the contours of
 material between them that make the action readable. Include the visible fingers or other parts even at the edge.
 For a display where a distinct container holds the product, trace the container's visible outer shape, including
 the lip or rim. The container and what it holds should read as one photographic form. Include this even in a
-still life, but leave out a separate cup, decorative prop, table, pedestal, cast shadow or backdrop. Follow each
-part's actual visible outline, leaving out the background between parts and any implied motion path. Return JSON
+still life. Trace a separate recognizable object only when photo_cue explicitly names it as evidence for the
+campaign, including an object required for a featured pairing. Leave out merely decorative props, tables,
+pedestals, cast shadows, and backdrops. Follow each part's actual visible outline, leaving out the background
+between parts and any implied motion path. Return JSON
 with regions as an array of objects {part, points}. Use a short Korean name for part and at least 3 [x, y] vertices,
-each in whole percentages from the left and top of the photograph. Return {"regions": []} when there are no
+each at 0–100 percent from the left and top of the photograph. Return {"regions": []} when there are no
 qualifying forms outside the product itself."""
 
 
@@ -973,10 +1002,10 @@ def find_photo_regions(ai, photo, cue):
         points = region.get("points") if isinstance(region, dict) else None
         valid_points = (isinstance(points, list) and len(points) >= 3
                         and all(isinstance(point, list) and len(point) == 2
-                                and all(type(value) is int and 0 <= value <= 100 for value in point)
+                                and all(type(value) in (int, float) and 0 <= value <= 100 for value in point)
                                 for point in points))
-        if not valid_points or not sum(x * v - y * u for (x, y), (u, v) in
-                                      zip(points, points[1:] + points[:1], strict=True)):
+        if not valid_points or abs(sum(x * v - y * u for (x, y), (u, v) in
+                                      zip(points, points[1:] + points[:1], strict=True))) < 1e-9:
             raise ValueError("보호 영역의 사진 좌표가 올바르지 않습니다")
         required_text(region, "part", "촬영 영역")
     return regions
@@ -2011,6 +2040,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             reshot_action = False
             reshot_background = False
             patch_bounds = None
+            secondary_object = None
 
             def review_photo(candidate):
                 picture = to_float(candidate)
@@ -2062,7 +2092,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                     scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
                 else:
                     original_scene = scene
-                    scene = repair_scene_patch(model, original_scene, patch_bounds, prompt, generation)
+                    scene = repair_scene_patch(model, original_scene, patch_bounds, prompt, generation,
+                                               secondary_object=secondary_object, foreground=protected)
                 check, message, finding = review_photo(scene)
                 matches = finding["visible"] and finding["identity_matches"] and finding["message_supported"]
                 if matches and finding["stray_writing"]:
@@ -2075,7 +2106,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                         matches = finding["visible"] and finding["identity_matches"] and finding["message_supported"]
                 if matches and not finding["stray_writing"]:
                     if patch_bounds is not None:
-                        repair = ask_stage(ai, "ad_photo_patch_check", PHOTO_PATCH_CHECK, {"photo_cue": photo_cue},
+                        repair = ask_stage(ai, "ad_photo_patch_check", PHOTO_PATCH_CHECK,
+                                           {"photo_cue": photo_cue, "secondary_object": secondary_object},
                                            [to_float(original_scene), to_float(scene), to_float(scene.crop(patch_bounds))])
                         finding["scene_patch_review"] = required_text(repair, "observation", "사진 부분 수정 검토")
                         if repair.get("accepted") is not True:
@@ -2135,8 +2167,13 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                         protected = find_foreground(scene, models["mask"], threshold)
                         if min(width, height) < 2 or protected[y:y + height, x:x + width].any():
                             raise ValueError("사진 부분 수정 영역이 상품과 겹치거나 너무 작습니다")
+                        if message.get("secondary_object") is not None:
+                            secondary_object = required_text(message, "secondary_object", "사진의 보조 소품")
                         patch_bounds = (x, y, x + width, y + height)
+                        instruction = message.get("patch_instruction")
                         prompt = f"{correction} The repaired photograph must show: {photo_cue}"
+                        if secondary_object and isinstance(instruction, str) and instruction.strip():
+                            prompt = instruction.strip()
                         continue
                 if wrong_message or (reposition and staged_view is None and moved_view is None):
                     if reposition and staged_view is None and moved_view is None:

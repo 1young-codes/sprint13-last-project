@@ -10,6 +10,38 @@ from models.generative_ai.ad_layers.text_render import page_html
 from models.generative_ai.photo_retouch import product_mask
 
 
+def test_decimal_photo_region_protects_visible_object():
+    class Agent:
+        def ask(self, step, images, prompt, *, model):
+            assert step == "ad_photo_regions"
+            return '{"regions":[{"part":"책","points":[[46.6,78.8],[63.8,80.5],[63.7,89.8],[43.6,87.6]]}]}'
+
+    photo = Image.new("RGB", (100, 100), "tan")
+    regions = scene_ad.find_photo_regions(Agent(), photo, "An open book beside the product.")
+    protected = scene_ad.photo_region_mask(regions, photo.size)
+    assert protected[84, 53] and not protected[77, 55] and not protected[84, 40]
+
+
+def test_scene_patch_addition_excludes_product_from_context():
+    scene = Image.new("RGB", (100, 100), "tan")
+    scene.paste("red", (0, 0, 30, 40))
+    foreground = np.zeros((100, 100), dtype=bool)
+    foreground[:40, :30] = True
+
+    class Model:
+        def edit(self, context, prompt, seed, steps, *, size):
+            assert size == context.size == (576, 461)
+            assert context.getcolors() == [(576 * 461, (210, 180, 140))]
+            assert "Add no other items, repeated products, new surface edges or borders" in prompt
+            return Image.new("RGB", size, "blue")
+
+    repaired = scene_ad.repair_scene_patch(Model(), scene, (0, 40, 50, 80), "Keep the surface continuous.",
+                                           {"seed": 1, "steps": 25}, secondary_object="a small lamp",
+                                           foreground=foreground)
+    assert repaired.crop((0, 0, 100, 40)).tobytes() == scene.crop((0, 0, 100, 40)).tobytes()
+    assert repaired.getpixel((25, 60)) == (0, 0, 255)
+
+
 @pytest.mark.parametrize("choice", ["cleaned", "original"])
 def test_photo_cleanup_preserves_action_support_and_compares_actual_repair(monkeypatch, choice):
     from models.generative_ai.photo_retouch import cleanup
@@ -168,6 +200,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 assert size == reference.size and max(size) == 576
                 assert reference.getpixel((0, 0)) == (0, 0, 255)
                 assert scene_correction in prompt and scene_cue in prompt and "Visible destination" not in prompt
+                assert "silhouette inside (29, 5, 71, 77) percent" in prompt and "Intended object: a small lamp" in prompt
                 calls.append("qwen-retouch")
                 return Image.new("RGB", size, "magenta")
             assert size == (512, 1024)
@@ -227,10 +260,13 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                 if repair_scene_message and "ad_photo_cue_check" not in calls:
                     return json.dumps({"message_supported": False, "message_observation": "램프가 보이지 않습니다.",
                                        "correction": scene_correction, "corrected_photo_cue": scene_cue,
-                                       "repair_kind": "scene", "reposition": False, "repair_box": [50, 0, 30, 30]})
+                                       "repair_kind": "scene", "reposition": False, "repair_box": [50, 0, 30, 30],
+                                       "secondary_object": "a small lamp"})
                 return '{"message_supported":true,"message_observation":"사진에 아침빛이 보입니다"}'
             calls.append(step)
             if step == "ad_photo_patch_check":
+                data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
+                assert data["secondary_object"] == "a small lamp"
                 before, after, close = images
                 assert np.array_equal(before[307:], after[307:])
                 assert np.array_equal(before[:, :256], after[:, :256])
