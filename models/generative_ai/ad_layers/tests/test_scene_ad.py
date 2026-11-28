@@ -170,6 +170,9 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                                                   "correction": cue_correction, "reposition": reject_cue})
                 return json.dumps(identity | {"visible": True, "observation": "유리 가장자리에 빛이 보입니다",
                                               "correction": None})
+            if step == "ad_action_regions":
+                assert len(images) == 1 and "photo_cue" in prompt
+                return '{"regions":[]}'
             if step == "ad_composition":
                 assert len(images) == 3 and images[0].shape == (1024, 1024, 3)
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
@@ -232,7 +235,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     layout = scene_ad.make_scene_ad(photo, fields, "", models, folder, references=[reference])
     assert calls == ["ad_plan", "ad_direction", "ad_headline", "ad_art_direction", "ad_source_framing", "ad_layout",
                      "ad_layout", "render", "ad_composition", "render", "ad_composition_compare", "ad_scene_direction", "qwen",
-                     "ad_photo_cue_check", "qwen", "ad_photo_cue_check", "ad_final_layout", "render"]
+                     "ad_photo_cue_check", "qwen", "ad_photo_cue_check", "ad_action_regions", "ad_final_layout", "render"]
     assert layout["photo_cue"] == cue and [check["visible"] for check in layout["photo_cue_checks"]] == [False, True]
     exercise_cue_retry = False
     assert layout["design"]["accent"] is None
@@ -254,12 +257,12 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     calls.clear()
     accepted = scene_ad.make_scene_ad(photo, fields, "", models, tmp_path / "accepted",
                                       references=[reference], proposal=layout)
-    assert calls == ["render", "qwen", "ad_photo_cue_check"]
+    assert calls == ["render", "qwen", "ad_photo_cue_check", "ad_action_regions"]
     assert accepted["design"] == layout["design"] and accepted["final_review_reason"] is None
     repair_message = True
     calls.clear()
     corrected = scene_ad.make_scene_ad(photo, fields, "", models, tmp_path / "message-corrected", proposal=layout)
-    assert calls == ["render", "qwen", "ad_photo_cue_check", "qwen", "ad_photo_cue_check"]
+    assert calls == ["render", "qwen", "ad_photo_cue_check", "qwen", "ad_photo_cue_check", "ad_action_regions"]
     assert [check["message_supported"] for check in corrected["photo_cue_checks"]] == [False, True]
     assert corrected["photo_cue"] == "유리 가장자리에 호박색 빛이 있습니다"
     assert corrected["design"]["art_direction"] == semantic_correction
@@ -292,7 +295,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
 
     monkeypatch.setattr(scene_ad, "remove_photo_writing", remove_writing)
     cleaned = scene_ad.make_scene_ad(photo, fields, "", models, tmp_path / "cleaned", proposal=layout)
-    assert calls == ["render", "qwen", "ad_photo_cue_check", "ad_photo_cue_check"]
+    assert calls == ["render", "qwen", "ad_photo_cue_check", "ad_photo_cue_check", "ad_action_regions"]
     assert [check["stray_writing"] for check in cleaned["photo_cue_checks"]] == ["배경에 글자가 있습니다", None]
     repair_writing = False
     calls.clear()
@@ -304,7 +307,8 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
     revision = scene_ad.make_scene_ad(photo, fields, "가벼운 아침 연출", models, tmp_path / "revision", references=[reference],
                                       previous=folder, rejected=rejected)
     assert calls == ["ad_cycle_critique", "ad_art_direction", "ad_source_framing", "ad_layout", "ad_layout", "render", "ad_composition",
-                     "render", "ad_composition_compare", "ad_scene_direction", "qwen", "ad_photo_cue_check", "ad_final_layout", "render"]
+                     "render", "ad_composition_compare", "ad_scene_direction", "qwen", "ad_photo_cue_check",
+                     "ad_action_regions", "ad_final_layout", "render"]
     assert revision["revision"]["weakness"] == "평평한 조명"
     assert revision["design"]["art_direction"] == "Narrow studio beam"
     assert revision["brief"]["headline"] == layout["brief"]["headline"]
@@ -370,6 +374,32 @@ def test_type_can_extend_over_photo_but_not_over_product(tmp_path):
     ink.save(tmp_path / "text.png")
     with pytest.raises(ValueError, match="실제 제품을 가립니다"):
         scene_ad.check_text_overlap(foreground, layout, tmp_path)
+
+
+def test_text_keeps_the_visible_receiver_clear_even_outside_product_mask(tmp_path):
+    foreground = np.zeros((40, 40), dtype=bool)
+    foreground[5:12, 4:10] = True
+    artwork = {"x": 10, "y": 10}
+    regions = [{"part": "받침", "points": [[25, 70], [60, 70], [65, 95], [25, 95]]}]
+    layer = {"role": "price", "file": "price.png", "x": 21, "y": 40, "w": 9, "h": 6}
+    layout = {"size": [60, 60], "artwork": artwork, "texts": [layer]}
+    Image.new("RGBA", (9, 6), "white").save(tmp_path / "price.png")
+    assert not scene_ad.check_text_overlap(foreground, layout, tmp_path)
+    layout["action_regions"] = regions
+    with pytest.raises(ValueError, match="사용 장면"):
+        scene_ad.check_text_overlap(foreground, layout, tmp_path)
+    layer["y"] = 30
+    assert not scene_ad.check_text_overlap(foreground, layout, tmp_path)
+
+
+def test_nearby_offer_uses_the_headline_axis_only_for_a_small_move():
+    ink = {"headline": [7, 5, 52, 10], "product_name": [4, 16, 20, 21], "price": [4, 23, 13, 27]}
+    plan = {"boxes": {"headline": [6, 4, 70, 11], "product_name": [3, 15, 24, 6], "price": [3, 22, 24, 5]},
+            "styles": {role: {"align": "left"} for role in ink}}
+    revised = scene_ad.align_nearby_offer(plan, ink, (1024, 1024))
+    assert revised["boxes"] == plan["boxes"] | {"product_name": [6, 15, 24, 6], "price": [6, 22, 24, 5]}
+    far_title = ink | {"headline": [38, 5, 95, 10]}
+    assert scene_ad.align_nearby_offer(plan, far_title, (1024, 1024)) is None
 
 
 def test_headline_can_tuck_behind_the_subject_without_repainting_it(tmp_path):

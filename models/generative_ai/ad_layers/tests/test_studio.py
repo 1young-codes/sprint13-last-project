@@ -230,6 +230,9 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
                 return ('{"identity_matches":true,"identity_observation":"같은 용기입니다",'
                         '"visible":true,"observation":"용기에 조명이 반사됩니다",'
                         '"stray_writing":null,"correction":null}')
+            if step == "ad_action_regions":
+                assert len(images) == 1
+                return '{"regions":[]}'
             if step == "ad_final_layout":
                 return '{"revision":null}'
             if step == "studio_staged_identity":
@@ -275,7 +278,7 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
     review = (["studio_staged_identity"] if staged else [])
     review += ["studio_format_native_review"] if same_piece else ["studio_repair_detail"]
     assert calls == [*stages, *plans, "ad_composition", "ad_composition", *measured, "ad_scene_direction", "photo",
-                     "ad_photo_observation", "ad_photo_message", "ad_photo_cue_check", "ad_final_layout", *review]
+                     "ad_photo_observation", "ad_photo_message", "ad_photo_cue_check", "ad_action_regions", "ad_final_layout", *review]
 
 
 def test_native_detail_repair_recomposes_after_source_identity_passes(draft, monkeypatch):

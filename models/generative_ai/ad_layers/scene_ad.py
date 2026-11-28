@@ -3,12 +3,12 @@
 import argparse
 import json
 import re
-from math import sqrt
+from math import ceil, sqrt
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 from .art_direction import ANGLES, LIGHTING, SHOT_SCALES, THEMES, plan_art_direction
 from .creative_brief import LAYOUT_ROLES, TEXT_ROLES, ask_stage, plan_copy, required_text, validate_boxes
@@ -705,12 +705,56 @@ def find_foreground(scene, mask_model, threshold):
     return foreground
 
 
+ACTION_REGIONS = """Locate the visible parts that make the described action understandable in this exact
+photograph. Protect the actual contour of hands or other supports, of the receiver, and of any visible material
+between them. Include the fingers or other portions that visibly belong to these parts, even when they reach an
+edge. Follow the outline of each part separately, excluding clear background between them. Do not protect the
+general setting, shadows, incidental props, or an implied motion path that has no visible material. If the cue
+only describes a static arrangement, lighting, or texture, or the physical interaction is absent from the photo,
+return {"regions": []}. Ordinary contact with a table or pedestal does not count as an interaction. Return JSON
+with regions as an array of objects {part, points}. Use a short Korean name for part and at least 3 [x, y] vertices,
+each in whole percentages from the left and top of the photograph."""
+
+
+def find_action_regions(ai, photo, cue):
+    answer = ask_stage(ai, "ad_action_regions", ACTION_REGIONS, {"photo_cue": cue}, [to_float(photo)])
+    regions = answer.get("regions")
+    if not isinstance(regions, list) or len(regions) > 8:
+        raise ValueError("글자가 가리면 안 되는 촬영 영역을 확인하지 못했습니다")
+    for region in regions:
+        points = region.get("points") if isinstance(region, dict) else None
+        valid_points = (isinstance(points, list) and len(points) >= 3
+                        and all(isinstance(point, list) and len(point) == 2
+                                and all(type(value) is int and 0 <= value <= 100 for value in point)
+                                for point in points))
+        if not valid_points or not sum(x * v - y * u for (x, y), (u, v) in
+                                      zip(points, points[1:] + points[:1], strict=True)):
+            raise ValueError("동작 영역의 사진 좌표가 올바르지 않습니다")
+        required_text(region, "part", "촬영 영역")
+    return regions
+
+
+def action_mask(regions, size):
+    mask = Image.new("L", size)
+    if regions:
+        draw = ImageDraw.Draw(mask)
+        for region in regions:
+            draw.polygon([(round(x * (size[0] - 1) / 100), round(y * (size[1] - 1) / 100))
+                          for x, y in region["points"]], fill=255)
+        mask = mask.filter(ImageFilter.MaxFilter(2 * max(1, round(min(size) / 100)) + 1))
+    return np.asarray(mask) > 128
+
+
 def check_text_overlap(foreground, layout, folder):
     mask = np.zeros(tuple(reversed(layout["size"])), dtype=bool)
     headline_behind_subject = False
     x, y = layout["artwork"]["x"], layout["artwork"]["y"]
     height, width = foreground.shape
     mask[y:y + height, x:x + width] = foreground
+    protected = None
+    if regions := layout.get("action_regions"):
+        protected = np.zeros_like(mask)
+        protected[y:y + height, x:x + width] = action_mask(regions, (width, height))
     layers = [(f"{line['role']} 글자", line) for text in layout["texts"] for line in text.get("lines", (text,))]
     if graphic := layout.get("graphic"):
         layers.append(("색면", graphic))
@@ -718,7 +762,10 @@ def check_text_overlap(foreground, layout, folder):
         with Image.open(folder / layer_info["file"]) as layer:
             ink = np.asarray(layer.getchannel("A")) > 128
         x, y = layer_info["x"], layer_info["y"]
-        covered = mask[y:y + layer_info["h"], x:x + layer_info["w"]] & ink
+        area = np.s_[y:y + layer_info["h"], x:x + layer_info["w"]]
+        if protected is not None and (protected[area] & ink).any():
+            raise ValueError(f"{name} 레이어가 사용 장면의 손이나 받는 영역을 가립니다")
+        covered = mask[area] & ink
         if layer_info.get("depth") == "behind_subject":
             if layer_info is graphic:
                 if not covered.any() or not (ink & ~covered).any():
@@ -802,6 +849,45 @@ def rendered_text_bounds(layout, folder):
     return bounds_by_role
 
 
+def check_type_margin(size, ink):
+    width, height = size
+    clearance = min(size) / 40
+    for role, (left, top, right, bottom) in ink.items():
+        edges = {"왼쪽": left * width, "위쪽": top * height,
+                 "오른쪽": (100 - right) * width, "아래쪽": (100 - bottom) * height}
+        side = min(edges, key=edges.get)
+        if edges[side] < 100 * clearance:
+            shift = ceil(clearance - edges[side] / 100)
+            raise ValueError(f"{role} 글자가 포스터 {side} 가장자리에 너무 가깝습니다. "
+                             f"글자 묶음을 안쪽으로 {shift}픽셀 이상 옮겨 주세요")
+
+
+def align_nearby_offer(plan, ink, size):
+    roles = ("product_name", "price")
+    if plan.get("accent") or not {"headline", *roles} <= ink.keys():
+        return None
+    alignment = plan["styles"]["headline"]["align"]
+    if any(plan["styles"][role]["align"] != alignment for role in roles):
+        return None
+    heading = ink["headline"]
+    offer = [ink[role] for role in roles]
+    if not (heading[3] <= min(box[1] for box in offer) or max(box[3] for box in offer) <= heading[1]):
+        return None
+
+    def anchor(left, right):
+        return {"left": left, "center": (left + right) / 2, "right": right}[alignment]
+
+    start, end = min(box[0] for box in offer), max(box[2] for box in offer)
+    dx = round(anchor(heading[0], heading[2]) - anchor(start, end))
+    if not dx or abs(dx) * size[0] > 5 * min(size):
+        return None
+    boxes = plan["boxes"].copy()
+    for role in roles:
+        x, y, w, h = boxes[role]
+        boxes[role] = [x + dx, y, w, h]
+    return plan | {"boxes": boxes}
+
+
 def balanced_text_positions(original, revision, size, before, after):
     axis, ends = (1, ("top", "bottom")) if size[1] >= size[0] else (0, ("left", "right"))
     if any(after[edge] <= before[edge] for edge in ends):
@@ -826,10 +912,18 @@ def balanced_text_positions(original, revision, size, before, after):
 def review_finished(ai, answer, layout, scene, foreground, folder, design_input, references, *,
                     assess_composition=False, keep_wrap=False):
     """완성 사진 위의 글자와 구도를 검사하고 사진을 유지한 채 배치를 고칩니다."""
+    if layout.get("photo_cue") and "action_regions" not in layout:
+        layout["action_regions"] = find_action_regions(ai, scene, layout["photo_cue"])
+
+    def check_layout(candidate, directory):
+        check_text_overlap(foreground, candidate, directory)
+        tighten_text_groups(foreground, candidate, directory)
+        if candidate.get("action_regions"):
+            check_type_margin(candidate["size"], rendered_text_bounds(candidate, directory))
+
     original_error = None
     try:
-        check_text_overlap(foreground, layout, folder)
-        tighten_text_groups(foreground, layout, folder)
+        check_layout(layout, folder)
     except ValueError as error:
         original_error = str(error)
     if original_error is None and not assess_composition:
@@ -845,6 +939,18 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                              "headline_breaks": headline_breaks(design_input["copy"]["headline"]),
                              "layout_error": original_error, "rendered_text_bounds": rendered_text_bounds(layout, folder)}
     task = FINAL_REVIEW
+    if regions := layout.get("action_regions"):
+        inputs["action_regions"] = regions
+        task += ("\nThe partly tinted photograph after the plain photograph marks the portions of the action that "
+                 "must stay clear. Keep the actual letter strokes and any graphic off the tinted area. The product "
+                 "name and price should share a nearby alignment in calm space. Leave at least 2.5% of the "
+                 "short canvas side around actual ink. When one side is too narrow, use open space on the other "
+                 "side before squeezing the offer against the edge. Avoid changing unrelated text.")
+        tinted = Image.blend(scene.convert("RGB"), Image.new("RGB", scene.size, "#ff5c7a"), 0.65)
+        guide = Image.composite(tinted, scene.convert("RGB"), Image.fromarray(action_mask(regions, scene.size)))
+        layout_references = [to_float(guide), *references]
+    else:
+        layout_references = references
     needs_alternative = "composition_issue" in inputs
     if needs_alternative:
         from .format_layout import outer_margins
@@ -859,18 +965,19 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
 
     def render_revision(plan, folder):
         updated = design_layers(plan, design_input["copy"], size, design_input["fonts"], folder)
+        if "action_regions" in layout:
+            updated["action_regions"] = layout["action_regions"]
         revised_scene = (scene if plan["edge"] == answer["edge"] else
                          set_photo_edge(scene, foreground, artwork, size, plan["edge"]))
         revised_scene.save(folder / artwork["file"])
         Image.fromarray(foreground).save(folder / "foreground.png")
-        check_text_overlap(foreground, updated, folder)
-        tighten_text_groups(foreground, updated, folder)
+        check_layout(updated, folder)
         return updated
 
     editable = ("boxes", "styles", "accent", "edge")
     for _ in range(2):
         review = ask_stage(ai, "ad_final_layout", task, inputs,
-                           [to_float(first), to_float(scene), *references])
+                           [to_float(first), to_float(scene), *layout_references])
         revision = review.get("revision")
         if "revision" not in review:
             revision = {key: review[key] for key in editable if key in review} or None
@@ -925,6 +1032,17 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                 inputs = inputs | {"rejected_design" if needs_alternative else "design": revised,
                                    "layout_error": str(error)}
                 continue
+            if regions and original_error is not None:
+                aligned = align_nearby_offer(revised, rendered_text_bounds(updated, candidate), size)
+                if aligned is not None:
+                    aligned_dir = Path(staging) / "aligned"
+                    aligned_dir.mkdir()
+                    try:
+                        aligned_layout = render_revision(aligned, aligned_dir)
+                    except ValueError:
+                        pass
+                    else:
+                        revised, updated, candidate = aligned, aligned_layout, aligned_dir
             if needs_alternative and original_error is None:
                 revision_ink = rendered_text_bounds(updated, candidate)
                 evidence = {
@@ -1502,6 +1620,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 scene = blend_edges(scene, foreground, position=(artwork["x"], artwork["y"]), canvas_size=size)
             scene.save(result / artwork["file"])
             Image.fromarray(foreground).save(result / "foreground.png")
+            if photo_cue:
+                layout["photo_cue"] = photo_cue
             answer, layout, final_review_reason = review_finished(ai, answer, layout, scene, foreground, result,
                                                                   design_input, images[1:],
                                                                   assess_composition=bool(art_plan and not proposal))
