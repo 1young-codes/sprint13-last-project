@@ -1770,7 +1770,10 @@ def review_related_offer(ai, design, layout, foreground, folder):
 
 HEADLINE_SCALE_COMPARE = """같은 사진과 문구로 만든 휴대폰 크기 광고가 option_order 순서로 보입니다.
 제목의 시각적 비중만 비교하세요. 제목이 상품명과 가격에 묻히지 않고 사진의 실제 특징으로 시선을 이끌며,
-두 줄은 한 문구로 자연스럽게 읽혀야 합니다. 글자가 커져도 화면 끝이나 상품 윤곽에 달라붙으면 고르지 마세요.
+두 줄은 한 문구로 자연스럽게 읽혀야 합니다. 한 줄만 지나치게 크면 문구가 두 조각처럼 읽히고 사진도 밀립니다.
+첫 줄이 작아 묻히거나, 큰 줄이 화면 끝이나 상품 윤곽에 달라붙는 배치는 고르지 마세요.
+전체 광고 다음에 같은 범위로 자른 제목 확대 이미지가 있으면, 먼저 확대에서 두 줄의 높이와 간격을
+비교하고 전체에서 그 차이가 읽는 흐름에 어떤 영향을 주는지 판단하세요.
 사진과 판매 정보의 자리는 같습니다. 기존이 더 균형 잡혔으면 original을 고르세요.
 choice(보기의 키)와 실제로 보이는 차이를 한국어로 설명한 reason을 JSON으로 반환하세요."""
 
@@ -1792,7 +1795,17 @@ def review_headline_scale(ai, design, layout, foreground, folder, fonts):
     display_scale = min(phone[0] / width, phone[1] / height)
     tallest = max(heights[role] for role in roles)
     target = max(16 / display_scale, 1.2 * max(heights["product_name"], heights["price"]))
-    if tallest >= target:
+    ceiling = min(size) * 0.14
+    if len(roles) > 1:
+        ceiling = min(ceiling, 1.45 * min(heights[role] for role in roles))
+    ceiling = max(target, ceiling)
+    if tallest < target:
+        growth = min(1.4, max(1.2, (target + 1) / tallest))
+        adjustments = {"larger": dict.fromkeys(roles, growth),
+                       "stronger": dict.fromkeys(roles, min(1.5, growth * 1.12))}
+    elif tallest > 1.12 * ceiling:
+        adjustments = {"balanced": {role: min(1, max(0.72, ceiling / heights[role])) for role in roles}}
+    else:
         return design, layout, None
     try:
         fitted = fitted_text_sizes(lines, size)
@@ -1803,12 +1816,11 @@ def review_headline_scale(ai, design, layout, foreground, folder, fonts):
     backdrop = compose(layout | {"texts": []}, folder)
     shared = [layout["background"]["file"], layout["artwork"]["file"],
               *(text["file"] for text in layout["texts"] if text["role"] != "headline")]
-    growth = min(1.4, max(1.2, (target + 1) / tallest))
     with TemporaryDirectory(dir=folder) as staging:
         candidates = {}
         pictures = [to_float(ImageOps.contain(first, phone, Image.Resampling.LANCZOS))]
-        for name, scale in (("larger", growth), ("stronger", min(1.5, growth * 1.12))):
-            scaled = {role: min(20, 100 * round(fitted[role] * scale) / width) for role in roles}
+        for name, scales in adjustments.items():
+            scaled = {role: min(20, 100 * round(fitted[role] * scales[role]) / width) for role in roles}
             headline = style | {"size": max(scaled.values())}
             if "lines" in style:
                 headline["lines"] = [row | {"size": scaled[role]}
@@ -1825,11 +1837,18 @@ def review_headline_scale(ai, design, layout, foreground, folder, fonts):
                 tighten_text_groups(foreground, revised, directory, {"headline": title["text"]})
                 check_text_overlap(foreground, revised, directory)
                 check_type_margin(size, rendered_text_bounds(revised, directory))
-                enlarged = rendered_text_bounds(revised, directory, pixels=True)
-                new_heights = [enlarged[role][3] - enlarged[role][1] for role in roles if role in enlarged]
-                if (len(new_heights) != len(roles) or max(new_heights) < max(tallest * 1.12, target)
-                        or max(new_heights) > min(size) * 0.14
-                        or any(new < heights[role] for new, role in zip(new_heights, roles, strict=True))):
+                rendered = rendered_text_bounds(revised, directory, pixels=True)
+                if not set(roles) <= rendered.keys():
+                    continue
+                new_heights = {role: rendered[role][3] - rendered[role][1] for role in roles}
+                largest = max(new_heights.values())
+                if not target <= largest <= min(size) * 0.14:
+                    continue
+                if tallest < target and (largest < tallest * 1.12 or
+                                         any(new_heights[role] < heights[role] for role in roles)):
+                    continue
+                if tallest >= target and (largest > tallest * 0.90 or
+                                          any(new_heights[role] < heights[role] for role in roles if scales[role] == 1)):
                     continue
                 unresolved = []
                 plan, revised = readable_headline_colors(plan, revised, backdrop, directory, foreground, unresolved,
@@ -1843,6 +1862,14 @@ def review_headline_scale(ai, design, layout, foreground, folder, fonts):
                 candidates[name] = plan, revised, directory
                 pictures.append(picture)
         if candidates:
+            if "balanced" in candidates:
+                _, resized, directory = candidates["balanced"]
+                left, top, right, bottom = ink["headline"]
+                x0, y0, x1, y1 = rendered_text_bounds(resized, directory, pixels=True)["headline"]
+                pad = round(min(size) / 16)
+                crop = (max(0, min(left, x0) - pad), max(0, min(top, y0) - pad),
+                        min(width, max(right, x1) + pad), min(height, max(bottom, y1) + pad))
+                pictures += [to_float(poster.crop(crop)) for poster in (first, compose(resized, directory))]
             comparison = ask_stage(ai, "ad_headline_scale_compare", HEADLINE_SCALE_COMPARE,
                                    {"option_order": ["original", *candidates], "headline": title["text"]}, pictures)
             choice, reason = comparison.get("choice"), comparison.get("reason")

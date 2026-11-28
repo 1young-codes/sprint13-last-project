@@ -1301,6 +1301,50 @@ def test_headline_scale_keeps_the_original_photo_and_selling_information(tmp_pat
     assert [(tmp_path / name).read_bytes() for name in ("scene.png", "text_product_name.png", "text_price.png")] == original
 
 
+def test_headline_scale_reduces_only_the_oversized_line(tmp_path, monkeypatch):
+    size = (200, 300)
+    fonts = ["noto_sans_kr"]
+    copy = {"headline": "저녁을 밝히는 빛", "product_name": "향초", "price": "18,000원"}
+    style = {"font": fonts[0], "align": "left", "color": "#FFFFFF", "size": 6, "max_lines": 1}
+    title = style | {"max_lines": 2, "break_after": 2, "lines": [
+        {"box": [10, 6, 75, 10], "size": 7},
+        {"box": [10, 17, 75, 14], "size": 16}]}
+    design = {"focus": "headline", "boxes": {"headline": [10, 6, 75, 25], "product_name": [10, 65, 35, 8],
+                                            "price": [48, 65, 35, 8]},
+              "styles": dict.fromkeys(copy, style) | {"headline": title}}
+    texts = scene_ad.layout_texts(design, copy, size, fonts)
+
+    def render(words, size, folder):
+        for text in words:
+            for line in text.get("lines", (text,)):
+                bitmap = Image.new("RGBA", (line["w"], line["h"]))
+                bitmap.paste("white", (1, 2, 40, 2 + line["max_font_size"]))
+                bitmap.save(folder / line["file"])
+
+    render(texts, size, tmp_path)
+    for filename in ("background.png", "scene.png"):
+        Image.new("RGB", size, "#26201B").save(tmp_path / filename)
+    layout = {"size": list(size), "background": {"file": "background.png"}, "texts": texts,
+              "artwork": {"file": "scene.png", "x": 0, "y": 0, "w": 200, "h": 300}}
+    foreground = np.zeros((300, 200), dtype=bool)
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            assert step == "ad_headline_scale_compare" and len(images) == 4
+            assert images[2].shape == images[3].shape and not np.array_equal(images[2], images[3])
+            return '{"choice":"balanced","reason":"두 줄이 자연스럽게 이어집니다."}'
+
+    monkeypatch.setattr(scene_ad, "render_texts", render)
+    monkeypatch.setattr(scene_ad, "fitted_text_sizes", lambda rows, _: {
+        line["role"]: line["max_font_size"] for line in rows})
+    _, updated, reason = scene_ad.review_headline_scale(Agent(), design, layout, foreground, tmp_path, fonts)
+
+    assert reason
+    first, second = updated["texts"][0]["lines"]
+    assert first["max_font_size"] == 14 and 14 < second["max_font_size"] < 32
+    assert updated["texts"][1:] == texts[1:]
+
+
 def test_balanced_composition_keeps_line_edits_and_moderates_motion_toward_center():
     original = {"boxes": {"headline": [8, 10, 80, 16], "price": [8, 82, 20, 5]}}
     revised = {"boxes": {"headline": [8, 20, 80, 16], "price": [8, 74, 20, 5]},
