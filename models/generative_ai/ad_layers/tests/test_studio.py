@@ -1,11 +1,11 @@
 import json
 import shutil
 
-from PIL import Image
+from PIL import Image, ImageColor
 import pytest
 import numpy as np
 
-from models.generative_ai.ad_layers import format_layout, scene_ad, studio, studio_edits, studio_formats
+from models.generative_ai.ad_layers import format_layout, scene_ad, studio, studio_edits, studio_formats, type_contrast
 from models.generative_ai.ad_layers.layers import compose, load_layout, save_layout
 
 
@@ -280,7 +280,10 @@ def test_native_format_reuses_approved_copy_and_publishes_only_after_review(
         assert framing["method"] == "native"
         saved = load_layout(output)
         assert saved["format"] == "9:16" and saved["photo_cue"] == approved["photo_cue"]
-        assert {text["color"] for text in saved["texts"] if text["role"] != "headline"} == {"#000000"}
+        colors = {text["color"] for text in saved["texts"] if text["role"] != "headline"}
+        assert len(colors) == 1
+        offer = type_contrast.color_lightness(ImageColor.getrgb(colors.pop()))
+        assert type_contrast.color_lightness(ImageColor.getrgb("orange")) / offer >= 4.5
         assert (output / "ad.png").exists()
         assert (output / "staging.png").exists() == staged
     stages = ["ad_format_staging", "ad_staging", "ad_staging_check"] if staged else []
@@ -953,7 +956,7 @@ def test_offer_contrast_uses_actual_ink_on_the_new_photo(draft, price_background
     with Image.open(name_path) as image:
         before_alpha = image.getchannel("A").tobytes()
 
-    revised, candidate = studio_formats.readable_offer_colors(design, layout, backdrop, folder)
+    revised, candidate = type_contrast.readable_offer_colors(design, layout, backdrop, folder)
     assert revised["styles"]["product_name"]["color"] == candidate["texts"][1]["color"] == "#F3E7D6"
     assert revised["styles"]["price"]["color"] == expected_price
     assert (price_path.read_bytes() == before_price) == (expected_price == "#4C2D1E")
@@ -977,7 +980,7 @@ def test_title_contrast_changes_the_printed_emphasis_without_changing_the_glyphs
     original = (tmp_path / first["file"]).read_bytes()
     backdrop = Image.new("RGB", (100, 100), "#663525")
 
-    revised, layout = studio_formats.readable_headline_colors(design, {"texts": [title]}, backdrop, tmp_path,
+    revised, layout = type_contrast.readable_headline_colors(design, {"texts": [title]}, backdrop, tmp_path,
                                                             np.zeros((100, 100), dtype=bool))
     updated = layout["texts"][0]
     color = updated["emphasis"]["color"]
@@ -988,6 +991,28 @@ def test_title_contrast_changes_the_printed_emphasis_without_changing_the_glyphs
     with Image.open(tmp_path / second["file"]) as bitmap:
         assert bitmap.getchannel("A").getbbox() == (4, 1, 26, 23)
         assert tuple(bytes.fromhex(color[1:])) == bitmap.getpixel((10, 10))[:3]
+
+
+def test_title_contrast_keeps_two_colors_inside_one_line(tmp_path):
+    title = {"role": "headline", "text": "기본 강조", "file": "title.png", "x": 0, "y": 0,
+             "w": 60, "h": 30, "max_lines": 1, "color": "#FAEBD8",
+             "emphasis": {"phrase": "강조", "color": "#932A38"}}
+    design = {"styles": {"headline": {"color": title["color"], "emphasis": title["emphasis"]}}}
+    bitmap = Image.new("RGBA", (60, 30))
+    bitmap.paste(title["color"], (4, 3, 29, 26))
+    bitmap.paste(title["emphasis"]["color"], (32, 3, 57, 26))
+    bitmap.save(tmp_path / "title.png")
+    backdrop = Image.new("RGB", (60, 30), "#402719")
+    revised, layout = type_contrast.readable_headline_colors(
+        design, {"texts": [title]}, backdrop, tmp_path, np.zeros((30, 60), dtype=bool))
+    color = revised["styles"]["headline"]["emphasis"]["color"]
+    assert color not in (title["emphasis"]["color"], title["color"])
+    assert layout["texts"][0]["color"] == title["color"]
+    assert layout["texts"][0]["emphasis"]["color"] == color
+    with Image.open(tmp_path / "title.png") as image:
+        assert image.getchannel("A").tobytes() == bitmap.getchannel("A").tobytes()
+        assert image.getpixel((8, 8)) == bitmap.getpixel((8, 8))
+        assert image.getpixel((38, 8))[:3] == ImageColor.getrgb(color)
 
 
 def test_copy_position_comparison_keeps_the_shared_center_axis(draft):

@@ -15,6 +15,7 @@ from .creative_brief import LAYOUT_ROLES, TEXT_ROLES, ask_stage, plan_copy, requ
 from .layers import compose, cutout_product, load_layout, load_settings, save_layout, to_float
 from .staging import on_gray, source_parts, stage_group, stage_subject
 from .text_render import minimum_font_size, render_texts
+from .type_contrast import readable_text_colors
 from .viewpoint import available_viewpoints, camera_view, place_camera_view
 
 
@@ -982,6 +983,8 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
         check_layout(layout, folder)
     except ValueError as error:
         original_error = str(error)
+    else:
+        answer, layout = readable_text_colors(answer, layout, folder, foreground)
     if original_error is None and not assess_composition:
         return answer, layout, None
     first = compose(layout, folder)
@@ -1027,7 +1030,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
         revised_scene.save(folder / artwork["file"])
         Image.fromarray(foreground).save(folder / "foreground.png")
         check_layout(updated, folder)
-        return updated
+        return readable_text_colors(plan, updated, folder, foreground)
 
     editable = ("boxes", "styles", "accent", "edge")
     for _ in range(2):
@@ -1082,7 +1085,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
             candidate = Path(staging) / "revision"
             candidate.mkdir()
             try:
-                updated = render_revision(revised, candidate)
+                revised, updated = render_revision(revised, candidate)
             except ValueError as error:
                 inputs = inputs | {"rejected_design" if needs_alternative else "design": revised,
                                    "layout_error": str(error)}
@@ -1093,7 +1096,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                     aligned_dir = Path(staging) / "aligned"
                     aligned_dir.mkdir()
                     try:
-                        aligned_layout = render_revision(aligned, aligned_dir)
+                        aligned, aligned_layout = render_revision(aligned, aligned_dir)
                     except ValueError:
                         pass
                     else:
@@ -1116,7 +1119,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                     alternate = Path(staging) / "balanced"
                     alternate.mkdir()
                     try:
-                        balanced_layout = render_revision(balanced, alternate)
+                        balanced, balanced_layout = render_revision(balanced, alternate)
                     except ValueError:
                         pass
                     else:

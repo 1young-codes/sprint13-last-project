@@ -5,10 +5,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
-from PIL import Image, ImageColor, ImageFilter, ImageOps
+from PIL import Image, ImageFilter, ImageOps
 from scipy.ndimage import distance_transform_edt
 
-from ..photo_retouch.adjustments import luminance, srgb_to_linear
 from .creative_brief import TEXT_ROLES, ask_stage, required_text, validate_boxes
 from .format_layout import (format_measurements, format_type_hierarchy, measured_styles, outer_margins, position_options,
                             preview_placement)
@@ -19,6 +18,7 @@ from .scene_ad import (check_offer_spacing, check_text_overlap, check_type_margi
 from .staging import check_staged_identity
 from .studio_edits import edit_version, foreground_mask, line_break_after, repair_staged_detail
 from .text_render import LINE_HEIGHT, minimum_font_size
+from .type_contrast import readable_text_colors
 
 
 FORMATS = {"1:1": (1024, 1024), "4:5": (864, 1080), "9:16": (1080, 1920), "16:9": (1280, 720),
@@ -754,128 +754,6 @@ def offer_preview(poster, ink):
     return paired_preview(poster, offer_detail(poster, ink))
 
 
-def ink_contrast(lightness, background):
-    return np.quantile(np.maximum(lightness, background) / np.minimum(lightness, background), 0.1)
-
-
-def ink_background(backdrop, text, ink):
-    x, y, w, h = (text[key] for key in ("x", "y", "w", "h"))
-    pixels = to_float(backdrop.crop((x, y, x + w, y + h)))[ink]
-    return luminance(srgb_to_linear(pixels)) + 0.05
-
-
-def color_lightness(rgb):
-    return luminance(srgb_to_linear(np.asarray(rgb) / 255)) + 0.05
-
-
-def legible_tone(color, background, minimum):
-    original = np.asarray(ImageColor.getrgb(color))
-    if not background.size or ink_contrast(color_lightness(original), background) >= minimum:
-        return color
-    for step in range(1, 21):
-        for neutral in (255, 0):
-            shade = tuple(np.rint(original + (neutral - original) * step / 20).astype(int))
-            if ink_contrast(color_lightness(shade), background) >= minimum:
-                return "#%02X%02X%02X" % shade
-    return color
-
-
-def recolor_ink(path, alpha, color):
-    bitmap = Image.new("RGBA", alpha.size, color)
-    bitmap.putalpha(alpha)
-    bitmap.save(path)
-
-
-def readable_headline_colors(design, layout, backdrop, folder, foreground):
-    title = next(text for text in layout["texts"] if text["role"] == "headline")
-    style = design["styles"]["headline"]
-    original = title.get("lines", [title])
-    marked_lines = sum(bool(line.get("emphasis")) for line in original)
-    marked_color = None
-    preview_scale = min(1, 360 / backdrop.width, 640 / backdrop.height)
-    lines = []
-    for line in original:
-        # A mixed-color line is still judged in the rendered review.
-        emphasis = line.get("emphasis")
-        if emphasis and (marked_lines != 1 or emphasis["phrase"] != line["text"]):
-            lines.append(line)
-            continue
-        path = folder / line["file"]
-        with Image.open(path) as bitmap:
-            alpha = bitmap.getchannel("A")
-        ink = np.asarray(alpha) >= 128
-        if line.get("depth") == "behind_subject":
-            x, y = line["x"], line["y"]
-            ink &= ~foreground[y:y + line["h"], x:x + line["w"]]
-        bounds = alpha.getbbox()
-        large = bounds and line["max_lines"] == 1 and (bounds[3] - bounds[1]) * preview_scale >= 18
-        before = emphasis["color"] if emphasis else line["color"]
-        color = legible_tone(before, ink_background(backdrop, line, ink), 3 if large else 4.5)
-        if color != before:
-            recolor_ink(path, alpha, color)
-            line = line | {"color": color}
-            if emphasis:
-                marked_color = color
-                line["emphasis"] = emphasis | {"color": color}
-        lines.append(line)
-    if lines == original:
-        return design, layout
-    if "lines" in title:
-        title = title | {"lines": lines}
-        style = style | {"lines": [row | {"color": line["color"]}
-                                   for row, line in zip(style["lines"], lines, strict=True)]}
-    else:
-        title = lines[0]
-        style = style | {"color": title["color"]}
-    if marked_color:
-        title = title | {"emphasis": title["emphasis"] | {"color": marked_color}}
-        style = style | {"emphasis": style["emphasis"] | {"color": marked_color}}
-    return design | {"styles": design["styles"] | {"headline": style}}, layout | {
-        "texts": [title if text["role"] == "headline" else text for text in layout["texts"]]}
-
-
-def readable_offer_colors(design, layout, backdrop, folder):
-    roles = ("product_name", "price")
-    headline = design["styles"]["headline"]
-    palette = [headline["color"], *(line.get("color", headline["color"]) for line in headline.get("lines") or [])]
-    offer = [text for text in layout["texts"] if text["role"] in roles]
-    colors = list(dict.fromkeys([*(text["color"] for text in offer), *palette, "#000000", "#FFFFFF"]))
-    lightness = {color: color_lightness(ImageColor.getrgb(color)) for color in colors}
-    masks, contrasts = {}, {}
-    for text in offer:
-        with Image.open(folder / text["file"]) as layer:
-            alpha = layer.getchannel("A")
-        background = ink_background(backdrop, text, np.asarray(alpha) >= 128)
-        if background.size:
-            masks[text["role"]] = alpha
-            contrasts[text["role"]] = {
-                color: ink_contrast(value, background) for color, value in lightness.items()
-            }
-    minimum = 4.5
-    low = {text["role"] for text in offer if text["role"] in contrasts
-           and contrasts[text["role"]][text["color"]] < minimum}
-    if not low:
-        return design, layout
-
-    common = next((color for color in colors if all(scores[color] >= minimum for scores in contrasts.values())), None)
-    styles = design["styles"].copy()
-    texts = []
-    for text in layout["texts"]:
-        role = text["role"]
-        current = text["color"]
-        if role in contrasts and (common is not None or role in low):
-            scores = contrasts[role]
-            color = common or next((color for color in palette if scores[color] >= minimum), None)
-            if color is None:
-                color = max((current, "#000000", "#FFFFFF"), key=scores.__getitem__)
-            if color != current:
-                recolor_ink(folder / text["file"], masks[role], color)
-                styles[role] = styles[role] | {"color": color}
-                text = text | {"color": color}
-        texts.append(text)
-    return design | {"styles": styles}, layout | {"texts": texts}
-
-
 def copy_position_details(inks, foreground):
     height, width = foreground.shape
     size = (width, height)
@@ -1138,9 +1016,7 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                             {"photo_cue": photo_cue, "intent": intent, "copy": copy})
                 tried_offers = {tuple(revised["boxes"][role][axis]
                                       for role in ("product_name", "price") for axis in (0, 1))}
-            backdrop = compose(candidate | {"texts": []}, stage) if candidate.get("graphic") else framing
-            revised, candidate = readable_headline_colors(revised, candidate, backdrop, stage, foreground)
-            revised, candidate = readable_offer_colors(revised, candidate, backdrop, stage)
+            revised, candidate = readable_text_colors(revised, candidate, stage, foreground)
             poster = compose(candidate, stage)
             phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
             review = ask_stage(ai, "studio_format_reading", FORMAT_READING,
@@ -1307,8 +1183,7 @@ def rebuild_format(source, output, format_name, photo, fields, idea, ai, models,
         restored = None
         if revision.get("staged_piece_box") is not None:
             restored = restore_format_detail(folder, layout, ai, models)
-        backdrop = compose(layout | {"texts": []}, folder)
-        design, layout = readable_offer_colors(layout["design"], layout, backdrop, folder)
+        design, layout = readable_text_colors(layout["design"], layout, folder, foreground_mask(folder, layout))
         layout["design"] = design
         save_layout(layout, folder)
         with Image.open(source / "ad.png") as reference:
