@@ -265,17 +265,33 @@ When companion is required, scene is the first photograph: describe the product 
 surface where the companion will be added later. Do not name or depict the companion in this first photograph.
 Choose a box on a believable support surface with enough room for the object, its shadow, and blending edges."""
 
+COMPANION_SCALE = """Estimate the natural visible size of the required companion in this actual photograph.
+Choose a clearly visible part of the main product whose size a viewer can compare with the companion.
+Use the expected real-world size relationship at a similar depth on the same support surface. An object
+slightly in front normally looks larger. Use the owner's size instructions when available. Never shrink
+the object just because the empty space is small, and do not invent precise real-world measurements.
+Return size [width, height] as integer percentages of the full photograph for the complete companion's
+silhouette, without the shadow. Account for the camera angle, including foreshortening of flat objects.
+Return reference, a short explanation naming the visible size reference and how the two objects compare."""
+
 COMPANION_INSERTION = """Plan one local addition to this actual photograph. Preserve the product, lighting,
 camera and existing surfaces. Find a genuinely empty area on a suitable support surface for the required object.
 The proposed box is a suggestion. Adjust it if the photograph has a different usable surface. Keep away from
 the product and rendered type. Use product_bounds as a measured envelope of the photographed product.
 Leave at least four percent of the frame between the crop and each frame edge so the crop can blend.
+Use nearby_boxes to choose a crop on the same visible support surface, close enough that the product and
+companion read together. These boxes already clear the measured product and lettering with extra breathing
+space, but a clear box may be on the wrong surface. Prefer a compatible nearby box to a distant empty one.
+Return its key as slot. If none fits the photograph, return a custom box with no_nearby_reason, one concrete
+observation about the listed crops' surfaces, proportions, or conflict with an explicitly requested placement.
+Use pairing_intent to connect the object to the visible feature that carries the campaign. When several
+variants of a product are present, place it near the relevant one if the support surface and spacing allow it.
 The box must contain the whole object, its shadow and spare background for a
 seamless blend. The object should be small enough to remain secondary. Return box [left, top, width, height]
-in whole percentages of the photograph and instruction, an English instruction for only that crop. Describe the
+in whole percentages of the photograph for a custom crop. Always return instruction, in English for only that crop. Describe the
 object, its material and the actual local angle and placement on the existing surface. The image model sees
-only the box you selected. Choose its size so an object occupying about three fifths of its longer axis looks
-plausible at that depth relative to the product. Use a nearby surface at a similar depth when possible so the
+only the box you selected. Use target_size, the expected full-frame dimensions, when judging which crop can
+contain the object and its shadow. Use a nearby surface at a similar depth when possible so the
 two objects read as a pair. Its defining detail must be readable without zooming in. The
 renderer specifies the object's size and centers it in the crop; omit size and position directions from
 instruction. Mention no object that is outside the crop. If a second image is supplied, it is the rejected
@@ -331,10 +347,9 @@ look for discontinuous materials, sharp patch edges, implausible light or shadow
 If secondary_object is provided, there must be visible space between its entire silhouette and the photo edges.
 Reject an object that is clipped or crowded against an edge even if the object can be identified. The corrected
 element should stay subordinate to the main product while retaining a plausible scale for its position and
-recognizable details at full-frame size. Return accepted (boolean) and observation
-(a concrete Korean sentence about the result). When measure_object is true, also return object_box [left, top,
-width, height] in integer percentages of image three, bounding the entire visible object without its shadow.
-Return object_box null if the object cannot be identified."""
+recognizable details at full-frame size. Reject a new unrelated object, duplicate, inset, border or colored
+halo that was absent from the original. Return accepted (boolean) and observation
+(a concrete Korean sentence about the result)."""
 
 DRAFT_PHOTO_COPY = f"""Reconsider a first, unapproved campaign draft after seeing the actual photograph.
 Image one is the source product and image two is the photograph to keep. Change the headline only if the
@@ -643,7 +658,7 @@ def remove_photo_writing(scene, foreground, mark):
     return Image.fromarray(np.rint(255 * cleaned).astype(np.uint8)) if removed else None
 
 
-def fit_companion_patch(patch, mask):
+def fit_companion_patch(patch, mask, target_size=None):
     box = Image.fromarray(mask).getbbox()
     if box is None:
         return None
@@ -652,9 +667,14 @@ def fit_companion_patch(patch, mask):
     if x == 0 or y == 0 or right == width or bottom == height:
         return None
     object_width, object_height = right - x, bottom - y
-    scale = min(2, 0.62 * max(patch.size) / max(object_width, object_height),
-                0.72 * width / object_width, 0.72 * height / object_height)
-    if scale < 1.12:
+    scale_limit = min(2, 0.80 * width / object_width, 0.80 * height / object_height)
+    if target_size:
+        horizontal = target_size[0] / object_width
+        vertical = target_size[1] / object_height
+        scale = min(scale_limit, 1.25 * min(horizontal, vertical), sqrt(horizontal * vertical))
+    else:
+        scale = min(scale_limit, 0.62 * max(patch.size) / max(object_width, object_height))
+    if 0.89 < scale < 1.12 or (not target_size and scale < 1):
         return None
 
     offset_x = (width - (x + right) * scale) / 2
@@ -678,33 +698,37 @@ def match_companion_surface(patch, surface, mask):
     from scipy.ndimage import distance_transform_edt
 
     if not mask.any():
-        return patch
+        return surface
     radius = min(patch.size)
     distance = distance_transform_edt(~mask)
     background = distance > 0.15 * radius
-    if background.mean() < 0.15:
-        return patch
     edited, original = to_float(patch), to_float(surface)
     luma = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
-    difference = np.log((edited @ luma + 0.02) / (original @ luma + 0.02))
-    y, x = np.indices(mask.shape, dtype=np.float32)
-    plane = np.stack((np.ones_like(x), x / patch.width, y / patch.height), axis=-1)
-    samples = difference[background]
-    gain = plane @ np.linalg.lstsq(plane[background], samples, rcond=None)[0]
-    low, high = np.percentile(samples, (5, 95))
-    balanced = edited * np.exp(-gain.clip(low, high))[..., None]
+    source_light, edited_light = original @ luma, edited @ luma
+    original_chroma = original / np.maximum(original.sum(axis=2, keepdims=True), 0.01)
+    edited_chroma = edited / np.maximum(edited.sum(axis=2, keepdims=True), 0.01)
+    match = (1 - np.abs(original_chroma - edited_chroma).sum(axis=2) / 0.20).clip(0, 1)
+    comparable = background & (match > 0.5)
+    balanced = edited
+    if comparable.mean() >= 0.15:
+        difference = np.log((edited_light + 0.02) / (source_light + 0.02))
+        y, x = np.indices(mask.shape, dtype=np.float32)
+        plane = np.stack((np.ones_like(x), x / patch.width, y / patch.height), axis=-1)
+        samples = difference[comparable]
+        gain = plane @ np.linalg.lstsq(plane[comparable], samples, rcond=None)[0]
+        balanced = edited * np.exp(-gain.clip(*np.percentile(samples, (5, 95))))[..., None]
 
-    # Preserve the original surface beyond the silhouette and its nearby contact shadow.
-    spill = (balanced @ luma - original @ luma - 0.025).clip(0, None)
-    balanced -= (spill * (distance / (0.035 * radius)).clip(0, 1))[..., None]
-    edge = ((0.33 * radius - distance) / (0.27 * radius)).clip(0, 1)
-    alpha = (edge ** 2 * (3 - 2 * edge))[..., None]
-    blended = balanced * alpha + original * (1 - alpha)
+    # Outside the companion, transfer only a nearby shadow onto the original material.
+    edge = (1 - distance / (0.25 * radius)).clip(0, 1)
+    shadow = (1 - (balanced @ luma + 0.02) / (source_light + 0.02)).clip(0, 0.45) * match * edge ** 2
+    matte = Image.fromarray(mask.astype(np.uint8) * 255).filter(ImageFilter.GaussianBlur(max(0.6, radius / 220)))
+    alpha = np.asarray(matte, dtype=np.float32)[..., None] / 255
+    blended = balanced * alpha + original * ((1 - shadow[..., None]) * (1 - alpha))
     return Image.fromarray(np.rint(255 * blended.clip(0, 1)).astype(np.uint8))
 
 
 def repair_scene_patch(model, scene, bounds, instruction, generation, *, secondary_object=None, foreground=None,
-                       companion_mask=None):
+                       companion_mask=None, target_size=None):
     x, y, right, bottom = bounds
     margin = 0 if companion_mask is not None else min(right - x, bottom - y) // 2
     left, top, end_x, end_y = padded_box(bounds, margin, scene.size)
@@ -732,8 +756,10 @@ def repair_scene_patch(model, scene, bounds, instruction, generation, *, seconda
                      "Keep the existing surface continuous around "
                      "the object. Add no other items, repeated products, new surface edges or borders. ")
         if companion_mask is not None:
-            placement += ("Center the object. Its longer axis should fill about three fifths of that axis of this crop. "
-                          "Leave visible surface on all sides, including around its contact shadow. ")
+            if target_size:
+                share = tuple(round(100 * span / length) for span, length in zip(target_size, window.size, strict=True))
+                placement += f"Center the object, using about {share[0]} percent of the width and {share[1]} percent of the height. "
+            placement += "Leave visible surface on all sides, including around its contact shadow. "
         else:
             placement += "Reduce its scale or move it inward as needed. "
     prompt = (f"Make a local commercial-photo retouch within {region} in percent (left, top, right, bottom). "
@@ -743,9 +769,15 @@ def repair_scene_patch(model, scene, bounds, instruction, generation, *, seconda
     patch = candidate.convert("RGB").resize(window.size, Image.Resampling.LANCZOS).crop(patch_box)
     if companion_mask is not None:
         mask = companion_mask(patch)
-        if (fitted := fit_companion_patch(patch, mask)) is not None:
+        if (fitted := fit_companion_patch(patch, mask, target_size)) is not None:
             patch, mask, (left, top, end_x, end_y) = fitted
             bounds = (x + left, y + top, x + end_x, y + end_y)
+        if target_size:
+            measured = Image.fromarray(mask).getbbox()
+            if measured is None or any(not 0.8 * expected <= actual <= 1.25 * expected
+                                       for actual, expected in zip((measured[2] - measured[0], measured[3] - measured[1]),
+                                                                  target_size, strict=True)):
+                raise ValueError("생성한 소품의 실제 윤곽이 상품에 맞춰 정한 크기와 다릅니다")
         patch = match_companion_surface(patch, scene.crop(bounds), mask)
     repaired = scene.copy()
     paste_region(repaired, patch, bounds)
@@ -873,39 +905,107 @@ def planned_companion(direction, artwork, subject, canvas_size, lettering):
     return item | {"box": box}
 
 
-def plan_companion_insertion(ai, scene, companion, foreground, layout, folder, feedback, rejected=None):
+def nearby_companion_boxes(foreground, layout, lettering, product_bounds, extent):
+    from scipy.ndimage import binary_dilation
+    from .format_layout import free_position
+
+    artwork = layout["artwork"]
+    size = artwork["w"], artwork["h"]
+    occupied = foreground.copy()
+    for left, top, right, bottom in lettering.values():
+        x, y, w, h = pixel_box([left, top, right - left, bottom - top], layout["size"])
+        x, y = x - artwork["x"], y - artwork["y"]
+        if x < size[0] and y < size[1] and x + w > 0 and y + h > 0:
+            occupied[max(0, y):y + h, max(0, x):x + w] = True
+    occupied = binary_dilation(occupied, iterations=max(1, round(min(size) / 100)))
+    integral = np.pad(np.cumsum(np.cumsum(occupied, axis=0, dtype=np.int32), axis=1), ((1, 0), (1, 0)))
+
+    gap = round(min(size) * 0.04)
+    ix, iy = (ceil(100 * gap / side) for side in size)
+    left, top, right, bottom = product_bounds
+    mid = (left + right) // 2
+    boxes = {}
+    # Try a wider or taller crop at the same area when the planned proportions do not fit.
+    for aspect in (1, 1.4, 1 / 1.4):
+        width, height = round(extent[0] * aspect), round(extent[1] / aspect)
+        if min(width * size[0], height * size[1]) < 200 * gap:
+            continue
+        front_y = bottom - height / 3
+        side_y = bottom - 3 * height / 4
+        lower = max(iy, (top + bottom) // 2 - height // 2)
+        front = max(lower, bottom - height // 2)
+        positions = (
+            ("beside_left", left - width, side_y, (ix, mid), lower),
+            ("beside_right", right, side_y, (mid, 100 - ix), lower),
+            ("in_front_left", (2 * left + right) / 3 - width / 2, front_y, (ix, 100 - ix), front),
+            ("in_front_right", (left + 2 * right) / 3 - width / 2, front_y, (ix, 100 - ix), front),
+        )
+        for name, x, y, x_limits, first_y in positions:
+            if name in boxes:
+                continue
+            position = free_position(integral, size, (width, height), (x, y),
+                                     x_limits=x_limits, y_limits=(first_y, 100 - iy))
+            if position is not None and (box := [*position, width, height]) not in boxes.values():
+                boxes[name] = box
+    return boxes
+
+
+def plan_companion_scale(ai, scene, companion, pairing_intent):
+    answer = ask_stage(ai, "ad_companion_scale", COMPANION_SCALE,
+                       {"companion": {key: companion[key] for key in ("object", "cue")},
+                        "pairing_intent": pairing_intent}, [to_float(scene)])
+    dimensions = answer.get("size")
+    if (not isinstance(dimensions, list) or len(dimensions) != 2
+            or any(type(value) is not int or not 1 <= value <= 100 for value in dimensions)):
+        raise ValueError("상품과 비교한 소품의 크기를 확인하지 못했습니다")
+    return {"size": dimensions, "reference": required_text(answer, "reference", "소품 크기의 비교 기준")}
+
+
+def plan_companion_insertion(ai, scene, companion, foreground, layout, folder, feedback, *, rejected=None,
+                             pairing_intent=None, scale=None):
     subject = Image.new("RGBA", scene.size)
     subject.putalpha(Image.fromarray(foreground).convert("L"))
     x, y, right, bottom = subject.getbbox()
     product_bounds = [round(100 * value / side) for value, side in
                       zip((x, y, right, bottom), scene.size * 2, strict=True)]
     lettering = rendered_text_bounds(layout, folder)
+    extent = [ceil(value / 0.72) for value in scale["size"]] if scale else companion["box"][2:]
+    target_size = pixel_box((0, 0, *scale["size"]), scene.size)[2:] if scale else None
+
+    def has_room(box):
+        return not target_size or all(span <= 0.80 * length for span, length in
+                                      zip(target_size, pixel_box(box, scene.size)[2:], strict=True))
+
+    nearby = {name: box for name, box in nearby_companion_boxes(
+        foreground, layout, lettering, product_bounds, extent).items() if has_room(box)}
     inputs = {"companion": companion, "artwork": layout["artwork"], "canvas_size": layout["size"],
-              "product_bounds": product_bounds, "rendered_text_bounds": lettering, "insertion_feedback": feedback}
+              "product_bounds": product_bounds, "rendered_text_bounds": lettering, "nearby_boxes": nearby,
+              "insertion_feedback": feedback, "pairing_intent": pairing_intent, "target_size": scale}
     images = [to_float(scene)]
     if rejected is not None:
         images.append(to_float(rejected))
     for _ in range(2):
         placement = ask_stage(ai, "ad_companion_insertion", COMPANION_INSERTION, inputs, images)
-        if "box" in placement and placement["box"] is None:
+        slot = placement.get("slot")
+        custom = slot in (None, "custom")
+        box = placement.get("box")
+        if not custom:
+            box = nearby.get(slot) if isinstance(slot, str) else None
+        if custom and "box" in placement and box is None:
             raise ValueError("완성 사진에 필수 소품을 자연스럽게 놓을 빈 면이 없습니다")
         try:
-            planned = planned_companion({"companion": companion | {"box": placement.get("box")}},
+            planned = planned_companion({"companion": companion | {"box": box}},
                                         layout["artwork"], subject, layout["size"], lettering)
+            if nearby and custom:
+                required_text(placement, "no_nearby_reason", "가까운 소품 위치를 쓸 수 없는 이유")
             instruction = required_text(placement, "instruction", "촬영 소품 부분 편집")
             left, top, width, height = pixel_box(planned["box"], scene.size)
+            if not has_room(planned["box"]):
+                raise ValueError("상품에 맞는 크기의 소품을 그림자 여유까지 두고 놓을 수 없습니다")
             return (left, top, left + width, top + height), f"{instruction} Required visible detail: {planned['cue']}", planned
         except ValueError as error:
-            inputs.update(previous_box=placement.get("box"), layout_error=str(error))
+            inputs.update(previous_box=box, layout_error=str(error))
     raise ValueError(inputs["layout_error"])
-
-
-def companion_has_visible_scale(box):
-    try:
-        accepted = validate_boxes({"object": box}, ("object",))["object"]
-    except ValueError:
-        return False
-    return max(accepted[2:]) >= 40
 
 
 def choose_source_framing(ai, product, inputs, images):
@@ -2133,7 +2233,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             art_plan = art_plan | {"shot_scale": "detail"}
             design_input["art_direction_plan"]["shot_scale"] = "detail"
         artwork = layout["artwork"]
-        companion = None
+        companion = companion_scale = None
         if not proposal:
             direction_input = {"message": brief["message"], "headline": copy["headline"], "idea": idea, "design": answer,
                                "product_facts": fields, "headline_locked": "headline" in fields or prior is not None}
@@ -2219,6 +2319,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             answer = answer | {"art_direction": required_text(direction, "scene", "촬영 연출")}
             photo_cue = (direction_input.get("approved_photo_cue") or required_text(direction, "photo_cue", "촬영 연출"))
             if companion:
+                pairing_intent = {"owner_idea": idea, "headline": copy["headline"], "photographic_focus": photo_cue}
                 photo_cue = (f"Show the complete {companion['object']} with clear space around its outline, "
                              f"separate from the product. Required visible detail: {companion['cue']}")
 
@@ -2370,15 +2471,25 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                         generated = photograph(prompt)
                         base_scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
                         protected = find_foreground(base_scene, models["mask"], threshold)
+                        companion_scale = plan_companion_scale(ai, base_scene, companion, pairing_intent)
+                        target_size = pixel_box((0, 0, *companion_scale["size"]), base_scene.size)[2:]
                     patch_bounds, instruction, companion = plan_companion_insertion(
                         ai, base_scene, companion, protected, layout, result, companion_feedback,
-                        rejected=scene if attempt else None)
+                        rejected=scene if attempt and companion_feedback and scene is not None else None,
+                        pairing_intent=pairing_intent, scale=companion_scale)
                     original_scene = base_scene
                     secondary_object = companion["object"]
-                    scene = repair_scene_patch(model, original_scene, patch_bounds, instruction, generation,
-                                               secondary_object=secondary_object, foreground=protected,
-                                               companion_mask=lambda patch: product_mask(
-                                                   models["mask"], to_float(patch)) > threshold)
+                    try:
+                        scene = repair_scene_patch(model, original_scene, patch_bounds, instruction, generation,
+                                                   secondary_object=secondary_object, foreground=protected,
+                                                   companion_mask=lambda patch: product_mask(
+                                                       models["mask"], to_float(patch)) > threshold,
+                                                   target_size=target_size)
+                    except ValueError as error:
+                        if attempt:
+                            raise
+                        scene, companion_feedback = None, str(error)
+                        continue
                 elif patch_bounds is None:
                     generated = photograph(prompt)
                     scene = ImageOps.fit(generated.convert("RGB"), picture_size, Image.Resampling.LANCZOS)
@@ -2431,17 +2542,10 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                 if matches and not finding["stray_writing"]:
                     if patch_bounds is not None:
                         repair = ask_stage(ai, "ad_photo_patch_check", PHOTO_PATCH_CHECK,
-                                           {"photo_cue": photo_cue, "secondary_object": secondary_object,
-                                            **({"measure_object": True} if companion else {})},
+                                           {"photo_cue": photo_cue, "secondary_object": secondary_object},
                                            [to_float(original_scene), to_float(scene), to_float(scene.crop(patch_bounds))])
                         finding["scene_patch_review"] = required_text(repair, "observation", "사진 부분 수정 검토")
-                        patch_accepted = repair.get("accepted") is True
-                        if companion and patch_accepted:
-                            patch_accepted = companion_has_visible_scale(repair.get("object_box"))
-                            if not patch_accepted:
-                                finding["scene_patch_review"] = ("필수 소품이 편집 영역에 비해 너무 작거나 "
-                                                                 "전체 윤곽을 확인할 수 없습니다")
-                        if not patch_accepted:
+                        if repair.get("accepted") is not True:
                             if companion and not attempt:
                                 companion_feedback = finding["scene_patch_review"]
                                 continue
@@ -2558,7 +2662,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         if photo_cue:
             layout["photo_cue"] = photo_cue
         if companion:
-            layout["photo_companion"] = companion
+            layout["photo_companion"] = companion | ({"scale": companion_scale} if companion_scale else {})
         if photo_checks:
             layout["photo_cue_checks"] = photo_checks
         if source_framing:

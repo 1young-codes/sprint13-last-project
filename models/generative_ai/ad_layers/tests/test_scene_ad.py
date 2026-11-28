@@ -50,7 +50,8 @@ def test_companion_insertion_moves_away_from_actual_photographed_product(monkeyp
             assert data["product_bounds"] == [53, 29, 88, 67]
             if box != companion["box"]:
                 assert "실루엣" in data["layout_error"] and data["previous_box"] == companion["box"]
-            return json.dumps({"box": box, "instruction": "Rest it on the existing surface."})
+            return json.dumps({"box": box, "instruction": "Rest it on the existing surface.",
+                               "no_nearby_reason": "The nearby right crops would be past the edge of the surface."})
 
     bounds, instruction, placed = scene_ad.plan_companion_insertion(
         Agent(), scene, companion, foreground, layout, tmp_path, "소품이 큽니다", rejected=Image.new("RGB", scene.size))
@@ -58,9 +59,65 @@ def test_companion_insertion_moves_away_from_actual_photographed_product(monkeyp
     assert instruction == "Rest it on the existing surface. Required visible detail: The full lid and side are visible"
 
 
-@pytest.mark.parametrize(("box", "visible"), [([33, 31, 22, 24], False), ([20, 30, 60, 27], True), (None, False)])
-def test_companion_scale_rejects_visible_but_tiny_insertion(box, visible):
-    assert scene_ad.companion_has_visible_scale(box) is visible
+def test_companion_insertion_offers_nearby_boxes_that_clear_the_product_and_type(monkeypatch, tmp_path):
+    scene = Image.new("RGB", (100, 120), "tan")
+    foreground = np.zeros((120, 100), dtype=bool)
+    foreground[32:76, 37:74] = True
+    companion = {"object": "open book", "cue": "Visible pages", "box": [60, 76, 18, 20]}
+    artwork = {"x": 10, "y": 20, "w": 100, "h": 120}
+    layout = {"artwork": artwork, "size": (120, 150)}
+    lettering = {"price": [8, 48, 34, 66]}
+    pairing_intent = {"owner_idea": "책과 함께 책상 위에 배치", "headline": "책상 위의 고요",
+                      "photographic_focus": "Warm light on the right of the product."}
+    monkeypatch.setattr(scene_ad, "rendered_text_bounds", lambda *_: lettering)
+
+    class Agent:
+        def ask(self, step, images, prompt, *, model):
+            assert step == "ad_companion_insertion"
+            data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
+            assert data["pairing_intent"] == pairing_intent
+            raw = Image.new("RGBA", scene.size)
+            raw.putalpha(Image.fromarray(foreground).convert("L"))
+            for box in data["nearby_boxes"].values():
+                assert scene_ad.planned_companion({"companion": companion | {"box": box}}, artwork, raw,
+                                                  layout["size"], lettering)["box"] == box
+            box = data["nearby_boxes"]["beside_right"]
+            assert 74 < box[0] <= 77 and box[1] < companion["box"][1]
+            return json.dumps({"slot": "beside_right", "instruction": "Place it on the table."})
+
+    bounds, _, picked = scene_ad.plan_companion_insertion(Agent(), scene, companion, foreground, layout, tmp_path, None,
+                                                        pairing_intent=pairing_intent)
+    assert bounds[:2] == (picked["box"][0], round(picked["box"][1] * 1.2))
+
+    foreground[:92, :] = True
+    narrow_surface = scene_ad.nearby_companion_boxes(foreground, layout, {}, [0, 0, 100, 77], [22, 23])
+    assert narrow_surface and all(box[2:] == [31, 16] for box in narrow_surface.values())
+
+
+def test_companion_crop_must_fit_the_product_relative_size_and_shadow(monkeypatch, tmp_path):
+    scene = Image.new("RGB", (100, 100), "tan")
+    foreground = np.zeros((100, 100), dtype=bool)
+    foreground[20:60, 20:40] = True
+    layout = {"artwork": {"x": 0, "y": 0, "w": 100, "h": 100}, "size": (100, 100)}
+    companion = {"object": "a serving bowl", "cue": "A complete visible rim", "box": [50, 55, 30, 30]}
+    scale = {"size": [34, 21], "reference": "The bowl is wider than the pictured product beside it."}
+    choices = iter([[50, 55, 30, 30], [45, 40, 50, 35]])
+    monkeypatch.setattr(scene_ad, "rendered_text_bounds", lambda *_: {})
+
+    class Agent:
+        def ask(self, step, images, prompt, *, model):
+            box = next(choices)
+            data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
+            assert data["target_size"] == scale
+            assert all(candidate[2] >= 43 and candidate[3] >= 27 for candidate in data["nearby_boxes"].values())
+            if box != companion["box"]:
+                assert "그림자 여유" in data["layout_error"]
+            return json.dumps({"slot": "custom", "box": box, "instruction": "Place the bowl on the table.",
+                               "no_nearby_reason": "The suggested positions are off the usable support surface."})
+
+    bounds, _, _ = scene_ad.plan_companion_insertion(Agent(), scene, companion, foreground, layout, tmp_path, None,
+                                                   scale=scale)
+    assert bounds == (45, 40, 95, 75)
 
 
 @pytest.mark.parametrize("decision", ["same_intent", "required_pairing", "unsupported", "intent_lost", "retry", "repeated_product"])
@@ -137,7 +194,7 @@ def test_scene_patch_addition_excludes_product_from_context(crop_only):
                                            companion_mask=(lambda patch: np.zeros(patch.size[::-1], dtype=bool))
                                            if crop_only else None)
     assert repaired.crop((0, 0, 100, 40)).tobytes() == scene.crop((0, 0, 100, 40)).tobytes()
-    assert repaired.getpixel((25, 60)) == (0, 0, 255)
+    assert repaired.getpixel((25, 60)) == ((210, 180, 140) if crop_only else (0, 0, 255))
 
 
 def test_companion_patch_enlarges_the_silhouette_without_using_pixels_outside_the_crop():
@@ -159,16 +216,34 @@ def test_companion_surface_matches_the_original_light_and_keeps_the_contact_shad
     surface = Image.new("RGB", (120, 100), (72, 60, 45))
     patch = Image.new("RGB", surface.size, (120, 100, 75))
     patch.paste((67, 55, 42), (40, 60, 80, 66))
-    patch.paste((180, 150, 112), (80, 40, 90, 61))
+    patch.paste("#9c20da", (80, 40, 90, 61))
     patch.paste((180, 160, 136), (40, 38, 80, 60))
     mask = np.zeros((100, 120), dtype=bool)
     mask[38:60, 40:80] = True
     balanced = scene_ad.match_companion_surface(patch, surface, mask)
     assert balanced.getpixel((10, 50)) == surface.getpixel((10, 50))
     assert balanced.getpixel((60, 46))[0] > 100
-    assert balanced.getpixel((60, 62))[0] < 50
-    halo = np.subtract(balanced.getpixel((86, 50)), surface.getpixel((86, 50)))
-    assert halo @ np.array([0.2126, 0.7152, 0.0722]) <= 7
+    assert balanced.getpixel((60, 62))[0] < 0.8 * surface.getpixel((60, 62))[0]
+    assert balanced.getpixel((86, 50)) == surface.getpixel((86, 50))
+
+
+def test_scene_patch_rejects_a_tiny_companion_even_when_its_whole_outline_is_visible():
+    scene = Image.new("RGB", (160, 160), "tan")
+
+    class Model:
+        def edit(self, context, prompt, seed, steps, *, size):
+            assert "about 44 percent of the width and 38 percent of the height" in prompt
+            return context
+
+    def silhouette(patch):
+        mask = np.zeros(patch.size[::-1], dtype=bool)
+        mask[36:44, 36:44] = True
+        return mask
+
+    with pytest.raises(ValueError, match="상품에 맞춰 정한 크기"):
+        scene_ad.repair_scene_patch(Model(), scene, (40, 40, 120, 120), "Rest it on the existing surface.",
+                                   {"seed": 1, "steps": 25}, secondary_object="a small lamp",
+                                   companion_mask=silhouette, target_size=(35, 30))
 
 
 @pytest.mark.parametrize("choice", ["cleaned", "original"])
