@@ -454,6 +454,8 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
             if step == "ad_photo_message":
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
                 assert len(images) == 1 and images[0].shape == (1024, 512, 3)
+                assert data.pop("product_facts") == fields
+                assert isinstance(data.pop("owner_idea"), str) and data.pop("photo_cue")
                 assert data == {"headline": "부드러운 아침", "message": "아침에 쓰는 세럼",
                                 "observation": "유리 가장자리에 호박색 빛이 있습니다"}
                 if repair_message and "ad_photo_cue_check" not in calls:

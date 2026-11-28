@@ -256,8 +256,10 @@ graphics, coordinates or layout markup in scene. Return JSON with 'scene', 'phot
 short English sentence naming the visible relationship or effect that must be true for the scene to convey the
 message. For a demonstration, name the relative position and direction of the moving parts, not just their
 presence. Choose a moment that makes the intended action distinguishable from its reverse or an unrelated
-gesture. Show the actual grip or support in frame and use a visible starting point and a separate destination,
-contact or outcome for that distinction. The cue must be directly observable without reading the headline.
+gesture. Show the actual grip or support in frame. When the request specifies a transfer or contact, name
+its visible destination and outcome. A general use scene can show the supported tool, the material it carries
+and its direction away from the source before any transfer. Do not invent a different receiver or reverse the
+action to show an outcome. The cue must be directly observable without reading the headline.
 Use companion only for a distinct secondary object that an owner requirement in idea or product_facts, or
 a headline with headline_locked=true, requires to communicate a pairing or situation. Return null for a
 draft-only idea, decorative objects, mood alone, or parts involved in a
@@ -309,7 +311,8 @@ when no suitable surface exists."""
 
 PHOTO_OBSERVATION = """Describe this single photograph as a viewer seeing it without any caption.
 If someone handles an object, distinguish what holds or supports it, what visibly moves or is poised to move,
-and what surface or object appears to receive it. Name the destination the picture actually suggests. A still
+and what surface or object appears to receive it. Compare the working end's actual position and direction to each
+possible receiver. Nearby objects are not destinations unless the visible geometry points there. A still
 frame does not prove what happened before or after. For an unsupported tool, say it appears suspended rather
 than inferring a hand outside the frame. If no action is depicted, report the most salient details
 such as texture, shape, setting, light, and recognizable secondary objects. If an edge fragment is hard to
@@ -322,6 +325,11 @@ independent observation. Identify the one concrete thing the picture must commun
 For an action, check the visible support, what should move, and where it is visibly directed. Motion back into
 the source does not show taking material out or putting it to use. An ambiguous direction or unsupported pose
 does not show a specific advertised action just because the right tool is present.
+Use owner_idea and product_facts to find explicit requirements, and photo_cue to identify the planned instant.
+When the request is to illustrate general use, a held tool carrying the visible material away from its source
+can convey the moment before transfer. Require visible arrival at a particular receiver or an exact later moment
+only when the request, approved copy or planned cue specifies it. Do not introduce a new receiver to a reshoot
+merely because one could plausibly appear later in the routine.
 For a visible scene, check the specific setting, pairing, color, texture or material effect the campaign draws
 attention to. If the observer did not mention a secondary element, look for it in the actual image. Visible
 forms must be recognizable in the full frame. A cut-off, indistinct shape does not establish a featured
@@ -2656,7 +2664,8 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
                     seen = required_text(observed, "observation", "사진 장면 관찰")
                     message = ask_stage(ai, "ad_photo_message", PHOTO_MESSAGE,
                                         {"observation": seen, "headline": copy["headline"],
-                                         "message": brief.get("message", copy["headline"])}, [picture])
+                                         "message": brief.get("message", copy["headline"]), "owner_idea": idea,
+                                         "product_facts": fields, "photo_cue": photo_cue}, [picture])
                     message_observation = required_text(message, "message_observation", "사진과 광고 문구 비교")
                 # Check the observable motion from the reshoot without requiring the draft's exact grip or instant.
                 photo_inputs = {"photo_cue": seen if reshot_action else photo_cue,
