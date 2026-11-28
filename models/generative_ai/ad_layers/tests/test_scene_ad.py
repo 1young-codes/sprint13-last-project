@@ -10,6 +10,31 @@ from models.generative_ai.ad_layers.text_render import page_html
 from models.generative_ai.photo_retouch import product_mask
 
 
+@pytest.mark.parametrize("fragments,identity", [(True, True), (False, False), (False, None)])
+def test_source_framing_keeps_whole_when_detail_loses_the_subject(monkeypatch, fragments, identity):
+    crop = [25, 25, 50, 50]
+    product = Image.new("RGBA", (80, 60), "orange")
+    review = {"choice": "detail", "reason": "원단 무늬는 보이지만 제품의 형태를 확인할 수 없습니다."}
+    if identity is not None:
+        review["detail_preserves_identity"] = identity
+
+    def ask_stage(ai, step, task, inputs, images):
+        if step == "ad_source_framing":
+            return {"source_crop": crop, "reason": "원단 무늬를 확대합니다."}
+        if step == "ad_source_detail_observation":
+            assert inputs == {} and len(images) == 1
+            return {"observation": review["reason"], "competing_fragments": fragments}
+        assert step == "ad_source_framing_check" and not fragments
+        assert "proposal" not in inputs
+        assert inputs["detail_observation"] == review["reason"]
+        return review
+
+    monkeypatch.setattr(scene_ad, "ask_stage", ask_stage)
+    original = np.zeros((60, 80, 3))
+    selected = scene_ad.choose_source_framing(None, product, {}, [original])
+    assert selected["source_crop"] is None
+
+
 def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkeypatch):
     calls = []
     photo = Image.new("RGB", (70, 60), "orange")
@@ -115,10 +140,14 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
                     assert "앰버 유리가 묻힙니다" in prompt and correction not in prompt
                 crop = [33, 10, 40, 80] if expect_correction else None
                 return json.dumps({"source_crop": crop, "reason": "병의 실제 형태를 확인합니다"})
+            if step == "ad_source_detail_observation":
+                assert len(images) == 1
+                return '{"observation":"앰버색 유리 가장자리가 보입니다","competing_fragments":false}'
             if step == "ad_source_framing_check":
                 assert expect_correction and images[0].shape == images[1].shape == (512, 512, 3)
                 assert not np.array_equal(images[0], images[1])
-                return '{"choice":"detail","reason":"앰버 유리의 빛이 확대되어 보입니다"}'
+                return ('{"choice":"detail","detail_preserves_identity":true,'
+                        '"reason":"병의 유리 가장자리에서 앰버빛이 확대되어 보입니다"}')
             if step == "ad_cycle_critique":
                 data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
                 assert images[0][20, 15, 2] == 1

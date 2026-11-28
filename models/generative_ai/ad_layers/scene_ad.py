@@ -103,18 +103,31 @@ The first image is the isolated product in its tight bounds. The second is the o
 are references. Another reviewer will choose between the two views after seeing the rendered crop. If the message
 concerns one detail or a few neighboring features, show those features together much larger. Leave out parts that
 do not help explain the message. A whole shot can be good and still deserve comparison with a close shot.
-Keep context to recognize the item and its use. Return null if a meaningful crop would break necessary labels,
-shape, count, or an arrangement across the whole product, or if the request specifies keeping the full view.
+Keep a visible contour, feature or relationship that explains what the advertised product is even with its
+name covered. If the source shows repeated items, center the crop on one identifiable instance unless their
+arrangement is the advertised feature. Return null if a meaningful crop would break necessary labels,
+shape, count, or the arrangement across the whole product, or if the request specifies keeping the full view.
 The original photo may already cut an edge of the object; preserve the meaning of its available view.
 Return JSON with source_crop (null or [left, top, width, height] in integer percentages of the first image)
 and reason (in Korean, what the crop makes easier to notice, or why a crop cannot help)."""
 
+SOURCE_DETAIL_OBSERVATION = """Describe only this cropped photograph. Gray padding is outside the crop.
+Say how many instances of the apparent subject you see, which visible forms you can trace individually,
+and which are cut off or overlap. Mark competing_fragments true if it mainly shows several similarly
+prominent, incomplete instances so there is no visually dominant instance to read as the main subject.
+A detail of one visually dominant instance or a clearly readable arrangement is not competing fragments.
+Return JSON with observation (a concrete Korean sentence) and competing_fragments (boolean)."""
+
 SOURCE_FRAMING_CHECK = """The first two images show the whole available product and the actual crop in equal-size frames.
-The third image is the original photo. Compare the visible pixels against the exact headline and the intended
-selling detail. Check recognition, number of items, important labels, and the edges and detail that actually
-remain. Favor the crop only when it makes the detail meaningfully more prominent and keeps recognizable context.
-Keep the whole view if the crop mainly removes an edge with little practical enlargement of the selling detail.
-Return JSON with choice (whole or detail) and a Korean reason grounded in those two images."""
+Judge the second image on its own first. Name the visible shape, detail or relationship that tells a viewer
+what is being sold without relying on the product name or the whole view. Return detail_preserves_identity
+(boolean). Generic texture or overlapping cropped fragments without a clearly identifiable subject are
+insufficient. An intentional macro is valid if a distinctive feature still identifies the product.
+Then compare it with the first and third images and product_facts for important labels and assortment.
+A per-item price or unit of sale does not imply that only one example can appear in a photograph.
+Choose detail only if the subject remains identifiable and the enlargement materially helps the headline.
+Return JSON with choice (whole or detail), detail_preserves_identity and a Korean reason naming what
+identifies the subject in the crop or what the crop loses."""
 
 FINAL_REVIEW = """Review the first poster, using the second image (its generated photo without type) and the reference
 posters that follow. Keep the generated photo, position, crop and canvas color. Use the actual product bounds to
@@ -501,12 +514,24 @@ def choose_source_framing(ai, product, inputs, images):
         return {"source_crop": None, "reason": f"{error}. 원본 범위를 유지합니다"}
     frames = [to_float(ImageOps.pad(view, (512, 512), Image.Resampling.LANCZOS, color="#808080"))
               for view in (whole, on_gray(detail))]
-    review = ask_stage(ai, "ad_source_framing_check", SOURCE_FRAMING_CHECK, inputs | {"proposal": reason},
-                       [*frames, images[0]])
+    observed = ask_stage(ai, "ad_source_detail_observation", SOURCE_DETAIL_OBSERVATION, {}, [frames[1]])
+    observation = observed.get("observation")
+    fragments = observed.get("competing_fragments")
+    if not isinstance(observation, str) or not observation.strip() or type(fragments) is not bool:
+        return {"source_crop": None, "reason": "확대본의 피사체를 확인하지 못해 원본 범위를 유지합니다"}
+    if fragments:
+        return {"source_crop": None, "reason": observation}
+    review = ask_stage(ai, "ad_source_framing_check", SOURCE_FRAMING_CHECK,
+                       inputs | {"detail_observation": observation}, [*frames, images[0]])
     review_reason = review.get("reason")
     if review.get("choice") not in ("whole", "detail") or not isinstance(review_reason, str) or not review_reason.strip():
         return {"source_crop": None, "reason": "확대본의 비교 결과가 없어 원본 범위를 유지합니다"}
-    return {"source_crop": crop if review["choice"] == "detail" else None, "reason": review_reason}
+    identity = review.get("detail_preserves_identity")
+    if review["choice"] == "whole" or identity is False:
+        return {"source_crop": None, "reason": review_reason}
+    if identity is not True:
+        return {"source_crop": None, "reason": "확대본에서 상품을 식별할 수 있는지 확인하지 못해 원본 범위를 유지합니다"}
+    return {"source_crop": crop, "reason": review_reason}
 
 
 def frame_subject(product, picture_size, subject_box, source_crop=None):
@@ -1365,6 +1390,7 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
         if scene_issue:
             framing_input = {"brief": brief, "copy": copy, "idea": idea, "scene_issue": scene_issue,
                              "visible_feature": art_plan["evidence"]}
+        framing_input["product_facts"] = fields
         source_framing = choose_source_framing(ai, product, framing_input, images)
         source_crop = source_framing["source_crop"]
         scale = "detail" if source_crop is not None else art_plan["shot_scale"]
