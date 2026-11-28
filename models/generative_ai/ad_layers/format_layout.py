@@ -35,16 +35,17 @@ def free_position(integral, size, extent, near, *, x_limits=(0, 100), y_limits=(
     return int(px[order]), int(py[order])
 
 
-def offer_reflow_options(layout, design, occupied, product_bounds):
+def offer_reflow_options(layout, design, occupied, product_bounds, ink_heights, target_height):
     width, height = size = tuple(layout["size"])
-    short_side = min(size)
     roles = ("product_name", "price")
-    sizes = {"product_name": 0.035, "price": 0.044}
-    probes = [
-        text | {"w": width, "h": height, "max_lines": 1,
-                "max_font_size": max(text["max_font_size"], round(short_side * sizes[text["role"]]))}
-        for text in layout["texts"] if text["role"] in roles
-    ]
+    offer = [text for text in layout["texts"] if text["role"] in roles]
+    fitted = fitted_text_sizes(offer, size)
+    probes = []
+    for text in offer:
+        role = text["role"]
+        scale = max(1, target_height / ink_heights[role])
+        pixels = min(int(width * 0.2), ceil(fitted[role] * scale))
+        probes.append(text | {"w": width, "h": height, "max_lines": 1, "max_font_size": pixels})
     measured = measure_texts(probes, size)
     name_w, name_h = (ceil(100 * (n + 4) / side)
                       for n, side in zip(measured["product_name"], size, strict=True))
@@ -57,11 +58,20 @@ def offer_reflow_options(layout, design, occupied, product_bounds):
     title = design["boxes"]["headline"]
     styles = design["styles"] | {
         text["role"]: {key: value for key, value in design["styles"][text["role"]].items() if key != "break_after"} | {
-            "align": "left", "max_lines": 1, "size": min(20, 100 * text["max_font_size"] / width)}
+            "max_lines": 1, "size": max(2, 100 * text["max_font_size"] / width)}
         for text in probes
     }
 
     options = {}
+    nearby = {}
+    for role, (w, h) in zip(roles, ((name_w, name_h), (price_w, price_h)), strict=True):
+        x, y, previous_w, previous_h = design["boxes"][role]
+        align = {"left": 0, "center": 0.5, "right": 1}[styles[role]["align"]]
+        nearby[role] = [round(x + (previous_w - w) * align), round(y + (previous_h - h) / 2), w, h]
+    if all(text["max_lines"] == 1 for text in offer):
+        options["near_current"] = design | {"boxes": design["boxes"] | nearby, "styles": styles}
+
+    styles = styles | {role: styles[role] | {"align": "left"} for role in roles}
     alignment = design["styles"]["headline"].get("align", "center")
     anchor = {"left": title[0], "center": (left + right - row_w) / 2,
               "right": title[0] + title[2] - row_w}[alignment]

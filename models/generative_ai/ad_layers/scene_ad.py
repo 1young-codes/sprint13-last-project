@@ -1982,16 +1982,34 @@ def review_crowded_offer(ai, design, layout, foreground, folder, fonts):
     from scipy.ndimage import binary_dilation
     from .format_layout import offer_reflow_options
 
-    ink = rendered_text_bounds(layout, folder)
-    if design.get("accent") or "price" not in ink:
+    if design.get("accent"):
         return design, layout, None
     size = tuple(layout["size"])
     width, height = size
-    type_issues = set(photo_type_issues(design, ink, size))
-    _, top, _, bottom = ink["price"]
-    short_side = min(size)
-    if (bottom - top) * height > 3 * short_side or (100 - bottom) * height > 4 * short_side:
+    phone_size = (360, 640)
+    display_scale = min(phone_size[0] / width, phone_size[1] / height)
+    minimum_height = ceil(12 / display_scale)
+    target_height = ceil(13 / display_scale)
+    roles = ("product_name", "price")
+
+    def letter_heights(current, directory):
+        heights = {}
+        for text in current["texts"]:
+            if text["role"] in roles:
+                with Image.open(directory / text["file"]) as image:
+                    bounds = image.getchannel("A").point(lambda alpha: 255 if alpha >= 128 else 0).getbbox()
+                if bounds:
+                    heights[text["role"]] = bounds[3] - bounds[1]
+        return heights
+
+    heights = letter_heights(layout, folder)
+    if heights.keys() != set(roles):
         return design, layout, None
+    if min(heights.values()) >= minimum_height:
+        return design, layout, None
+    ink = rendered_text_bounds(layout, folder)
+    type_issues = set(photo_type_issues(design, ink, size))
+    short_side = min(size)
 
     artwork = layout["artwork"]
     ax, ay, aw, ah = (artwork[key] for key in ("x", "y", "w", "h"))
@@ -1999,21 +2017,24 @@ def review_crowded_offer(ai, design, layout, foreground, folder, fonts):
     mask[ay:ay + ah, ax:ax + aw] = foreground | photo_region_mask(protected_photo_regions(layout), (aw, ah))
     occupied = binary_dilation(mask, iterations=max(1, round(short_side / 100)))
     rows, columns = np.nonzero(occupied)
+    if not rows.size:
+        return design, layout, None
     bounds = [round(100 * value / length) for value, length in zip(
         (columns.min(), rows.min(), columns.max() + 1, rows.max() + 1), size * 2, strict=True)]
-    options = offer_reflow_options(layout, design, occupied, bounds)
+    options = offer_reflow_options(layout, design, occupied, bounds, heights, target_height)
     if not options:
         return design, layout, None
 
     copy = {text["role"]: text["text"] for text in layout["texts"]}
-    offer = {role: copy[role] for role in ("product_name", "price")}
+    offer = {role: copy[role] for role in roles}
     title = next(text for text in layout["texts"] if text["role"] == "headline")
     shared_files = [layout["background"]["file"], artwork["file"], "foreground.png",
                     *(line["file"] for line in title.get("lines", (title,)))]
     first = compose(layout, folder)
     backdrop = compose(layout | {"texts": []}, folder)
     with TemporaryDirectory(dir=folder) as temporary:
-        images, candidates = [to_float(first)], {}
+        images, candidates = [to_float(ImageOps.contain(first, phone_size, Image.Resampling.LANCZOS))], {}
+        choice = None
         for name, plan in options.items():
             directory = Path(temporary) / name
             directory.mkdir()
@@ -2030,8 +2051,8 @@ def review_crowded_offer(ai, design, layout, foreground, folder, fonts):
                 check_offer_spacing(updated_ink, size)
                 if set(photo_type_issues(plan, updated_ink, size)) - type_issues:
                     continue
-                price = updated_ink["price"]
-                if price[3] - price[1] <= bottom - top:
+                new_heights = letter_heights(revised, directory)
+                if any(new_heights.get(role, 0) < minimum_height for role in roles):
                     continue
                 unresolved = []
                 plan, revised = readable_offer_colors(plan, revised, backdrop, directory, unresolved)
@@ -2039,15 +2060,22 @@ def review_crowded_offer(ai, design, layout, foreground, folder, fonts):
                     continue
             except ValueError:
                 continue
-            images.append(to_float(compose(revised, directory)))
             candidates[name] = (plan, revised, directory)
+            if name == "near_current" and all(plan["styles"][role]["color"] == design["styles"][role]["color"]
+                                              for role in roles):
+                choice = name
+                reason = "판매 정보의 자리와 색을 유지하면서 휴대폰에서 읽을 수 있게 작은 글자를 키웠습니다."
+                break
+            preview = ImageOps.contain(compose(revised, directory), phone_size, Image.Resampling.LANCZOS)
+            images.append(to_float(preview))
         if not candidates:
             return design, layout, None
-        comparison = ask_stage(ai, "ad_crowded_offer_compare", CROWDED_OFFER_COMPARE,
-                               {"option_order": ["original", *candidates], "copy": copy}, images)
-        choice, reason = comparison.get("choice"), comparison.get("reason")
-        if not isinstance(choice, str) or choice not in candidates or not isinstance(reason, str) or not reason.strip():
-            return design, layout, None
+        if choice is None:
+            comparison = ask_stage(ai, "ad_crowded_offer_compare", CROWDED_OFFER_COMPARE,
+                                   {"option_order": ["original", *candidates], "copy": copy}, images)
+            choice, reason = comparison.get("choice"), comparison.get("reason")
+            if not isinstance(choice, str) or choice not in candidates or not isinstance(reason, str) or not reason.strip():
+                return design, layout, None
         design, revised, directory = candidates[choice]
         first.save(folder / "before-offer-reflow.png")
         for text in revised["texts"]:

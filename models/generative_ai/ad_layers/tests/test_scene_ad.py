@@ -626,7 +626,7 @@ def test_scene_ad_plans_canvas_and_exact_copy_before_generation(tmp_path, monkey
         assert size == (1024, 1024)
         for text in texts:
             ink = Image.new("RGBA", (text["w"], text["h"]))
-            ink.paste("white", (0, 0, 8, 46 if text["role"] == "headline" else 32))
+            ink.paste("white", (0, 0, 8, 46 if text["role"] == "headline" else 36))
             ink.save(folder / text["file"])
 
     monkeypatch.setattr(product_mask, "product_mask", mask)
@@ -1052,7 +1052,7 @@ def test_offer_reflow_keeps_the_position_and_pixels_of_the_finished_title(tmp_pa
     fonts = ["noto_sans_kr"]
     copy = {"headline": "따뜻한 오후 차 한 잔", "product_name": "차", "price": "4,000원"}
     style = {"font": fonts[0], "align": "left", "color": "#FFFFFF", "size": 6, "max_lines": 1}
-    design = {"boxes": {"headline": [8, 8, 80, 26], "product_name": [8, 89, 10, 8], "price": [21, 93, 20, 7]},
+    design = {"boxes": {"headline": [8, 8, 80, 26], "product_name": [8, 48, 10, 8], "price": [8, 58, 15, 7]},
               "styles": {role: style.copy() for role in copy}}
     design["styles"]["headline"].update(max_lines=2, break_after=2,
                                         lines=[{"box": [8, 8, 80, 8]}, {"box": [8, 23, 80, 10]}])
@@ -1076,7 +1076,12 @@ def test_offer_reflow_keeps_the_position_and_pixels_of_the_finished_title(tmp_pa
               "artwork": {"file": "scene.png", "x": 0, "y": 0, "w": 100, "h": 100}, "texts": texts}
     title_pixels = {line["file"]: (tmp_path / line["file"]).read_bytes() for line in title["lines"]}
     plan = design | {"boxes": design["boxes"] | {"product_name": [8, 81, 10, 8], "price": [20, 81, 20, 8]}}
-    monkeypatch.setattr(format_layout, "offer_reflow_options", lambda *_: {"below": plan})
+    def offer_reflow_options(_layout, _design, _occupied, _bounds, ink_heights, target_height):
+        assert ink_heights == {"product_name": 2, "price": 2}
+        assert target_height == 4
+        return {"below": plan}
+
+    monkeypatch.setattr(format_layout, "offer_reflow_options", offer_reflow_options)
 
     def render_offer(offer, _size, path):
         assert {layer["role"] for layer in offer} == {"product_name", "price"}

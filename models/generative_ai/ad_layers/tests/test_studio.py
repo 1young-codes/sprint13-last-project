@@ -1431,9 +1431,11 @@ def test_offer_reflow_uses_clear_space_inside_the_subjects_bounding_rectangle(mo
     occupied = np.zeros(size, dtype=bool)
     occupied[60:120, 44:158] = True
     occupied[120:180, 100:158] = True
-    styles = {"headline": {"size": 8}, "product_name": {"size": 3}, "price": {"size": 3}}
-    design = {"boxes": {"headline": [8, 6, 84, 23]}, "styles": styles}
-    layout = {"size": size, "texts": [{"role": role, "max_font_size": 6} for role in ("product_name", "price")]}
+    roles = ("product_name", "price")
+    styles = {role: {"size": 3, "align": "left"} for role in ("headline", *roles)}
+    design = {"boxes": {"headline": [8, 6, 84, 23], "product_name": [8, 40, 40, 8], "price": [8, 49, 40, 8]},
+              "styles": styles}
+    layout = {"size": size, "texts": [{"role": role, "max_font_size": 6, "max_lines": 1} for role in roles]}
 
     def measure(probes, dimensions):
         assert dimensions == size
@@ -1441,7 +1443,11 @@ def test_offer_reflow_uses_clear_space_inside_the_subjects_bounding_rectangle(mo
         return {"product_name": (44, 10), "price": (32, 12)}
 
     monkeypatch.setattr(format_layout, "measure_texts", measure)
-    left = format_layout.offer_reflow_options(layout, design, occupied, [22, 30, 79, 90])["left"]
+    monkeypatch.setattr(format_layout, "fitted_text_sizes", lambda *_: {"product_name": 6, "price": 6})
+    options = format_layout.offer_reflow_options(layout, design, occupied, [22, 30, 79, 90],
+                                                 {"product_name": 7, "price": 5}, 7.5)
+    assert options["near_current"]["boxes"]["price"][0] == design["boxes"]["price"][0]
+    left = options["left"]
     x, y, width, height = left["boxes"]["product_name"]
     assert x + width > 22
     assert not occupied[y * 2:(y + height) * 2, x * 2:(x + width) * 2].any()

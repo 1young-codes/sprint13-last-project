@@ -13,8 +13,8 @@ from .format_layout import (format_measurements, format_type_hierarchy, measured
                             preview_placement)
 from .layers import compose, load_layout, load_settings, save_layout, to_float
 from .scene_ad import (check_offer_spacing, check_text_overlap, check_type_margin, design_layers,
-                       find_photo_regions, make_scene_ad, photo_region_mask, pixel_box, rendered_text_bounds, tighten_text_groups,
-                       touches_photo_edge)
+                       find_photo_regions, make_scene_ad, photo_region_mask, pixel_box, rendered_text_bounds,
+                       review_crowded_offer, tighten_text_groups, touches_photo_edge)
 from .staging import check_staged_identity
 from .studio_edits import edit_version, foreground_mask, line_break_after, repair_staged_detail
 from .text_render import LINE_HEIGHT, minimum_font_size
@@ -1021,6 +1021,11 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                 tried_offers = {tuple(revised["boxes"][role][axis]
                                       for role in ("product_name", "price") for axis in (0, 1))}
             revised, candidate, contrast_issue = readable_text_colors(revised, candidate, stage, foreground)
+            revised, candidate, offer_size_review = review_crowded_offer(ai, revised, candidate, foreground, stage, fonts)
+            if offer_size_review:
+                ink = rendered_text_bounds(candidate, stage)
+                if contrast_issue:
+                    revised, candidate, contrast_issue = readable_text_colors(revised, candidate, stage, foreground)
             poster = compose(candidate, stage)
             phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
             review = ask_stage(ai, "studio_format_reading", FORMAT_READING,
@@ -1057,6 +1062,10 @@ def adapt_format(source, output, format_name, ai, expand=None, *, intent=None):
                 candidate["copy_position_review"] = copy_position_review
             elif not offer_repair and answer.get("placement") is not None:
                 candidate["text_placement"] = answer["placement"]
+            if offer_size_review:
+                candidate["offer_size_review"] = offer_size_review
+            else:
+                (stage / "before-offer-reflow.png").unlink(missing_ok=True)
             if "art_direction_plan" in layout:
                 candidate["art_direction_plan"] = layout["art_direction_plan"]
             if "photo_cue" in layout:
