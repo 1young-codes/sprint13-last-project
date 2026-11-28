@@ -216,6 +216,13 @@ has weakened the title as a whole or opened up an unhelpful gap between the head
 Return choice (original, revision, or balanced when image three is an alternative) and a concrete Korean reason
 that describes what the images show."""
 
+CROWDED_OFFER_COMPARE = """The posters follow option_order. They use the same photograph, headline, product
+name, and exact price. Compare how the eye moves from the subject to the offer and whether both pieces of
+information can be read together at phone-feed size. Prefer the option that gives them breathing room without
+pulling attention away from the product, crowding a frame edge, or making a new detached text block. Keep
+original if the larger type creates a worse composition. Return choice (one option_order key) and reason
+(one concrete Korean sentence about what changes visibly)."""
+
 CRITIQUE = """The first image is the previous finished ad, the second is the source product, and the rest are
 design references. Identify the most consequential visible weakness of the ad that changing the photograph
 could fix. Ground it in details you see. Propose one new visual device justified by a real detail of the product
@@ -1449,6 +1456,73 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
     return answer, layout, None
 
 
+def review_crowded_offer(ai, design, layout, foreground, folder, fonts):
+    from scipy.ndimage import binary_dilation
+    from .format_layout import offer_reflow_options
+
+    ink = rendered_text_bounds(layout, folder)
+    if design.get("accent") or "price" not in ink:
+        return design, layout, None
+    size = tuple(layout["size"])
+    width, height = size
+    _, top, _, bottom = ink["price"]
+    short_side = min(size)
+    if (bottom - top) * height > 3 * short_side or (100 - bottom) * height > 4 * short_side:
+        return design, layout, None
+
+    artwork = layout["artwork"]
+    ax, ay, aw, ah = (artwork[key] for key in ("x", "y", "w", "h"))
+    mask = np.zeros((height, width), dtype=bool)
+    mask[ay:ay + ah, ax:ax + aw] = foreground | photo_region_mask(protected_photo_regions(layout), (aw, ah))
+    occupied = binary_dilation(mask, iterations=max(1, round(short_side / 100)))
+    rows, columns = np.nonzero(occupied)
+    bounds = [round(100 * value / length) for value, length in zip(
+        (columns.min(), rows.min(), columns.max() + 1, rows.max() + 1), size * 2, strict=True)]
+    options = offer_reflow_options(layout, design, occupied, bounds)
+    if not options:
+        return design, layout, None
+
+    copy = {text["role"]: text["text"] for text in layout["texts"]}
+    first = compose(layout, folder)
+    with Image.open(folder / artwork["file"]) as image, TemporaryDirectory(dir=folder) as temporary:
+        images, candidates = [to_float(first)], {}
+        for name, plan in options.items():
+            directory = Path(temporary) / name
+            directory.mkdir()
+            try:
+                revised = design_layers(plan, copy, size, fonts, directory)
+                revised.update({key: layout[key] for key in ("action_regions", "photo_regions") if key in layout})
+                image.save(directory / artwork["file"])
+                Image.fromarray(foreground).save(directory / "foreground.png")
+                check_text_overlap(foreground, revised, directory)
+                updated_ink = rendered_text_bounds(revised, directory)
+                check_type_margin(size, updated_ink)
+                check_offer_spacing(updated_ink, size)
+                price = updated_ink["price"]
+                if price[3] - price[1] <= bottom - top:
+                    continue
+                plan, revised, contrast_issue = readable_text_colors(plan, revised, directory, foreground)
+                if contrast_issue:
+                    continue
+            except ValueError:
+                continue
+            images.append(to_float(compose(revised, directory)))
+            candidates[name] = (plan, revised, directory)
+        if not candidates:
+            return design, layout, None
+        comparison = ask_stage(ai, "ad_crowded_offer_compare", CROWDED_OFFER_COMPARE,
+                               {"option_order": ["original", *candidates], "copy": copy}, images)
+        choice, reason = comparison.get("choice"), comparison.get("reason")
+        if not isinstance(choice, str) or choice not in candidates or not isinstance(reason, str) or not reason.strip():
+            return design, layout, None
+        design, revised, directory = candidates[choice]
+        first.save(folder / "before-offer-reflow.png")
+        for path in directory.iterdir():
+            if path.name not in (artwork["file"], "foreground.png"):
+                path.replace(folder / path.name)
+        return design, layout | revised, reason
+
+
 def blend_edges(scene, foreground=None, *, position=(0, 0), canvas_size=None):
     feather = max(1, round(min(scene.size) * 0.16))
     x, y = np.arange(scene.width), np.arange(scene.height)
@@ -2035,6 +2109,9 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             answer, layout, final_review_reason = review_finished(ai, answer, layout, scene, foreground, result,
                                                                   design_input, images[1:],
                                                                   assess_composition=bool(art_plan and not proposal))
+            answer, layout, offer_reason = review_crowded_offer(
+                ai, answer, layout, foreground, result, settings["fonts"])
+            final_review_reason = offer_reason or final_review_reason
         layout.update(fields=fields, brief=brief, design=answer, scene_prompt=prompt, preview=preview,
                       final_review_reason=final_review_reason)
         if art_plan:

@@ -35,6 +35,57 @@ def free_position(integral, size, extent, near, *, x_limits=(0, 100), y_limits=(
     return int(px[order]), int(py[order])
 
 
+def offer_reflow_options(layout, design, occupied, product_bounds):
+    width, height = size = tuple(layout["size"])
+    short_side = min(size)
+    roles = ("product_name", "price")
+    sizes = {"product_name": 0.035, "price": 0.044}
+    probes = [
+        text | {"w": width, "h": height, "max_lines": 1,
+                "max_font_size": max(text["max_font_size"], round(short_side * sizes[text["role"]]))}
+        for text in layout["texts"] if text["role"] in roles
+    ]
+    measured = measure_texts(probes, size)
+    name_w, name_h = (ceil(100 * (n + 4) / side)
+                      for n, side in zip(measured["product_name"], size, strict=True))
+    price_w, price_h = (ceil(100 * (n + 4) / side)
+                        for n, side in zip(measured["price"], size, strict=True))
+    row_w, row_h = name_w + 2 + price_w, max(name_h, price_h)
+    stack_w, stack_h = max(name_w, price_w), name_h + 1 + price_h
+    left, top, right, bottom = product_bounds
+    integral = np.pad(np.cumsum(np.cumsum(occupied, axis=0, dtype=np.int32), axis=1), ((1, 0), (1, 0)))
+    title = design["boxes"]["headline"]
+    styles = design["styles"] | {
+        text["role"]: {key: value for key, value in design["styles"][text["role"]].items() if key != "break_after"} | {
+            "align": "left", "max_lines": 1, "size": min(20, 100 * text["max_font_size"] / width)}
+        for text in probes
+    }
+
+    options = {}
+    alignment = design["styles"]["headline"].get("align", "center")
+    anchor = {"left": title[0], "center": (left + right - row_w) / 2,
+              "right": title[0] + title[2] - row_w}[alignment]
+    below = free_position(integral, size, (row_w, row_h), (anchor, bottom + 1),
+                          y_limits=(round((top + 2 * bottom) / 3), 97), avoid=title)
+    if below:
+        x, y = below
+        boxes = {"product_name": [x, y + (row_h - name_h) // 2, name_w, name_h],
+                 "price": [x + name_w + 2, y + (row_h - price_h) // 2, price_w, price_h]}
+        options["below"] = design | {"boxes": design["boxes"] | boxes, "styles": styles}
+
+    center = round((left + right) / 2)
+    for side, limits, near_x in (("left", (0, center), left - stack_w - 1),
+                                 ("right", (center, 100), right + 1)):
+        beside = free_position(integral, size, (stack_w, stack_h), (near_x, (top + bottom - stack_h) / 2),
+                               x_limits=limits, y_limits=(top, min(bottom, 95)), avoid=title)
+        if beside:
+            x, y = beside
+            boxes = {"product_name": [x, y, name_w, name_h],
+                     "price": [x, y + name_h + 1, price_w, price_h]}
+            options[side] = design | {"boxes": design["boxes"] | boxes, "styles": styles}
+    return options
+
+
 def supporting_price_size(focus, proposed, lead, minimum):
     if focus == "price" or lead is None:
         return proposed

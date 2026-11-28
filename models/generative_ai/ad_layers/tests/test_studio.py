@@ -1384,6 +1384,29 @@ def test_unsolicited_layout_revision_compares_a_new_outer_band(draft):
     assert answer["boxes"]["price"][1] == 75 and reason == "아래 여백을 조절했습니다"
 
 
+def test_offer_reflow_uses_clear_space_inside_the_subjects_bounding_rectangle(monkeypatch):
+    size = (200, 200)
+    occupied = np.zeros(size, dtype=bool)
+    occupied[60:120, 44:158] = True
+    occupied[120:180, 100:158] = True
+    styles = {"headline": {"size": 8}, "product_name": {"size": 3}, "price": {"size": 3}}
+    design = {"boxes": {"headline": [8, 6, 84, 23]}, "styles": styles}
+    layout = {"size": size, "texts": [{"role": role, "max_font_size": 6} for role in ("product_name", "price")]}
+
+    def measure(probes, dimensions):
+        assert dimensions == size
+        assert [text["max_font_size"] for text in probes] == [7, 9]
+        return {"product_name": (44, 10), "price": (32, 12)}
+
+    monkeypatch.setattr(format_layout, "measure_texts", measure)
+    left = format_layout.offer_reflow_options(layout, design, occupied, [22, 30, 79, 90])["left"]
+    x, y, width, height = left["boxes"]["product_name"]
+    assert x + width > 22
+    assert not occupied[y * 2:(y + height) * 2, x * 2:(x + width) * 2].any()
+    assert left["boxes"]["headline"] == design["boxes"]["headline"]
+    assert left["styles"]["price"]["size"] == 4.5
+
+
 def test_import_rejects_a_draft_with_modified_price(tmp_path, draft):
     folder, fields = draft
     layout = load_layout(folder)
