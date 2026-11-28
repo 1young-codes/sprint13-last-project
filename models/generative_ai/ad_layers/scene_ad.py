@@ -2061,7 +2061,7 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
     return compare_photo_positions(answer, layout, None)
 
 
-def review_crowded_offer(ai, design, layout, foreground, folder, fonts):
+def review_crowded_offer(ai, design, layout, foreground, folder, fonts, *, before_photo=False):
     from scipy.ndimage import binary_dilation
     from .format_layout import offer_reflow_options
 
@@ -2088,7 +2088,7 @@ def review_crowded_offer(ai, design, layout, foreground, folder, fonts):
     heights = letter_heights(layout, folder)
     if heights.keys() != set(roles):
         return design, layout, None
-    if min(heights.values()) >= minimum_height:
+    if not before_photo and min(heights.values()) >= minimum_height:
         return design, layout, None
     ink = rendered_text_bounds(layout, folder)
     type_issues = set(photo_type_issues(design, ink, size))
@@ -2104,7 +2104,18 @@ def review_crowded_offer(ai, design, layout, foreground, folder, fonts):
         return design, layout, None
     bounds = [round(100 * value / length) for value, length in zip(
         (columns.min(), rows.min(), columns.max() + 1, rows.max() + 1), size * 2, strict=True)]
+    if before_photo:
+        if "headline" not in ink:
+            return design, layout, None
+        center = (bounds[0] + bounds[2]) / 2
+        title_left, _, title_right, _ = ink["headline"]
+        sale_left = min(ink[role][0] for role in roles)
+        sale_right = max(ink[role][2] for role in roles)
+        if not (sale_right < center < title_left or title_right < center < sale_left):
+            return design, layout, None
     options = offer_reflow_options(layout, design, occupied, bounds, heights, target_height)
+    if before_photo:
+        options = {name: plan for name, plan in options.items() if name.startswith("under_headline_")}
     if not options:
         return design, layout, None
 
@@ -2154,13 +2165,18 @@ def review_crowded_offer(ai, design, layout, foreground, folder, fonts):
         if not candidates:
             return design, layout, None
         if choice is None:
-            comparison = ask_stage(ai, "ad_crowded_offer_compare", CROWDED_OFFER_COMPARE,
+            task = CROWDED_OFFER_COMPARE
+            if before_photo:
+                task += (" These are placement proofs before photography. The flat background will be replaced. "
+                         "Judge whether the exact title and information share a reading path without moving the product. "
+                         "Do not choose a disconnected corner based on a background effect that does not exist yet.")
+            comparison = ask_stage(ai, "ad_capture_offer_compare" if before_photo else "ad_crowded_offer_compare", task,
                                    {"option_order": ["original", *candidates], "copy": copy}, images)
             choice, reason = comparison.get("choice"), comparison.get("reason")
             if not isinstance(choice, str) or choice not in candidates or not isinstance(reason, str) or not reason.strip():
                 return design, layout, None
         design, revised, directory = candidates[choice]
-        first.save(folder / "before-offer-reflow.png")
+        first.save(folder / ("before-capture-offer.png" if before_photo else "before-offer-reflow.png"))
         for text in revised["texts"]:
             if text["role"] in offer:
                 filename = text["file"]
@@ -2465,6 +2481,14 @@ def make_scene_ad(photo, fields, idea, models, folder, *, references=(), preview
             offer_scene = review_offer_scene(ai, product, answer, layout, result, design_input, blocking_images)
             if offer_scene is not None:
                 answer, layout, composition_reason = offer_scene
+            if art_plan and not preview:
+                with Image.open(result / "foreground.png") as mask:
+                    planned_foreground = np.asarray(mask.convert("L")) > 128
+                answer, layout, capture_offer_reason = review_crowded_offer(
+                    ai, answer, layout, planned_foreground, result, settings["fonts"], before_photo=True)
+                if capture_offer_reason:
+                    compose(layout, result).save(result / "composition.png")
+                    composition_reason = " ".join(filter(None, (composition_reason, capture_offer_reason)))
             effective = crop_subject(product, answer)
         detail_shot = product is not None and answer.get("source_crop") is not None
         alternate_framing = bool(scene_issue and detail_shot)

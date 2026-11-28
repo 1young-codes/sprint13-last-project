@@ -73,6 +73,23 @@ def offer_reflow_options(layout, design, occupied, product_bounds, ink_heights, 
 
     styles = styles | {role: styles[role] | {"align": "left"} for role in roles}
     alignment = design["styles"]["headline"].get("align", "center")
+    title_x, title_y, title_w, title_h = title
+    title_bottom = title_y + title_h
+    for name, (group_w, group_h) in (("under_headline_row", (row_w, row_h)),
+                                     ("under_headline_stack", (stack_w, stack_h))):
+        anchored_x = title_x + {"left": 0, "center": (title_w - group_w) / 2,
+                                "right": title_w - group_w}[alignment]
+        beside_title = free_position(integral, size, (group_w, group_h), (anchored_x, title_bottom + 2),
+                                     x_limits=(round(anchored_x) - 3, round(anchored_x) + group_w + 3),
+                                     y_limits=(title_bottom + 1, title_bottom + group_h + 6))
+        if beside_title:
+            x, y = beside_title
+            if name.endswith("row"):
+                boxes = {"product_name": [x, y + (row_h - name_h) // 2, name_w, name_h],
+                         "price": [x + name_w + 2, y + (row_h - price_h) // 2, price_w, price_h]}
+            else:
+                boxes = {"product_name": [x, y, name_w, name_h], "price": [x, y + name_h + 1, price_w, price_h]}
+            options[name] = design | {"boxes": design["boxes"] | boxes, "styles": styles}
     anchor = {"left": title[0], "center": (left + right - row_w) / 2,
               "right": title[0] + title[2] - row_w}[alignment]
     below = free_position(integral, size, (row_w, row_h), (anchor, bottom + 1),

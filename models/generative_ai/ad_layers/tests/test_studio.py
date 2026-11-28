@@ -1506,6 +1506,17 @@ def test_offer_reflow_uses_clear_space_inside_the_subjects_bounding_rectangle(mo
     assert left["boxes"]["headline"] == design["boxes"]["headline"]
     assert left["styles"]["price"]["size"] == 4.5
 
+    occupied[:, :100] = True
+    occupied[:, 100:] = False
+    heading = design | {"boxes": design["boxes"] | {"headline": [72, 19, 25, 10]}}
+    options = format_layout.offer_reflow_options(layout, heading, occupied, [0, 0, 50, 100],
+                                                {"product_name": 7, "price": 5}, 7.5)
+    assert "under_headline_row" not in options
+    stacked = options["under_headline_stack"]["boxes"]
+    assert stacked["headline"] == [72, 19, 25, 10]
+    assert stacked["product_name"][:2] == [72, 31]
+    assert stacked["price"][0] == 72 and stacked["price"][1] > stacked["product_name"][1]
+
 
 def test_import_rejects_a_draft_with_modified_price(tmp_path, draft):
     folder, fields = draft
