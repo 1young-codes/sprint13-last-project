@@ -28,7 +28,7 @@ def test_companion_placement_reserves_visible_space_in_artwork(box, error):
             scene_ad.planned_companion({"companion": companion}, artwork, subject, (130, 160), lettering)
     else:
         positioned = scene_ad.planned_companion({"companion": companion}, artwork, subject, (130, 160), lettering)
-        assert positioned == companion | {"box": [max(9, box[0]), *box[1:]]}
+        assert positioned == companion | {"box": [max(4, box[0]), *box[1:]]}
 
 
 def test_companion_insertion_moves_away_from_actual_photographed_product(monkeypatch, tmp_path):
@@ -47,6 +47,7 @@ def test_companion_insertion_moves_away_from_actual_photographed_product(monkeyp
             assert not np.array_equal(images[0], images[1])
             data = json.loads(prompt.split("Input JSON follows:\n", 1)[1])
             assert data["insertion_feedback"] == "소품이 큽니다"
+            assert data["product_bounds"] == [53, 29, 88, 67]
             if box != companion["box"]:
                 assert "실루엣" in data["layout_error"] and data["previous_box"] == companion["box"]
             return json.dumps({"box": box, "instruction": "Rest it on the existing surface."})
@@ -54,7 +55,7 @@ def test_companion_insertion_moves_away_from_actual_photographed_product(monkeyp
     bounds, instruction, placed = scene_ad.plan_companion_insertion(
         Agent(), scene, companion, foreground, layout, tmp_path, "소품이 큽니다", rejected=Image.new("RGB", scene.size))
     assert bounds == (10, 52, 28, 76) and placed["box"] == [10, 43, 18, 20]
-    assert instruction == "Rest it on the existing surface."
+    assert instruction == "Rest it on the existing surface. Required visible detail: The full lid and side are visible"
 
 
 @pytest.mark.parametrize(("box", "visible"), [([33, 31, 22, 24], False), ([20, 30, 60, 27], True), (None, False)])
@@ -132,9 +133,42 @@ def test_scene_patch_addition_excludes_product_from_context(crop_only):
 
     repaired = scene_ad.repair_scene_patch(Model(), scene, (0, 40, 50, 80), "Keep the surface continuous.",
                                            {"seed": 1, "steps": 25}, secondary_object="a small lamp",
-                                           foreground=foreground, crop_only=crop_only)
+                                           foreground=foreground,
+                                           companion_mask=(lambda patch: np.zeros(patch.size[::-1], dtype=bool))
+                                           if crop_only else None)
     assert repaired.crop((0, 0, 100, 40)).tobytes() == scene.crop((0, 0, 100, 40)).tobytes()
     assert repaired.getpixel((25, 60)) == (0, 0, 255)
+
+
+def test_companion_patch_enlarges_the_silhouette_without_using_pixels_outside_the_crop():
+    patch = Image.new("RGB", (200, 180), "tan")
+    patch.paste("white", (90, 25, 160, 65))
+    mask = np.array(patch.getchannel("R")) == 255
+    fitted, moved, (left, top, right, bottom) = scene_ad.fit_companion_patch(patch, mask)
+    subject = fitted.getchannel("R").point(lambda value: 255 if value == 255 else 0).getbbox()
+    assert 0 <= left < right <= patch.width and 0 < top < bottom <= patch.height
+    assert np.asarray(fitted.getchannel("R")).min() > 0
+    assert 118 <= subject[2] - subject[0] <= 126
+    assert np.all(moved[np.asarray(fitted.getchannel("R")) == 255])
+    assert abs(left + (subject[0] + subject[2]) / 2 - patch.width / 2) <= 1
+    mask[0, 110] = True
+    assert scene_ad.fit_companion_patch(patch, mask) is None
+
+
+def test_companion_surface_matches_the_original_light_and_keeps_the_contact_shadow():
+    surface = Image.new("RGB", (120, 100), (72, 60, 45))
+    patch = Image.new("RGB", surface.size, (120, 100, 75))
+    patch.paste((67, 55, 42), (40, 60, 80, 66))
+    patch.paste((180, 150, 112), (80, 40, 90, 61))
+    patch.paste((180, 160, 136), (40, 38, 80, 60))
+    mask = np.zeros((100, 120), dtype=bool)
+    mask[38:60, 40:80] = True
+    balanced = scene_ad.match_companion_surface(patch, surface, mask)
+    assert balanced.getpixel((10, 50)) == surface.getpixel((10, 50))
+    assert balanced.getpixel((60, 46))[0] > 100
+    assert balanced.getpixel((60, 62))[0] < 50
+    halo = np.subtract(balanced.getpixel((86, 50)), surface.getpixel((86, 50)))
+    assert halo @ np.array([0.2126, 0.7152, 0.0722]) <= 7
 
 
 @pytest.mark.parametrize("choice", ["cleaned", "original"])
