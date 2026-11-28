@@ -17,7 +17,7 @@ from .scene_ad import (action_mask, check_offer_spacing, check_text_overlap, che
                        find_action_regions, make_scene_ad, pixel_box, rendered_text_bounds, tighten_text_groups,
                        touches_photo_edge)
 from .staging import check_staged_identity
-from .studio_edits import foreground_mask, line_break_after, repair_staged_detail
+from .studio_edits import edit_version, foreground_mask, line_break_after, repair_staged_detail
 from .text_render import LINE_HEIGHT, minimum_font_size
 
 
@@ -201,6 +201,14 @@ When photo_cue is supplied, locate it in the final composition and check the act
 the elements. Both parts can be visible while their planned relationship is absent.
 Check the required copy, its prominence and contrast at phone size, and the natural scene and edges at full size.
 Return ready (boolean) and observation (one concrete Korean sentence describing the visible improvement or defect)."""
+
+NATIVE_HEADLINE = """Compare the actual poster options in position_order. The photo, wording, product name, and
+price are fixed. The only differences are the headline's placement or size. The lower detail in each image is
+the same part of its full poster. Look for a natural path from the headline to a visible product detail, with
+room around the nearest rim, texture, or highlight. Also inspect the entire frame: bringing the words toward
+the product can leave an empty band at the outside edge. Prefer a candidate only if the connection is clearer
+and the scale and outer space suit the campaign. Keep current when none is better. Return position (one key
+from position_order) and observation (one Korean sentence describing the visible reason)."""
 
 COPY_BREAK = """검토할 광고 문구를 두 줄에 놓을 때 자연스러운 첫 줄을 고릅니다.
 문구를 그대로 읽고 문장의 절이나 호흡이 끝나는 곳에서 나눕니다. 상품을 설명하는 수량과 단위, 이름처럼
@@ -1201,6 +1209,86 @@ def restore_format_detail(folder, layout, ai, models):
     return observation
 
 
+def refine_native_headline(folder, layout, ai, accept):
+    width, height = layout["size"]
+    if height <= width:
+        return layout, None
+    ink = rendered_text_bounds(layout, folder)
+    if not all(role in ink for role in TEXT_ROLES):
+        return layout, None
+    left, top, right, bottom = ink["headline"]
+    artwork = layout["artwork"]
+    start = max(0, round(width * left / 100) - artwork["x"])
+    end = max(0, round(width * right / 100) - artwork["x"])
+    rows = np.flatnonzero(foreground_mask(folder, layout)[:, start:end].any(axis=1))
+    if not rows.size:
+        return layout, None
+    product_top = artwork["y"] + rows[0]
+    product_bottom = artwork["y"] + rows[-1] + 1
+    offer = [ink[role] for role in ("product_name", "price")]
+    if height * min(box[1] for box in offer) >= 100 * product_bottom:
+        direction, gap = 1, product_top - height * bottom / 100
+    elif height * max(box[3] for box in offer) <= 100 * product_top:
+        direction, gap = -1, height * top / 100 - product_bottom
+    else:
+        return layout, None
+    if gap < max(width * 0.12, height * (bottom - top) / 100):
+        return layout, None
+
+    design = layout["design"]
+    style = design["styles"]["headline"]
+    original = compose(layout, folder)
+    with TemporaryDirectory(dir=folder.parent) as temporary:
+        choices = {"current": (layout, original, ink)}
+        for name, distance, scale in (("nearer", gap / 3, 1), ("larger", gap / 8, 1.2)):
+            dy = direction * round(100 * distance / height)
+
+            def move(box):
+                x, y, w, h = box
+                return [x, y + dy, w, h]
+
+            change = {"box": move(design["boxes"]["headline"]), "size": min(20, style["size"] * scale)}
+            if lines := style.get("lines"):
+                change["lines"] = [line | {"box": move(line["box"]),
+                                          "size": min(20, line.get("size", style["size"]) * scale)}
+                                   for line in lines]
+            candidate = Path(temporary) / name
+            try:
+                edit_version(folder, candidate, "edit_text", {"changes": {"headline": change}}, None)
+                revised = load_layout(candidate)
+                bounds = rendered_text_bounds(revised, candidate)
+                check_type_margin(layout["size"], bounds)
+                _, new_top, _, new_bottom = bounds["headline"]
+                separation = (product_top - height * new_bottom / 100 if direction > 0 else
+                              height * new_top / 100 - product_bottom)
+                if not width / 40 <= separation < gap:
+                    continue
+                with Image.open(candidate / "ad.png") as image:
+                    choices[name] = (revised, image.copy(), bounds)
+            except ValueError:
+                continue
+        if len(choices) == 1:
+            return layout, None
+        edge = (product_top if direction > 0 else product_bottom) * 100 / height
+        crop = [(left, edge, right, edge)]
+        crop.extend(item[2]["headline"] for item in choices.values())
+        decision = ask_stage(ai, "studio_format_native_headline", NATIVE_HEADLINE,
+                             {"position_order": list(choices), "photo_cue": layout.get("photo_cue")},
+                             [to_float(paired_preview(poster, text_detail(poster, crop)))
+                              for _, poster, _ in choices.values()])
+        name = decision.get("position")
+        if not isinstance(name, str) or name == "current" or name not in choices:
+            return layout, None
+        revised, poster, _ = choices[name]
+        observation = required_text(decision, "observation", "제목과 상품 사이 여백 검토")
+        if not accept(poster):
+            return layout, None
+        headline = next(text for text in revised["texts"] if text["role"] == "headline")
+        for row in headline.get("lines", (headline,)):
+            (Path(temporary) / name / row["file"]).replace(folder / row["file"])
+        return revised, observation
+
+
 def rebuild_format(source, output, format_name, photo, fields, idea, ai, models, references, issue):
     size = FORMATS[format_name]
     approved = load_layout(source)
@@ -1222,26 +1310,42 @@ def rebuild_format(source, output, format_name, photo, fields, idea, ai, models,
         backdrop = compose(layout | {"texts": []}, folder)
         design, layout = readable_offer_colors(layout["design"], layout, backdrop, folder)
         layout["design"] = design
-        poster = compose(layout, folder)
-        poster.save(folder / "ad.png")
+        save_layout(layout, folder)
         with Image.open(source / "ad.png") as reference:
-            phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
             before = [to_float(issue.poster)] if issue.poster is not None else []
             details = []
             if revision.get("staged_group"):
                 with Image.open(folder / "staging.png") as guide:
                     details = [to_float(guide)]
-            review = ask_stage(ai, "studio_format_native_review", NATIVE_REVIEW,
-                               {"size": size, "format_issue": str(issue), "copy": copy,
-                                "has_attempted_resize": bool(before), "has_staged_group": bool(details),
-                                **({"photo_cue": layout["photo_cue"]} if layout.get("photo_cue") else {})},
-                               [to_float(photo), to_float(reference), *before, *details, to_float(poster), to_float(phone)])
+
+            def review_poster(poster):
+                phone = ImageOps.contain(poster, (360, 640), Image.Resampling.LANCZOS)
+                return ask_stage(ai, "studio_format_native_review", NATIVE_REVIEW,
+                                 {"size": size, "format_issue": str(issue), "copy": copy,
+                                  "has_attempted_resize": bool(before), "has_staged_group": bool(details),
+                                  **({"photo_cue": layout["photo_cue"]} if layout.get("photo_cue") else {})},
+                                 [to_float(photo), to_float(reference), *before, *details,
+                                  to_float(poster), to_float(phone)])
+
+            candidate_review = None
+
+            def accept(poster):
+                nonlocal candidate_review
+                candidate_review = review_poster(poster)
+                return candidate_review.get("ready") is True
+
+            layout, headline_review = refine_native_headline(folder, layout, ai, accept)
+            poster = compose(layout, folder)
+            review = candidate_review if headline_review else review_poster(poster)
         observation = required_text(review, "observation", "새 게시 규격 검토")
         if review.get("ready") is not True:
             raise ValueError(f"게시 규격의 새 구도를 확정하지 못했습니다. {observation}")
         framing = {"method": "native", "resize_issue": str(issue), "review": observation}
+        if headline_review:
+            framing["headline_review"] = headline_review
         if restored:
             framing["detail_restoration"] = restored
+        poster.save(folder / "ad.png")
         save_layout(layout | {"format": format_name, "framing": framing}, folder)
         folder.rename(output)
     return framing

@@ -882,6 +882,40 @@ def test_native_composition_checks_the_rendered_gap_before_photography(draft):
     assert revised["boxes"]["price"] == [10, 86, 45, 10]
 
 
+@pytest.mark.parametrize(("selected", "accepted"), [("current", True), ("larger", True), ("larger", False)])
+def test_native_headline_compares_actual_options_without_moving_the_offer(draft, selected, accepted):
+    folder, _ = draft
+    saved = load_layout(folder)
+    copy = {row["role"]: row["text"] for row in saved["texts"]}
+    design = saved["design"] | {"boxes": {"headline": [10, 10, 50, 16], "product_name": [10, 76, 45, 9],
+                                        "price": [10, 87, 45, 9]}}
+    size = (200, 400)
+    layout = scene_ad.design_layers(design, copy, size, ["noto_sans_kr"], folder) | {"design": design}
+    Image.new("RGB", size, "#102030").save(folder / "scene.png")
+    mask = Image.new("L", size)
+    mask.paste(255, (15, 165, 140, 280))
+    mask.save(folder / "foreground.png")
+    compose(layout, folder).save(folder / "ad.png")
+    save_layout(layout, folder)
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            assert step == "studio_format_native_headline"
+            data = json.loads(request.split("Input JSON follows:\n", 1)[1])
+            assert data["position_order"] == ["current", "nearer", "larger"]
+            assert len(images) == 3 and not np.array_equal(images[0], images[2])
+            return json.dumps({"position": selected, "observation": "제목과 상품의 사이 여백을 비교했습니다"})
+
+    revised, reason = studio_formats.refine_native_headline(folder, layout, Agent(), lambda _: accepted)
+    assert revised["texts"][1:] == layout["texts"][1:]
+    assert bool(reason) == (selected == "larger" and accepted)
+    if reason:
+        assert revised["design"]["styles"]["headline"]["size"] == 6
+        assert revised["texts"][0]["y"] > layout["texts"][0]["y"]
+    else:
+        assert revised == layout
+
+
 def test_small_format_margin_repair_moves_the_entire_copy_without_changing_type():
     design = {"boxes": {"headline": [10, 0, 80, 15], "product_name": [10, 16, 80, 5], "price": [10, 22, 80, 4]},
               "styles": {"headline": {"lines": [{"box": [10, 0, 80, 7], "size": 5},
