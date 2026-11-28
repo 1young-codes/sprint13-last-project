@@ -610,9 +610,10 @@ def copy_position_options(design, layout, ink, foreground, stage):
         margin = ceil(100 * short_edge / (40 * side))
         rooms.append((max(0, first - margin), max(0, 100 - margin - last)))
 
-    def reposition(layer, box):
+    def reposition(layer, before, box):
+        old_x, old_y, _, _ = pixel_box(before, size)
         x, y, _, _ = pixel_box(box, size)
-        return layer | {"x": x, "y": y}
+        return layer | {"x": layer["x"] + x - old_x, "y": layer["y"] + y - old_y}
 
     def translated_candidate(offset):
         revised = translate_copy(design, *offset)
@@ -621,11 +622,12 @@ def copy_position_options(design, layout, ink, foreground, stage):
         texts = []
         for text in layout["texts"]:
             role = text["role"]
-            moved = reposition(text, revised["boxes"][role])
+            moved = reposition(text, design["boxes"][role], revised["boxes"][role])
             if "lines" in text:
                 rows = revised["styles"][role]["lines"]
-                moved["lines"] = [reposition(line, row["box"])
-                                  for line, row in zip(text["lines"], rows, strict=True)]
+                prior_rows = design["styles"][role]["lines"]
+                moved["lines"] = [reposition(line, before["box"], row["box"])
+                                  for line, before, row in zip(text["lines"], prior_rows, rows, strict=True)]
             texts.append(moved)
         candidate = layout | {"texts": texts}
         try:

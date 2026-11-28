@@ -794,7 +794,7 @@ def check_text_overlap(foreground, layout, folder):
     return headline_behind_subject
 
 
-def tighten_aligned_stack(lines, foreground, layout, folder):
+def tighten_aligned_stack(lines, foreground, layout, folder, *, shared_title=False):
     if (len(lines) != 2 or any(line.get("depth") == "behind_subject" for line in lines)
             or lines[0]["y"] + lines[0]["h"] > lines[1]["y"]):
         return
@@ -814,18 +814,33 @@ def tighten_aligned_stack(lines, foreground, layout, folder):
     desired = max(1, round(0.4 * min(first[3] - first[1], second[3] - second[1])))
     gap = lines[1]["y"] + second[1] - lines[0]["y"] - first[3]
     excess = max(0, gap - desired)
-    # Keep the lower line as close as possible to its planned position.
+    # Use the shared title area while keeping the line facing the product.
     down = min(excess, original[0].height - first[3])
     up = min(excess - down, second[1])
-    if not (down or up):
+    shifts = (0, 0)
+    if shared_title and excess:
+        product_rows = np.flatnonzero(foreground.any(axis=1))
+        if product_rows.size and product_rows[-1] + layout["artwork"]["y"] < lines[0]["y"] + first[1]:
+            down, up = 0, min(excess, second[1])
+            shifts = (0, up - excess)
+        else:
+            up = 0
+            shifts = (excess - down, 0)
+    if not (down or up or any(shifts)):
         return
+    for line, shift in zip(lines, shifts, strict=True):
+        line["y"] += shift
     for path, layer, box, shift in zip(paths, original, (first, second), (down, -up), strict=True):
+        if not shift:
+            continue
         shifted = Image.new("RGBA", layer.size)
         shifted.paste(layer.crop(box), (box[0], box[1] + shift))
         shifted.save(path)
     try:
         check_text_overlap(foreground, layout, folder)
     except ValueError:
+        for line, shift in zip(lines, shifts, strict=True):
+            line["y"] -= shift
         for path, layer in zip(paths, original, strict=True):
             layer.save(path)
 
@@ -833,7 +848,7 @@ def tighten_aligned_stack(lines, foreground, layout, folder):
 def tighten_text_groups(foreground, layout, folder, changed=None):
     roles = {text["role"]: text for text in layout["texts"]}
     if changed is None or "headline" in changed:
-        tighten_aligned_stack(roles["headline"].get("lines", ()), foreground, layout, folder)
+        tighten_aligned_stack(roles["headline"].get("lines", ()), foreground, layout, folder, shared_title=True)
     if changed is None or {"product_name", "price"} <= changed.keys():
         offer = tuple(sorted((roles["product_name"], roles["price"]), key=lambda text: text["y"]))
         tighten_aligned_stack(offer, foreground, layout, folder)

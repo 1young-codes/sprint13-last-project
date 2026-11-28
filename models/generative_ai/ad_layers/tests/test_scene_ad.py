@@ -561,11 +561,12 @@ def test_split_headline_keeps_copy_and_checks_each_visible_line(tmp_path):
         scene_ad.layout_texts(answer, copy, (100, 100), ["noto_sans_kr"])
 
 
-@pytest.mark.parametrize("blocked", [False, True])
-def test_split_title_closes_the_visible_gap_without_covering_the_product(tmp_path, blocked):
+@pytest.mark.parametrize(("product_above", "blocked"), [(False, False), (False, True), (True, False)])
+@pytest.mark.parametrize("between_boxes", [1, 25])
+def test_split_title_closes_the_visible_gap_without_covering_the_product(tmp_path, product_above, blocked, between_boxes):
     lines = [
         {"role": "headline_line_1", "file": "first.png", "x": 10, "y": 10, "w": 50, "h": 20},
-        {"role": "headline_line_2", "file": "second.png", "x": 10, "y": 31, "w": 50, "h": 25},
+        {"role": "headline_line_2", "file": "second.png", "x": 10, "y": 30 + between_boxes, "w": 50, "h": 25},
     ]
     for line, ink, color in zip(lines, ((5, 3, 35, 10), (3, 10, 40, 23)), ("white", "orange"), strict=True):
         image = Image.new("RGBA", (line["w"], line["h"]))
@@ -574,9 +575,10 @@ def test_split_title_closes_the_visible_gap_without_covering_the_product(tmp_pat
     layout = {"size": [100, 100], "artwork": {"x": 0, "y": 0},
               "texts": [{"role": "headline", "lines": lines}]}
     foreground = np.zeros((100, 100), bool)
-    foreground[25, 20] = blocked
+    foreground[4, 50] = product_above
+    foreground[34 + between_boxes, 20] = blocked
     before = scene_ad.rendered_text_bounds(layout, tmp_path)
-    scene_ad.tighten_aligned_stack(lines, foreground, layout, tmp_path)
+    scene_ad.tighten_text_groups(foreground, layout, tmp_path, {"headline": {}})
     after = scene_ad.rendered_text_bounds(layout, tmp_path)
     if blocked:
         assert after == before
@@ -584,7 +586,9 @@ def test_split_title_closes_the_visible_gap_without_covering_the_product(tmp_pat
         assert after["headline_line_2"][1] - after["headline_line_1"][3] == 3
         assert after["headline_line_1"][3] - after["headline_line_1"][1] == 7
         assert after["headline_line_2"][3] - after["headline_line_2"][1] == 13
-        scene_ad.tighten_aligned_stack(lines, foreground, layout, tmp_path)
+        anchor = "headline_line_1" if product_above else "headline_line_2"
+        assert after[anchor] == before[anchor]
+        scene_ad.tighten_text_groups(foreground, layout, tmp_path, {"headline": {}})
         assert scene_ad.rendered_text_bounds(layout, tmp_path) == after
 
 

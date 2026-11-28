@@ -17,9 +17,10 @@ CAMPAIGN_READY = ('{"scene":{"treatment":"staging","observation":"촛불을 밝�
 def draft(tmp_path, monkeypatch):
     def render(texts, size, folder):
         for text in texts:
-            layer = Image.new("RGBA", (text["w"], text["h"]))
-            layer.paste(text["color"], (0, 0, 3, 3))
-            layer.save(folder / text["file"])
+            for row in text.get("lines", (text,)):
+                layer = Image.new("RGBA", (row["w"], row["h"]))
+                layer.paste(row["color"], (0, 0, 3, 3))
+                layer.save(folder / row["file"])
 
     monkeypatch.setattr(scene_ad, "render_texts", render)
     monkeypatch.setattr(studio_edits, "render_texts", render)
@@ -984,6 +985,31 @@ def test_copy_position_comparison_keeps_the_shared_center_axis(draft):
     assert observation == "같은 자리의 여백을 비교했습니다"
     foreground[56:77, 29:64] = True
     assert not studio_formats.copy_position_options(design, layout, ink, foreground, folder)
+
+
+def test_copy_translation_keeps_the_rendered_title_grouped(draft):
+    folder, _ = draft
+    saved = load_layout(folder)
+    design = saved["design"]
+    design["boxes"]["headline"] = [10, 8, 45, 25]
+    style = design["styles"]["headline"]
+    design["styles"]["headline"] = style | {
+        "max_lines": 2, "break_after": 1,
+        "lines": [{"box": [10, 8, 45, 7]}, {"box": [10, 23, 45, 9]}],
+    }
+    copy = {row["role"]: row["text"] for row in saved["texts"]}
+    layout = scene_ad.design_layers(design, copy, (100, 100), ["noto_sans_kr"], folder)
+    foreground = np.zeros((100, 100), dtype=bool)
+    foreground[63:87, 72:89] = True
+    scene_ad.tighten_text_groups(foreground, layout, folder, {"headline": {}})
+    rows = layout["texts"][0]["lines"]
+    assert rows[0]["y"] > design["styles"]["headline"]["lines"][0]["box"][1]
+    baseline = scene_ad.rendered_text_bounds(layout, folder)
+    options = studio_formats.copy_position_options(design, layout, baseline, foreground, folder)
+    assert options
+    for _, candidate, _ in options.values():
+        first, second = candidate["texts"][0]["lines"]
+        assert first["y"] - rows[0]["y"] == second["y"] - rows[1]["y"]
 
 
 def test_format_options_use_measured_sizes_and_keep_clear_of_the_product(monkeypatch):

@@ -54,8 +54,9 @@ def change_text(stage, layout, changes):
         styles[role] = style
     revised = design | {"boxes": boxes, "styles": styles}
     texts = layout_texts(revised, copy, layout["size"], load_settings()["fonts"])
-    render_texts([text for text in texts if text["role"] in changes], tuple(layout["size"]), stage)
-    layout.update(design=revised, texts=texts)
+    updated = {text["role"]: text for text in texts if text["role"] in changes}
+    render_texts(list(updated.values()), tuple(layout["size"]), stage)
+    layout.update(design=revised, texts=[updated.get(text["role"], text) for text in layout["texts"]])
 
 
 def change_region(stage, layout, arguments, generation):
