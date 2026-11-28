@@ -10,6 +10,44 @@ from models.generative_ai.ad_layers.text_render import page_html
 from models.generative_ai.photo_retouch import product_mask
 
 
+@pytest.mark.parametrize("phrase,needs_revision", [("옆에서 번지는 빛", True), ("차분한 아침", False), (None, False)])
+def test_headline_priority_compares_the_campaign_message_to_rendered_lines(phrase, needs_revision):
+    lines = [{"text": "옆에서 번지는 빛", "role": "headline_line_1", "max_font_size": 80},
+             {"text": "차분한 아침", "role": "headline_line_2", "max_font_size": 70}]
+    layout = {"texts": [{"role": "headline", "lines": lines}, {"role": "product_name", "text": "테이블 램프"}]}
+    ink = {"headline_line_1": [5, 5, 40, 10], "headline_line_2": [5, 14, 52, 22]}
+    brief = {"message": "램프가 은은하게 비추는 아침 공간"}
+
+    class Agent:
+        def ask(self, step, images, request, *, model):
+            assert step == "ad_headline_priority" and len(images) == 1
+            inputs = json.loads(request.split("Input JSON follows:\n", 1)[1])
+            assert inputs == {"message": brief["message"], "product_name": "테이블 램프",
+                              "headline_lines": [line["text"] for line in lines]}
+            return json.dumps({"phrase": phrase, "reason": "광고의 중심 표현입니다."})
+
+    priority = scene_ad.find_headline_priority(Agent(), layout, ink, brief, Image.new("RGB", (60, 60), "orange"))
+    assert bool(priority) is needs_revision
+    if priority:
+        assert priority["phrase"] == phrase
+        balanced_ink = ink | {"headline_line_1": [5, 5, 48, 13]}
+        assert not scene_ad.weaker_headline_focus(layout, balanced_ink, phrase)
+
+
+def test_headline_scale_transfer_keeps_reading_order_and_title_extent():
+    lines = [{"box": [5, 5, 40, 7], "size": 5}, {"box": [5, 14, 43, 10], "size": 8}]
+    design = {"styles": {"headline": {"size": 8, "lines": lines}, "price": {"size": 4}}}
+    layout = {"texts": [{"role": "headline", "lines": [{"text": "조명을 켜면"}, {"text": "빛이 번져요"}]}]}
+
+    styles = scene_ad.transfer_headline_scale(design, layout, "조명을")
+
+    assert styles["headline"]["lines"] == [
+        {"box": [5, 5, 40, 10], "size": 8}, {"box": [5, 17, 43, 7], "size": 5},
+    ]
+    assert styles["price"] == design["styles"]["price"]
+    assert lines[0]["size"] == 5
+
+
 @pytest.mark.parametrize("fragments,identity", [(True, True), (False, False), (False, None)])
 def test_source_framing_keeps_whole_when_detail_loses_the_subject(monkeypatch, fragments, identity):
     crop = [25, 25, 50, 50]

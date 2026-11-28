@@ -71,7 +71,8 @@ For a deliberately two-line headline, optional styles.headline.lines contains tw
 Each has a non-overlapping box inside the headline's outer box, in whole poster percentages, and may override
 size, align, color, font or depth. For an override, depth can be only front or behind_subject. Set break_after
 once on the parent headline to choose the exact words on each line. Set distinct positions
-or scales only when each clause has a visible role, such as a quiet lead-in and a short line near the subject.
+or scales only when each clause has a visible role. Enlarge the words that carry the campaign message.
+Use a quieter scale for generic lead-ins or reactions. Equal treatment works when both lines share the message.
 If a prior design failed, address the reported issue."""
 
 BLOCKING = """Review the first image as a full poster made from the real product silhouette and the exact
@@ -128,6 +129,15 @@ A per-item price or unit of sale does not imply that only one example can appear
 Choose detail only if the subject remains identifiable and the enlargement materially helps the headline.
 Return JSON with choice (whole or detail), detail_preserves_identity and a Korean reason naming what
 identifies the subject in the crop or what the crop loses."""
+
+HEADLINE_PRIORITY = """Given the approved message, the photograph without type and the exact headline lines,
+identify which words should receive typographic emphasis. Let the viewer connect those words to the subject
+or idea the picture actually puts first. A side prop may establish the occasion without being what the ad
+sells. Keep the focus on the part that names or evokes the advertised item or benefit in that case.
+A generic reaction or transition usually supports the idea. A specific occasion or benefit can lead if it is
+the point of the campaign and the image supports it. The reading order does not determine emphasis.
+Return JSON with phrase (exact contiguous space-separated words from one line, with Korean particles intact,
+or null if both lines carry the message together) and reason (one Korean sentence)."""
 
 FINAL_REVIEW = """Review the first poster, using the second image (its generated photo without type) and the reference
 posters that follow. Keep the generated photo, position, crop and canvas color. Use the actual product bounds to
@@ -190,6 +200,9 @@ Choose revision only when the affected parts now read together more clearly or t
 If the request identifies several related problems, check each in both images. Keep the current poster if a
 requested relationship still looks broken or if the change solves one by worsening another.
 If the copy is readable in both, explain what happens to the advertised feature and title on the first glance.
+When headline_priority is supplied, check whether the actual typography makes those words lead. Judge their
+visible weight, size and color rather than assuming the first line is strongest. Check whether the revision
+has weakened the title as a whole or opened up an unhelpful gap between the headline and the photo.
 Return choice (original, revision, or balanced when image three is an alternative) and a concrete Korean reason
 that describes what the images show."""
 
@@ -914,6 +927,59 @@ def rendered_text_bounds(layout, folder):
     return bounds_by_role
 
 
+def weaker_headline_focus(layout, ink, phrase):
+    headline = next(text for text in layout["texts"] if text["role"] == "headline")
+    lines = headline.get("lines")
+    if not lines:
+        return False
+    matching = [line["role"] for line in lines if f" {phrase} " in f" {line['text']} "]
+    if len(matching) != 1 or matching[0] not in ink:
+        return True
+    primary = ink[matching[0]][3] - ink[matching[0]][1]
+    return any(ink[role][3] - ink[role][1] > primary * 1.15
+               for role in (line["role"] for line in lines) if role != matching[0] and role in ink)
+
+
+def find_headline_priority(ai, layout, ink, brief, scene):
+    headline = next(text for text in layout["texts"] if text["role"] == "headline")
+    lines = headline.get("lines")
+    if not brief or not brief.get("message") or not lines:
+        return None
+    if not any(weaker_headline_focus(layout, ink, line["text"]) for line in lines):
+        return None
+    reading_order = [line["text"] for line in lines]
+    product = next((text["text"] for text in layout["texts"] if text["role"] == "product_name"), None)
+    decision = ask_stage(ai, "ad_headline_priority", HEADLINE_PRIORITY,
+                         {"message": brief["message"], "product_name": product, "headline_lines": reading_order},
+                         [to_float(scene)])
+    phrase = decision.get("phrase")
+    reason = decision.get("reason")
+    if not isinstance(phrase, str) or not phrase.strip() or not isinstance(reason, str) or not reason.strip():
+        return None
+    if sum(f" {phrase} " in f" {line} " for line in reading_order) != 1:
+        return None
+    if weaker_headline_focus(layout, ink, phrase):
+        return {"phrase": phrase, "reason": reason}
+    return None
+
+
+def transfer_headline_scale(design, layout, phrase):
+    headline = design["styles"]["headline"]
+    title = next(text for text in layout["texts"] if text["role"] == "headline")
+    if len(headline.get("lines") or ()) != 2:
+        return None
+    first, second = headline["lines"]
+    sizes = [line.get("size", headline["size"]) for line in (first, second)]
+    index = next(i for i, line in enumerate(title["lines"]) if f" {phrase} " in f" {line['text']} ")
+    if sizes[index] >= sizes[1 - index]:
+        return None
+    x0, y0, w0, h0 = first["box"]
+    x1, y1, w1, h1 = second["box"]
+    lines = [first | {"size": sizes[1], "box": [x0, y0, w0, h1]},
+             second | {"size": sizes[0], "box": [x1, y1 + h1 - h0, w1, h0]}]
+    return design["styles"] | {"headline": headline | {"lines": lines}}
+
+
 def check_offer_spacing(ink, size):
     if not {"product_name", "price"} <= ink.keys():
         raise ValueError("상품명과 가격이 모두 화면에 보여야 합니다")
@@ -1036,7 +1102,20 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
     else:
         layout_references = references
     requested_alternative = "composition_issue" in inputs
-    contrast_only = contrast_issue is not None and not requested_alternative
+    priority = None
+    if assess_composition and not requested_alternative:
+        priority = find_headline_priority(ai, layout, inputs["rendered_text_bounds"],
+                                          design_input.get("brief") or layout.get("brief"), scene)
+    if priority:
+        inputs["headline_priority"] = priority
+        inputs["composition_issue"] = (f"광고의 핵심인 ‘{priority['phrase']}’가 제목의 다른 줄보다 작게 보입니다. "
+                                       "사진과 판매 정보는 유지하고 제목의 시각적 비중을 바로잡으세요.")
+        task += ("\nUse headline_priority to adjust the relative size or weight of the headline lines. "
+                 "Transfer the current strongest line's visual scale to the focus words where there is room. "
+                 "Use rendered_text_bounds to keep the title group's connection to the photograph. "
+                 "A smaller secondary line alone can leave the whole headline too weak or too far from the product. "
+                 "Use the same overall title space with new line boxes when feasible. Keep the exact wording, "
+                 "natural reading order, and positions of the photo and supporting information.")
     if contrast_issue:
         inputs.setdefault("composition_issue", contrast_issue)
         inputs["contrast_issue"] = contrast_issue
@@ -1068,10 +1147,15 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
             raise ValueError(remaining)
         return plan, updated
 
-    editable = ("boxes", "styles") if contrast_only else ("boxes", "styles", "accent", "edge")
-    for _ in range(2):
-        review = ask_stage(ai, "ad_final_layout", task, inputs,
-                           [to_float(first), to_float(scene), *layout_references])
+    typography_only = not requested_alternative and (contrast_issue or priority)
+    editable = ("boxes", "styles") if typography_only else ("boxes", "styles", "accent", "edge")
+    transferred = transfer_headline_scale(answer, layout, priority["phrase"]) if priority else None
+    for attempt in range(2):
+        if attempt == 0 and transferred is not None:
+            review = {"revision": {"styles": transferred}}
+        else:
+            review = ask_stage(ai, "ad_final_layout", task, inputs,
+                               [to_float(first), to_float(scene), *layout_references])
         revision = review.get("revision")
         if "revision" not in review:
             revision = {key: review[key] for key in editable if key in review} or None
@@ -1139,6 +1223,10 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                         revised, updated, candidate = aligned, aligned_layout, aligned_dir
             if needs_alternative and original_error is None:
                 revision_ink = rendered_text_bounds(updated, candidate)
+                if priority and weaker_headline_focus(updated, revision_ink, priority["phrase"]):
+                    inputs = inputs | {"rejected_design": revised,
+                                       "layout_error": "수정한 제목에서도 광고의 핵심 표현이 더 작게 보입니다."}
+                    continue
                 evidence = {
                     "composition_issue": inputs["composition_issue"], "copy": inputs["copy"],
                     "product_bounds": placement,
@@ -1147,6 +1235,8 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                     "original_outer_space": inputs["original_outer_space"],
                     "revision_outer_space": outer_margins(placement, revision_ink.values()),
                 }
+                if priority:
+                    evidence["headline_priority"] = priority
                 versions = {"revision": (revised, updated, candidate)}
                 pictures = [to_float(first), to_float(compose(updated, candidate))]
                 balanced = balanced_text_positions(answer, revised, size, evidence["original_outer_space"],
@@ -1160,10 +1250,11 @@ def review_finished(ai, answer, layout, scene, foreground, folder, design_input,
                         pass
                     else:
                         balanced_ink = rendered_text_bounds(balanced_layout, alternate)
-                        evidence.update(balanced_ink=balanced_ink,
-                                        balanced_outer_space=outer_margins(placement, balanced_ink.values()))
-                        versions["balanced"] = (balanced, balanced_layout, alternate)
-                        pictures.append(to_float(compose(balanced_layout, alternate)))
+                        if not priority or not weaker_headline_focus(balanced_layout, balanced_ink, priority["phrase"]):
+                            evidence.update(balanced_ink=balanced_ink,
+                                            balanced_outer_space=outer_margins(placement, balanced_ink.values()))
+                            versions["balanced"] = (balanced, balanced_layout, alternate)
+                            pictures.append(to_float(compose(balanced_layout, alternate)))
                 comparison = ask_stage(ai, "ad_final_composition_compare", FINISHED_COMPOSITION_COMPARE, evidence,
                                        [*pictures, *references])
                 reason = required_text(comparison, "reason", "완성 배치 비교")
